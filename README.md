@@ -17,3 +17,11 @@ Site Factory is blueprint-first: product intent, AI assistance, planning, runtim
 ## Phase 1 Status
 
 Phase 1 creates the integrated repository skeleton and copies committed source snapshots for reference/package layout only. No behavior has been changed, no plugin paths have been refactored, and no Core extraction or AI/runtime coupling has been performed.
+
+## Current Beta Release Artifact
+
+The current installable plugin ZIP is outside this integrated repository:
+
+`C:\crocoblock-site-factory-plugin\build\crocoblock-site-factory-v0.2-beta-2ac3fdb.zip`
+
+This ZIP is a release artifact, not the primary plugin source. The source of truth remains `C:\crocoblock-site-factory-plugin`, copied into this repository as `wordpress-plugin/`. Build artifacts are not copied into the integrated repo unless they are intentionally archived later under a reference or releases area.
