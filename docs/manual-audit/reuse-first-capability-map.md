@@ -31,7 +31,7 @@ Before implementing a new Core or plugin feature, check:
 | Dry-run / Plan | Exists via Factory_Dry_Run_Command | Exists via Factory_Dry_Run_Command | Patch preview only | Reuse/wrap plugin dry-run; do not rebuild runtime plan in Core | Adapter-driven plan already exists; Core preview should explain blueprint patch only. |
 | Apply | Exists | Exists plugin-side | Not in Core | Keep plugin runtime | |
 | Runtime validation | Exists | Exists plugin-side | Contract validation only | Keep split | |
-| Manifest | Exists | Exists plugin-side | Contract only | Reuse shape | |
+| Manifest / Run storage | Exists via run manifest/registry/storage utilities | Exists plugin-side and richer with context/configurable storage | RunManifest contract only | Keep persistence plugin-side; Core may define schema/status rules | Current plugin adds context support and FACTORY_RUNS_DIR-based storage; do not duplicate run persistence in Core. |
 | Doctor | Exists | Exists plugin-side | Missing | Audit before rebuilding | |
 | Fix / Repair | Exists via Factory_Fix_Command | Exists via Factory_Fix_Command | RepairPlan contract only | Keep plugin-side execution; Core may model RepairPlan only | Old R&D and current plugin fix are identical/migrated; do not rebuild repair execution in Core. |
 | Adapter registry | Exists | Exists plugin-side | Missing runtime | Keep plugin-side, model capabilities in Core later | |
