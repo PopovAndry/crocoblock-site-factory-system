@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "source": "failure-fixture",
+  "applies_changes": false,
+  "operations": [
+    {
+      "op": "add",
+      "path": "/site/name/suffix",
+      "value": "Should fail because site.name is a scalar string"
+    }
+  ]
+}

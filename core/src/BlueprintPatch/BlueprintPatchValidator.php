@@ -54,6 +54,10 @@ final class BlueprintPatchValidator
 
             if (!is_string($path) || '' === trim($path) || '/' !== substr($path, 0, 1)) {
                 $checks[] = $this->error($scope, 'BlueprintPatch operation path must be a JSON-pointer-like string.');
+            } elseif ('/' === $path) {
+                $checks[] = $this->error($scope, 'BlueprintPatch operation path must not target the root document.');
+            } elseif ($this->isProtectedRuntimePath($path)) {
+                $checks[] = $this->error($scope, 'BlueprintPatch operation path targets protected runtime state: ' . $path . '.');
             }
 
             if (!array_key_exists('value', $operation)) {
@@ -82,6 +86,17 @@ final class BlueprintPatchValidator
     private function error(string $scope, string $message): ValidationCheck
     {
         return new ValidationCheck(ManifestStatus::ERROR, $scope, $message);
+    }
+
+    private function isProtectedRuntimePath(string $path): bool
+    {
+        foreach (['/runtime', '/wordpress', '/wp', '/database', '/secrets'] as $prefix) {
+            if ($path === $prefix || 0 === strpos($path, $prefix . '/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

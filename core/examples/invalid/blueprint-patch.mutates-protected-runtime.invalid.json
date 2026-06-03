@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "source": "failure-fixture",
+  "applies_changes": false,
+  "operations": [
+    {
+      "op": "set",
+      "path": "/runtime/wp_options/siteurl",
+      "value": "https://example.invalid",
+      "wordpress_mutation": true
+    }
+  ]
+}

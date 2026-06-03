@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "source": "failure-fixture",
+  "applies_changes": false,
+  "operations": [
+    {
+      "op": "replace",
+      "path": "/pages/home/sections/99/title",
+      "value": "Should fail because the section does not exist"
+    }
+  ]
+}

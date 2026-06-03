@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "source": "failure-fixture",
+  "applies_changes": false,
+  "operations": [
+    {
+      "op": "set",
+      "path": "/",
+      "value": {
+        "version": "0.2",
+        "site": {
+          "name": "Root replacement must not be allowed"
+        }
+      }
+    }
+  ]
+}

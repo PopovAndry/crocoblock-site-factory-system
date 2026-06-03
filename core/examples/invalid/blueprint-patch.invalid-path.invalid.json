@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "source": "failure-fixture",
+  "applies_changes": false,
+  "operations": [
+    {
+      "op": "set",
+      "path": "site/name",
+      "value": "Invalid path must fail before apply"
+    }
+  ]
+}
