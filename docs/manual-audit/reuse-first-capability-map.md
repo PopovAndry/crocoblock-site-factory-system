@@ -32,7 +32,7 @@ Before implementing a new Core or plugin feature, check:
 | Apply | Exists | Exists plugin-side | Not in Core | Keep plugin runtime | |
 | Runtime validation | Exists | Exists plugin-side | Contract validation only | Keep split | |
 | Manifest / Run storage | Exists via run manifest/registry/storage utilities | Exists plugin-side and richer with context/configurable storage | RunManifest contract only | Keep persistence plugin-side; Core may define schema/status rules | Current plugin adds context support and FACTORY_RUNS_DIR-based storage; do not duplicate run persistence in Core. |
-| Doctor | Exists | Exists plugin-side | Missing | Audit before rebuilding | |
+| Doctor / Health | Exists via Factory_Doctor_Command / Factory_Health_Command | Exists plugin-side and improved with run storage helpers | Missing runtime | Keep plugin-side execution; Core may model health result shape later | Current plugin uses FACTORY_RUNS_DIR/factory_get_runs_registry_path; do not rebuild runtime doctor/health in Core. |
 | Fix / Repair | Exists via Factory_Fix_Command | Exists via Factory_Fix_Command | RepairPlan contract only | Keep plugin-side execution; Core may model RepairPlan only | Old R&D and current plugin fix are identical/migrated; do not rebuild repair execution in Core. |
 | Adapter registry | Exists | Exists plugin-side | Missing runtime | Keep plugin-side, model capabilities in Core later | |
 | AI generator | Exists | Exists plugin-side/mock | Interfaces only | Reuse only safe pieces | |
