@@ -1,0 +1,13 @@
+{
+  "name": "crocoblock/site-factory-core",
+  "description": "Core contracts for the Crocoblock Site Factory blueprint-first system.",
+  "type": "library",
+  "autoload": {
+    "psr-4": {
+      "Crocoblock\\SiteFactory\\Core\\": "src/"
+    }
+  },
+  "require": {
+    "php": ">=7.4"
+  }
+}
