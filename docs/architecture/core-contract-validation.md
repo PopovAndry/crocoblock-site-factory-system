@@ -34,6 +34,12 @@ The draft validators currently cover the existing Core examples:
     context, and execution shape.
   - Delegates nested plan and validation checks to the draft validators.
 
+- `BlueprintValidator`
+  - Validates desired-state Blueprint shape.
+  - Accepts the current Real Estate preset shape, including newer roots such as
+    `queries`, `filters`, `site.forms`, style, assets, and native proof data.
+  - Warns on unknown optional roots instead of rejecting them.
+
 ## Example Runner
 
 `core/tools/validate-examples.php` validates:
@@ -42,6 +48,7 @@ The draft validators currently cover the existing Core examples:
 - `core/examples/plan.example.json`
 - `core/examples/validation-result.example.json`
 - `core/examples/run-manifest.example.json`
+- `core/examples/real-estate-blueprint.example.json`
 
 The runner is local-only and uses a tiny PSR-4-style autoloader for Core classes.
 It is not wired into Composer, the WordPress plugin, REST, WP-CLI, or CI yet.

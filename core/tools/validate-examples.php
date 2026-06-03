@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Crocoblock\SiteFactory\Core\Blueprint\BlueprintValidator;
 use Crocoblock\SiteFactory\Core\BlueprintPatch\BlueprintPatchValidator;
 use Crocoblock\SiteFactory\Core\Manifest\RunManifestValidator;
 use Crocoblock\SiteFactory\Core\Planning\PlanValidator;
@@ -33,6 +34,7 @@ $examples = [
     'plan.example.json' => new PlanValidator(),
     'validation-result.example.json' => new ValidationResultValidator(),
     'run-manifest.example.json' => new RunManifestValidator(),
+    'real-estate-blueprint.example.json' => new BlueprintValidator(),
 ];
 
 $failed = false;

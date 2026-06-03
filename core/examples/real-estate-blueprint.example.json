@@ -1,0 +1,927 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Kyiv Turquoise Realty",
+    "language": "en",
+    "permalink": "/%postname%/",
+    "style": {
+      "primary": "#0f766e",
+      "accent": "#14b8a6",
+      "background": "#ecfeff"
+    },
+    "assets": {
+      "property_images": {
+        "Apartment": [
+          "blueprints/assets/real-estate/apartment/apartment-1.png",
+          "blueprints/assets/real-estate/apartment/apartment-2.png",
+          "blueprints/assets/real-estate/apartment/apartment-3.png",
+          "blueprints/assets/real-estate/apartment/apartment-4.png",
+          "blueprints/assets/real-estate/apartment/apartment-5.png",
+          "blueprints/assets/real-estate/apartment/apartment-6.png",
+          "blueprints/assets/real-estate/apartment/apartment-7.png",
+          "blueprints/assets/real-estate/apartment/apartment-8.png",
+          "blueprints/assets/real-estate/apartment/apartment-9.png",
+          "blueprints/assets/real-estate/apartment/apartment-10.png"
+        ],
+        "House": [
+          "blueprints/assets/real-estate/house/house-1.png",
+          "blueprints/assets/real-estate/house/house-2.png",
+          "blueprints/assets/real-estate/house/house-3.png",
+          "blueprints/assets/real-estate/house/house-4.png",
+          "blueprints/assets/real-estate/house/house-5.png",
+          "blueprints/assets/real-estate/house/house-6.png",
+          "blueprints/assets/real-estate/house/house-7.png",
+          "blueprints/assets/real-estate/house/house-8.png",
+          "blueprints/assets/real-estate/house/house-9.png",
+          "blueprints/assets/real-estate/house/house-10.png"
+        ],
+        "Commercial": [
+          "blueprints/assets/real-estate/commercial/commercial-1.png",
+          "blueprints/assets/real-estate/commercial/commercial-2.png",
+          "blueprints/assets/real-estate/commercial/commercial-3.png",
+          "blueprints/assets/real-estate/commercial/commercial-4.png",
+          "blueprints/assets/real-estate/commercial/commercial-5.png",
+          "blueprints/assets/real-estate/commercial/commercial-6.png",
+          "blueprints/assets/real-estate/commercial/commercial-7.png",
+          "blueprints/assets/real-estate/commercial/commercial-8.png",
+          "blueprints/assets/real-estate/commercial/commercial-9.png",
+          "blueprints/assets/real-estate/commercial/commercial-10.png"
+        ]
+      }
+    },
+    "forms": {
+      "request_viewing": {
+        "enabled": true,
+        "provider": "auto",
+        "title": "Request a Viewing",
+        "jetformbuilder_form_id": null,
+        "fallback_email": "hello@example.com"
+      }
+    }
+  },
+  "theme": {
+    "slug": "kava"
+  },
+  "plugins": [
+    {
+      "slug": "jet-engine",
+      "activate": true
+    }
+  ],
+  "pages": {
+    "home": {
+      "slug": "home",
+      "title": "Kyiv Turquoise Realty",
+      "front_page": true,
+      "sections": [
+        {
+          "type": "hero",
+          "title": "Kyiv Turquoise Realty",
+          "subtitle": "Find apartments, houses, and commercial spaces in Kyiv",
+          "cta_label": "Browse properties",
+          "cta_url": "/properties/"
+        },
+        {
+          "type": "listing",
+          "title": "Latest Properties",
+          "query": "latest-properties",
+          "listing": "property-card"
+        },
+        {
+          "type": "listing",
+          "title": "For Sale",
+          "query": "sale-properties",
+          "listing": "property-card"
+        },
+        {
+          "type": "listing",
+          "title": "For Rent",
+          "query": "rent-properties",
+          "listing": "property-card"
+        },
+        {
+          "type": "listing",
+          "title": "Commercial Spaces",
+          "query": "commercial-properties",
+          "listing": "property-card"
+        },
+        {
+          "type": "cta",
+          "title": "Ready to find your Kyiv property?",
+          "text": "Talk to Kyiv Turquoise Realty about sale and rent opportunities.",
+          "cta_label": "Contact agency",
+          "cta_url": "/contact/"
+        }
+      ]
+    },
+    "archive": {
+      "post_type": "property",
+      "slug": "properties",
+      "title": "Properties"
+    },
+    "native_filters": {
+      "slug": "properties-native",
+      "title": "Native Properties",
+      "experimental": true,
+      "listing": "property-card",
+      "query": "native_real_estate_properties",
+      "provider_query_id": "native_list",
+      "filters": [
+        "property_purpose",
+        "property_type",
+        "property_district"
+      ]
+    },
+    "contact": {
+      "slug": "contact",
+      "title": "Contact Kyiv Turquoise Realty",
+      "text": "Schedule a viewing or request more details about Kyiv properties.",
+      "phone": "+380 44 000 0000",
+      "email": "hello@example.com",
+      "cta_label": "Browse properties",
+      "cta_url": "/properties/"
+    },
+    "queries": {
+      "latest-properties": {
+        "post_type": "property",
+        "posts_per_page": 6,
+        "orderby": "date",
+        "order": "DESC"
+      },
+      "sale-properties": {
+        "post_type": "property",
+        "posts_per_page": 6,
+        "taxonomies": {
+          "purpose": ["Sale"]
+        }
+      },
+      "rent-properties": {
+        "post_type": "property",
+        "posts_per_page": 6,
+        "taxonomies": {
+          "purpose": ["Rent"]
+        }
+      },
+      "commercial-properties": {
+        "post_type": "property",
+        "posts_per_page": 6,
+        "taxonomies": {
+          "property_type": ["Commercial"]
+        }
+      }
+    },
+    "navigation": {
+      "menu_name": "Factory Main Menu",
+      "theme_location": "main",
+      "items": [
+        { "label": "Home", "page": "home" },
+        { "label": "Properties", "page": "archive" },
+        { "label": "Contact", "page": "contact" }
+      ]
+    }
+  },
+  "queries": [
+    {
+      "slug": "real_estate_properties",
+      "label": "Real Estate Properties",
+      "provider": "jetengine",
+      "type": "posts",
+      "post_type": "property",
+      "post_status": "publish",
+      "posts_per_page": 30,
+      "orderby": "date",
+      "order": "DESC"
+    },
+    {
+      "slug": "native_real_estate_properties",
+      "label": "Native Real Estate Properties",
+      "provider": "jetengine",
+      "type": "posts",
+      "query_id": "native_list",
+      "native_filters": true,
+      "post_type": "property",
+      "post_status": "publish",
+      "posts_per_page": 30,
+      "orderby": "date",
+      "order": "DESC"
+    }
+  ],
+  "filters": [
+    {
+      "slug": "property_purpose",
+      "label": "Purpose",
+      "provider": "jetsmartfilters",
+      "type": "select",
+      "source": "taxonomy",
+      "taxonomy": "purpose",
+      "query_var": "purpose",
+      "query": "native_real_estate_properties",
+      "listing": "property-card",
+      "required": false
+    },
+    {
+      "slug": "property_type",
+      "label": "Property Type",
+      "provider": "jetsmartfilters",
+      "type": "select",
+      "source": "taxonomy",
+      "taxonomy": "property_type",
+      "query_var": "property_type",
+      "query": "native_real_estate_properties",
+      "listing": "property-card",
+      "required": false
+    },
+    {
+      "slug": "property_district",
+      "label": "District",
+      "provider": "jetsmartfilters",
+      "type": "select",
+      "source": "taxonomy",
+      "taxonomy": "district",
+      "query_var": "district",
+      "query": "native_real_estate_properties",
+      "listing": "property-card",
+      "required": false
+    }
+  ],
+  "cpt": [
+    {
+      "slug": "property",
+      "label": "Properties",
+      "singular": "Property",
+      "supports": ["title", "editor", "thumbnail"],
+      "meta": [
+        {
+          "key": "price",
+          "type": "number",
+          "label": "Price"
+        },
+        {
+          "key": "address",
+          "type": "text",
+          "label": "Address"
+        },
+        {
+          "key": "bedrooms",
+          "type": "number",
+          "label": "Bedrooms"
+        },
+        {
+          "key": "bathrooms",
+          "type": "number",
+          "label": "Bathrooms"
+        },
+        {
+          "key": "property_size",
+          "type": "number",
+          "label": "Property Size"
+        },
+        {
+          "key": "district",
+          "type": "text",
+          "label": "District"
+        }
+      ]
+    }
+  ],
+  "taxonomies": [
+    {
+      "slug": "purpose",
+      "label": "Purposes",
+      "singular": "Purpose",
+      "post_type": "property",
+      "terms": ["Sale", "Rent"]
+    },
+    {
+      "slug": "property_type",
+      "label": "Property Types",
+      "singular": "Property Type",
+      "post_type": "property",
+      "terms": ["Apartment", "House", "Commercial"]
+    },
+    {
+      "slug": "district",
+      "label": "Districts",
+      "singular": "District",
+      "post_type": "property",
+      "terms": [
+        "Pechersk",
+        "Obolon",
+        "Podil",
+        "Holosiivskyi",
+        "Shevchenkivskyi",
+        "Darnytskyi",
+        "Solomianskyi",
+        "Desnianskyi"
+      ]
+    }
+  ],
+  "content": {
+    "property": [
+      {
+        "title": "Turquoise View Apartment in Pechersk",
+        "content": "Bright apartment near business centers and Mariinskyi Park, prepared for a premium city lifestyle demo.",
+        "meta": {
+          "price": 245000,
+          "address": "12 Instytutska Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 2,
+          "property_size": 86,
+          "district": "Pechersk",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Pechersk"]
+        }
+      },
+      {
+        "title": "Obolon Riverside Rental Apartment",
+        "content": "Modern rental apartment close to the Dnipro embankment, metro access, cafes, and evening river walks.",
+        "meta": {
+          "price": 1350,
+          "address": "8 Heroiv Stalingrada Avenue, Kyiv, Ukraine",
+          "bedrooms": 1,
+          "bathrooms": 1,
+          "property_size": 58,
+          "district": "Obolon",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Obolon"]
+        }
+      },
+      {
+        "title": "Podil Heritage Loft for Sale",
+        "content": "Character-rich loft in historic Podil with high ceilings, exposed brick, and a flexible open-plan layout.",
+        "meta": {
+          "price": 310000,
+          "address": "19 Kostyantynivska Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 2,
+          "property_size": 104,
+          "district": "Podil",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Podil"]
+        }
+      },
+      {
+        "title": "Holosiivskyi Family House",
+        "content": "Detached family house near green zones with a private yard, parking, and generous living space.",
+        "meta": {
+          "price": 520000,
+          "address": "34 Holosiivskyi Avenue, Kyiv, Ukraine",
+          "bedrooms": 4,
+          "bathrooms": 3,
+          "property_size": 218,
+          "district": "Holosiivskyi",
+          "purpose": "Sale",
+          "property_type": "House"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["House"],
+          "district": ["Holosiivskyi"]
+        }
+      },
+      {
+        "title": "Shevchenkivskyi Studio Near Golden Gate",
+        "content": "Compact furnished rental studio for professionals who want a central address and walkable city access.",
+        "meta": {
+          "price": 900,
+          "address": "6 Yaroslaviv Val Street, Kyiv, Ukraine",
+          "bedrooms": 1,
+          "bathrooms": 1,
+          "property_size": 42,
+          "district": "Shevchenkivskyi",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Shevchenkivskyi"]
+        }
+      },
+      {
+        "title": "Darnytskyi Lakeview Apartment",
+        "content": "New-build apartment near Pozniaky with lake views, two bedrooms, and a practical family layout.",
+        "meta": {
+          "price": 155000,
+          "address": "22 Mykhaila Hryshka Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 1,
+          "property_size": 72,
+          "district": "Darnytskyi",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Darnytskyi"]
+        }
+      },
+      {
+        "title": "Solomianskyi Business Office",
+        "content": "Ready-to-use commercial office near transport links, suitable for a consulting or service company.",
+        "meta": {
+          "price": 2600,
+          "address": "17 Vadyma Hetmana Street, Kyiv, Ukraine",
+          "bedrooms": 0,
+          "bathrooms": 2,
+          "property_size": 138,
+          "district": "Solomianskyi",
+          "purpose": "Rent",
+          "property_type": "Commercial"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Commercial"],
+          "district": ["Solomianskyi"]
+        }
+      },
+      {
+        "title": "Desnianskyi Affordable Apartment",
+        "content": "Budget-friendly apartment with renovated kitchen, balcony, and fast access to local schools and shops.",
+        "meta": {
+          "price": 82000,
+          "address": "41 Mykoly Zakrevskoho Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 1,
+          "property_size": 63,
+          "district": "Desnianskyi",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Desnianskyi"]
+        }
+      },
+      {
+        "title": "Pechersk Premium Penthouse",
+        "content": "Top-floor penthouse with panoramic city views, terrace space, concierge service, and premium finishes.",
+        "meta": {
+          "price": 680000,
+          "address": "15 Lesi Ukrainky Boulevard, Kyiv, Ukraine",
+          "bedrooms": 3,
+          "bathrooms": 3,
+          "property_size": 156,
+          "district": "Pechersk",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Pechersk"]
+        }
+      },
+      {
+        "title": "Obolon Family Rental",
+        "content": "Three-bedroom rental apartment in a calm residential area with playgrounds and nearby supermarkets.",
+        "meta": {
+          "price": 1650,
+          "address": "27 Marshala Tymoshenka Street, Kyiv, Ukraine",
+          "bedrooms": 3,
+          "bathrooms": 2,
+          "property_size": 92,
+          "district": "Obolon",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Obolon"]
+        }
+      },
+      {
+        "title": "Podil Boutique Retail Space",
+        "content": "Street-level commercial unit in a lively historic area, ideal for a showroom, cafe, or boutique.",
+        "meta": {
+          "price": 390000,
+          "address": "5 Sahaidachnoho Street, Kyiv, Ukraine",
+          "bedrooms": 0,
+          "bathrooms": 1,
+          "property_size": 96,
+          "district": "Podil",
+          "purpose": "Sale",
+          "property_type": "Commercial"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Commercial"],
+          "district": ["Podil"]
+        }
+      },
+      {
+        "title": "Holosiivskyi Parkside Rental",
+        "content": "Comfortable rental apartment close to Holosiivskyi Park with a bright kitchen and quiet bedroom.",
+        "meta": {
+          "price": 1100,
+          "address": "9 Vasylkivska Street, Kyiv, Ukraine",
+          "bedrooms": 1,
+          "bathrooms": 1,
+          "property_size": 55,
+          "district": "Holosiivskyi",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Holosiivskyi"]
+        }
+      },
+      {
+        "title": "Shevchenkivskyi Classic Apartment",
+        "content": "Elegant apartment near universities and cultural venues, with restored details and modern utilities.",
+        "meta": {
+          "price": 275000,
+          "address": "31 Bohdana Khmelnytskoho Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 2,
+          "property_size": 88,
+          "district": "Shevchenkivskyi",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Shevchenkivskyi"]
+        }
+      },
+      {
+        "title": "Darnytskyi Metro Rental",
+        "content": "Practical apartment for rent near Osokorky metro with a smart layout and furnished living room.",
+        "meta": {
+          "price": 980,
+          "address": "14 Oleksandra Mishuhy Street, Kyiv, Ukraine",
+          "bedrooms": 1,
+          "bathrooms": 1,
+          "property_size": 48,
+          "district": "Darnytskyi",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Darnytskyi"]
+        }
+      },
+      {
+        "title": "Solomianskyi Townhouse",
+        "content": "Urban townhouse with private entrance, garage, and easy access to central Kyiv and the railway station.",
+        "meta": {
+          "price": 430000,
+          "address": "23 Preobrazhenska Street, Kyiv, Ukraine",
+          "bedrooms": 3,
+          "bathrooms": 3,
+          "property_size": 184,
+          "district": "Solomianskyi",
+          "purpose": "Sale",
+          "property_type": "House"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["House"],
+          "district": ["Solomianskyi"]
+        }
+      },
+      {
+        "title": "Desnianskyi Retail Rental",
+        "content": "Compact commercial rental space on an active neighborhood street with strong local foot traffic.",
+        "meta": {
+          "price": 1200,
+          "address": "18 Teodora Draizera Street, Kyiv, Ukraine",
+          "bedrooms": 0,
+          "bathrooms": 1,
+          "property_size": 64,
+          "district": "Desnianskyi",
+          "purpose": "Rent",
+          "property_type": "Commercial"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Commercial"],
+          "district": ["Desnianskyi"]
+        }
+      },
+      {
+        "title": "Pechersk Diplomatic Residence",
+        "content": "Spacious house-style residence in a prestigious area with secure parking and a private terrace.",
+        "meta": {
+          "price": 740000,
+          "address": "28 Zvirynetska Street, Kyiv, Ukraine",
+          "bedrooms": 4,
+          "bathrooms": 4,
+          "property_size": 246,
+          "district": "Pechersk",
+          "purpose": "Sale",
+          "property_type": "House"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["House"],
+          "district": ["Pechersk"]
+        }
+      },
+      {
+        "title": "Obolon Waterfront Office",
+        "content": "Commercial rental office with river-facing windows, meeting room potential, and modern infrastructure.",
+        "meta": {
+          "price": 3100,
+          "address": "3 Obolonska Naberezhna, Kyiv, Ukraine",
+          "bedrooms": 0,
+          "bathrooms": 2,
+          "property_size": 152,
+          "district": "Obolon",
+          "purpose": "Rent",
+          "property_type": "Commercial"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Commercial"],
+          "district": ["Obolon"]
+        }
+      },
+      {
+        "title": "Podil Courtyard Apartment",
+        "content": "Warm apartment in a quiet Podil courtyard with renovated interiors and easy access to cafes.",
+        "meta": {
+          "price": 198000,
+          "address": "24 Nyzhnii Val Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 1,
+          "property_size": 76,
+          "district": "Podil",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Podil"]
+        }
+      },
+      {
+        "title": "Holosiivskyi Family Rental House",
+        "content": "Rental house with garden space, home office room, and quick access to parks and schools.",
+        "meta": {
+          "price": 2800,
+          "address": "16 Akademika Zabolotnoho Street, Kyiv, Ukraine",
+          "bedrooms": 4,
+          "bathrooms": 3,
+          "property_size": 205,
+          "district": "Holosiivskyi",
+          "purpose": "Rent",
+          "property_type": "House"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["House"],
+          "district": ["Holosiivskyi"]
+        }
+      },
+      {
+        "title": "Shevchenkivskyi Creative Office",
+        "content": "Open-plan commercial space near creative studios and restaurants, suitable for a small agency team.",
+        "meta": {
+          "price": 330000,
+          "address": "11 Sichovykh Striltsiv Street, Kyiv, Ukraine",
+          "bedrooms": 0,
+          "bathrooms": 2,
+          "property_size": 118,
+          "district": "Shevchenkivskyi",
+          "purpose": "Sale",
+          "property_type": "Commercial"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Commercial"],
+          "district": ["Shevchenkivskyi"]
+        }
+      },
+      {
+        "title": "Darnytskyi Family Apartment",
+        "content": "Three-bedroom apartment with a large kitchen, storage space, and family-friendly infrastructure nearby.",
+        "meta": {
+          "price": 175000,
+          "address": "7 Revutskoho Street, Kyiv, Ukraine",
+          "bedrooms": 3,
+          "bathrooms": 2,
+          "property_size": 94,
+          "district": "Darnytskyi",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Darnytskyi"]
+        }
+      },
+      {
+        "title": "Solomianskyi Compact Rental",
+        "content": "Efficient rental apartment near transport routes with a separate bedroom and renovated bathroom.",
+        "meta": {
+          "price": 850,
+          "address": "12 Solomianska Street, Kyiv, Ukraine",
+          "bedrooms": 1,
+          "bathrooms": 1,
+          "property_size": 44,
+          "district": "Solomianskyi",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Solomianskyi"]
+        }
+      },
+      {
+        "title": "Desnianskyi Spacious Family Home",
+        "content": "Large house for sale with flexible rooms, storage, and outdoor space for family gatherings.",
+        "meta": {
+          "price": 295000,
+          "address": "29 Honore de Balzac Street, Kyiv, Ukraine",
+          "bedrooms": 5,
+          "bathrooms": 3,
+          "property_size": 232,
+          "district": "Desnianskyi",
+          "purpose": "Sale",
+          "property_type": "House"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["House"],
+          "district": ["Desnianskyi"]
+        }
+      },
+      {
+        "title": "Pechersk Central Rental Apartment",
+        "content": "Stylish apartment for rent near Arsenalna with premium furniture and a quiet bedroom zone.",
+        "meta": {
+          "price": 1900,
+          "address": "10 Moskovska Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 2,
+          "property_size": 80,
+          "district": "Pechersk",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Pechersk"]
+        }
+      },
+      {
+        "title": "Obolon Cozy Apartment for Sale",
+        "content": "Well-kept apartment in Obolon with a functional plan, balcony, and easy metro access.",
+        "meta": {
+          "price": 132000,
+          "address": "40 Heroiv Dnipra Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 1,
+          "property_size": 67,
+          "district": "Obolon",
+          "purpose": "Sale",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Apartment"],
+          "district": ["Obolon"]
+        }
+      },
+      {
+        "title": "Podil Design Rental Loft",
+        "content": "Furnished rental loft with gallery-style living space, modern kitchen, and historic neighborhood charm.",
+        "meta": {
+          "price": 1750,
+          "address": "13 Mezhyhirska Street, Kyiv, Ukraine",
+          "bedrooms": 1,
+          "bathrooms": 1,
+          "property_size": 70,
+          "district": "Podil",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Podil"]
+        }
+      },
+      {
+        "title": "Holosiivskyi Commercial Showroom",
+        "content": "Sale-ready commercial showroom near a high-traffic avenue with large windows and flexible zoning.",
+        "meta": {
+          "price": 410000,
+          "address": "55 Velyka Vasylkivska Street, Kyiv, Ukraine",
+          "bedrooms": 0,
+          "bathrooms": 2,
+          "property_size": 146,
+          "district": "Holosiivskyi",
+          "purpose": "Sale",
+          "property_type": "Commercial"
+        },
+        "terms": {
+          "purpose": ["Sale"],
+          "property_type": ["Commercial"],
+          "district": ["Holosiivskyi"]
+        }
+      },
+      {
+        "title": "Shevchenkivskyi Premium Rental",
+        "content": "Premium rental apartment with designer furniture, concierge service, and central Kyiv access.",
+        "meta": {
+          "price": 2400,
+          "address": "44 Olesia Honchara Street, Kyiv, Ukraine",
+          "bedrooms": 2,
+          "bathrooms": 2,
+          "property_size": 90,
+          "district": "Shevchenkivskyi",
+          "purpose": "Rent",
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Apartment"],
+          "district": ["Shevchenkivskyi"]
+        }
+      },
+      {
+        "title": "Darnytskyi Commercial Rental Hub",
+        "content": "Commercial rental hub near Left Bank transport routes, suitable for logistics support or services.",
+        "meta": {
+          "price": 2200,
+          "address": "5 Dniprovska Naberezhna, Kyiv, Ukraine",
+          "bedrooms": 0,
+          "bathrooms": 2,
+          "property_size": 130,
+          "district": "Darnytskyi",
+          "purpose": "Rent",
+          "property_type": "Commercial"
+        },
+        "terms": {
+          "purpose": ["Rent"],
+          "property_type": ["Commercial"],
+          "district": ["Darnytskyi"]
+        }
+      }
+    ]
+  },
+  "listings": [
+    {
+      "slug": "property-card",
+      "title": "Property Card",
+      "post_type": "property",
+      "query": "real_estate_properties",
+      "layout": [
+        { "type": "title" },
+        { "type": "meta", "key": "price", "label": "Price", "format": "currency" },
+        { "type": "meta", "key": "address", "label": "Address" },
+        { "type": "meta", "key": "bedrooms", "label": "Bedrooms" },
+        { "type": "meta", "key": "bathrooms", "label": "Bathrooms" },
+        { "type": "meta", "key": "property_size", "label": "Size" },
+        { "type": "meta", "key": "district", "label": "District" },
+        { "type": "meta", "key": "purpose", "label": "Purpose" },
+        { "type": "meta", "key": "property_type", "label": "Type" }
+      ]
+    }
+  ],
+  "single": {
+    "property": {
+      "layout": [
+        { "type": "meta", "key": "price", "label": "Price", "format": "currency" },
+        { "type": "meta", "key": "address", "label": "Address" },
+        { "type": "meta", "key": "bedrooms", "label": "Bedrooms" },
+        { "type": "meta", "key": "bathrooms", "label": "Bathrooms" },
+        { "type": "meta", "key": "property_size", "label": "Size" },
+        { "type": "meta", "key": "district", "label": "District" },
+        { "type": "meta", "key": "purpose", "label": "Purpose" },
+        { "type": "meta", "key": "property_type", "label": "Type" },
+        { "type": "content" }
+      ]
+    }
+  }
+}
