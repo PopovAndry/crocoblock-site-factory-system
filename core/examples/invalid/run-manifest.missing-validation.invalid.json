@@ -1,0 +1,28 @@
+{
+  "id": "run-invalid",
+  "timestamp": "2026-06-03 12:00:00",
+  "status": "ok",
+  "blueprint": {
+    "data": {
+      "version": "0.2",
+      "site": {
+        "name": "Invalid Realty"
+      }
+    },
+    "metadata": {
+      "preset": "real-estate"
+    }
+  },
+  "plan": {
+    "version": 1,
+    "summary": {
+      "create": 0,
+      "update": 0,
+      "delete": 0,
+      "skip": 0,
+      "warning": 0,
+      "error": 0
+    },
+    "items": []
+  }
+}

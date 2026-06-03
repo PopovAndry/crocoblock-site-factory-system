@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "source": "invalid-fixture",
+  "applies_changes": true,
+  "operations": [
+    {
+      "op": "replace",
+      "path": "/site/name",
+      "value": "Unsafe Direct Apply Realty"
+    }
+  ]
+}

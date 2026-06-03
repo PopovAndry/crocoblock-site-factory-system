@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "summary": {
+    "create": 0,
+    "update": 0,
+    "delete": 0,
+    "skip": 0,
+    "warning": 0,
+    "error": 0
+  },
+  "items": [
+    {
+      "adapter": "Render Pages",
+      "action": "mutate-now",
+      "entity": "page:home",
+      "message": "Invalid action should fail."
+    }
+  ]
+}

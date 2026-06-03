@@ -1,0 +1,11 @@
+{
+  "status": "success",
+  "checks": [
+    {
+      "status": "passed",
+      "scope": "render",
+      "message": "Invalid status should fail.",
+      "context": {}
+    }
+  ]
+}

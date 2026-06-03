@@ -1,0 +1,9 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Forward Compatible Realty"
+  },
+  "future_experiment": {
+    "enabled": true
+  }
+}

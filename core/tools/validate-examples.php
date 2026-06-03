@@ -30,16 +30,79 @@ spl_autoload_register(
 );
 
 $examples = [
-    'blueprint-patch.example.json' => new BlueprintPatchValidator(),
-    'plan.example.json' => new PlanValidator(),
-    'validation-result.example.json' => new ValidationResultValidator(),
-    'run-manifest.example.json' => new RunManifestValidator(),
-    'real-estate-blueprint.example.json' => new BlueprintValidator(),
+    [
+        'file' => 'blueprint-patch.example.json',
+        'validator' => new BlueprintPatchValidator(),
+        'expected' => 'ok',
+    ],
+    [
+        'file' => 'plan.example.json',
+        'validator' => new PlanValidator(),
+        'expected' => 'ok',
+    ],
+    [
+        'file' => 'validation-result.example.json',
+        'validator' => new ValidationResultValidator(),
+        'expected' => 'ok',
+    ],
+    [
+        'file' => 'run-manifest.example.json',
+        'validator' => new RunManifestValidator(),
+        'expected' => 'ok',
+    ],
+    [
+        'file' => 'real-estate-blueprint.example.json',
+        'validator' => new BlueprintValidator(),
+        'expected' => 'ok',
+    ],
+    [
+        'file' => 'invalid/blueprint.missing-version.invalid.json',
+        'validator' => new BlueprintValidator(),
+        'expected' => 'error',
+    ],
+    [
+        'file' => 'invalid/blueprint.invalid-cpt.invalid.json',
+        'validator' => new BlueprintValidator(),
+        'expected' => 'error',
+    ],
+    [
+        'file' => 'invalid/blueprint.unknown-root-warning.invalid.json',
+        'validator' => new BlueprintValidator(),
+        'expected' => 'warning',
+    ],
+    [
+        'file' => 'invalid/blueprint-patch.missing-operations.invalid.json',
+        'validator' => new BlueprintPatchValidator(),
+        'expected' => 'error',
+    ],
+    [
+        'file' => 'invalid/blueprint-patch.unsafe-direct-apply.invalid.json',
+        'validator' => new BlueprintPatchValidator(),
+        'expected' => 'error',
+    ],
+    [
+        'file' => 'invalid/plan.invalid-item-action.invalid.json',
+        'validator' => new PlanValidator(),
+        'expected' => 'error',
+    ],
+    [
+        'file' => 'invalid/validation-result.invalid-status.invalid.json',
+        'validator' => new ValidationResultValidator(),
+        'expected' => 'error',
+    ],
+    [
+        'file' => 'invalid/run-manifest.missing-validation.invalid.json',
+        'validator' => new RunManifestValidator(),
+        'expected' => 'error',
+    ],
 ];
 
 $failed = false;
 
-foreach ($examples as $file => $validator) {
+foreach ($examples as $example) {
+    $file = $example['file'];
+    $validator = $example['validator'];
+    $expected = $example['expected'];
     $path = $root . '/examples/' . $file;
 
     if (!is_file($path)) {
@@ -60,8 +123,9 @@ foreach ($examples as $file => $validator) {
     /** @var ValidationResult $result */
     $result = $validator->validate($data);
     $status = $result->status();
+    $matchesExpectation = $status === $expected;
 
-    echo "{$file}: {$status}" . PHP_EOL;
+    echo "{$file}: {$status} (expected {$expected})" . ($matchesExpectation ? '' : ' [UNEXPECTED]') . PHP_EOL;
 
     foreach ($result->checks() as $check) {
         echo sprintf(
@@ -72,7 +136,7 @@ foreach ($examples as $file => $validator) {
         ) . PHP_EOL;
     }
 
-    if ('error' === $status) {
+    if (!$matchesExpectation) {
         $failed = true;
     }
 }

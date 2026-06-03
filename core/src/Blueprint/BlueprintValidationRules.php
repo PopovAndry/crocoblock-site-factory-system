@@ -36,6 +36,7 @@ final class BlueprintValidationRules
 
     /** @var array<int, string> */
     public const REQUIRED_ROOT_SECTIONS = [
+        'version',
         'site',
     ];
 
@@ -43,11 +44,8 @@ final class BlueprintValidationRules
     public const ARRAY_ROOT_SECTIONS = [
         'site',
         'theme',
-        'cpt',
-        'taxonomies',
         'terms',
         'content',
-        'listings',
         'pages',
         'render',
         'single',
@@ -59,6 +57,9 @@ final class BlueprintValidationRules
     /** @var array<int, string> */
     public const LIST_ROOT_SECTIONS = [
         'plugins',
+        'cpt',
+        'taxonomies',
+        'listings',
         'queries',
         'filters',
         'forms',

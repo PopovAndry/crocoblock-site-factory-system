@@ -22,6 +22,10 @@ final class BlueprintPatchValidator
     {
         $checks = [];
 
+        if (isset($data['applies_changes']) && true === $data['applies_changes']) {
+            $checks[] = $this->error('applies_changes', 'BlueprintPatch must be a proposal only and must not declare direct apply behavior.');
+        }
+
         $operations = $data['operations'] ?? null;
 
         if (!is_array($operations)) {

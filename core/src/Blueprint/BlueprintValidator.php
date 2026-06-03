@@ -47,6 +47,11 @@ final class BlueprintValidator
         foreach (BlueprintValidationRules::ARRAY_ROOT_SECTIONS as $section) {
             if (isset($data[$section]) && !is_array($data[$section])) {
                 $checks[] = $this->error($section, 'Blueprint root section ' . $section . ' must be an object.');
+                continue;
+            }
+
+            if (isset($data[$section]) && $this->isList($data[$section])) {
+                $checks[] = $this->error($section, 'Blueprint root section ' . $section . ' must be an object, not a list.');
             }
         }
 
@@ -62,6 +67,18 @@ final class BlueprintValidator
 
         if (isset($data['plugins']) && is_array($data['plugins'])) {
             $checks = array_merge($checks, $this->validatePlugins($data['plugins']));
+        }
+
+        if (isset($data['cpt']) && is_array($data['cpt'])) {
+            $checks = array_merge($checks, $this->validateSluggedList($data['cpt'], 'cpt', 'CPT'));
+        }
+
+        if (isset($data['taxonomies']) && is_array($data['taxonomies'])) {
+            $checks = array_merge($checks, $this->validateSluggedList($data['taxonomies'], 'taxonomies', 'Taxonomy'));
+        }
+
+        if (isset($data['listings']) && is_array($data['listings'])) {
+            $checks = array_merge($checks, $this->validateSluggedList($data['listings'], 'listings', 'Listing'));
         }
 
         if (isset($data['pages']) && is_array($data['pages'])) {
@@ -132,6 +149,30 @@ final class BlueprintValidator
 
             if (!isset($plugin['slug']) || !is_string($plugin['slug']) || '' === trim($plugin['slug'])) {
                 $checks[] = $this->error($scope . '.slug', 'Plugin entry must include a non-empty slug.');
+            }
+        }
+
+        return $checks;
+    }
+
+    /**
+     * @param array<int, mixed> $items
+     * @return array<int, ValidationCheck>
+     */
+    private function validateSluggedList(array $items, string $scopePrefix, string $label): array
+    {
+        $checks = [];
+
+        foreach ($items as $index => $item) {
+            $scope = $scopePrefix . '.' . (string) $index;
+
+            if (!is_array($item)) {
+                $checks[] = $this->error($scope, $label . ' entry must be an object.');
+                continue;
+            }
+
+            if (!isset($item['slug']) || !is_string($item['slug']) || '' === trim($item['slug'])) {
+                $checks[] = $this->error($scope . '.slug', $label . ' entry must include a non-empty slug.');
             }
         }
 
