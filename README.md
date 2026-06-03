@@ -25,3 +25,11 @@ The current installable plugin ZIP is outside this integrated repository:
 `C:\crocoblock-site-factory-plugin\build\crocoblock-site-factory-v0.2-beta-2ac3fdb.zip`
 
 This ZIP is a release artifact, not the primary plugin source. The source of truth remains `C:\crocoblock-site-factory-plugin`, copied into this repository as `wordpress-plugin/`. Build artifacts are not copied into the integrated repo unless they are intentionally archived later under a reference or releases area.
+
+## Building The Plugin ZIP From This System Repo
+
+Use the system-level packaging script from this repository root:
+
+`.\tools\build-plugin-zip.ps1`
+
+The script builds an installable plugin ZIP from the committed `wordpress-plugin/` subtree only. The archive root is `crocoblock-site-factory/`, so plugin files appear directly under that folder inside the ZIP. The `build/` output directory is a generated artifact and is not source of truth.
