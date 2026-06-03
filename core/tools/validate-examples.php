@@ -51,6 +51,11 @@ $examples = [
         'expected' => 'ok',
     ],
     [
+        'file' => 'blueprint-patch-preview-plan.example.json',
+        'validator' => new PlanValidator(),
+        'expected' => 'ok',
+    ],
+    [
         'file' => 'validation-result.example.json',
         'validator' => new ValidationResultValidator(),
         'expected' => 'ok',

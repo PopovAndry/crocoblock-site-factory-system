@@ -1,0 +1,55 @@
+{
+  "items": [
+    {
+      "adapter": "Core BlueprintPatch Preview",
+      "action": "update",
+      "entity": "/site/name",
+      "message": "Update site name from \"Kyiv Turquoise Realty\" to \"Core Patch Realty\".",
+      "diff": {
+        "path": "/site/name",
+        "label": "Site name",
+        "before": "Kyiv Turquoise Realty",
+        "after": "Core Patch Realty",
+        "op": "set"
+      }
+    },
+    {
+      "adapter": "Core BlueprintPatch Preview",
+      "action": "update",
+      "entity": "/pages/home/sections/0/title",
+      "message": "Update home hero title from \"Kyiv Turquoise Realty\" to \"Core Patch Realty\".",
+      "diff": {
+        "path": "/pages/home/sections/0/title",
+        "label": "Home hero title",
+        "before": "Kyiv Turquoise Realty",
+        "after": "Core Patch Realty",
+        "op": "replace"
+      }
+    },
+    {
+      "adapter": "Core BlueprintPatch Preview",
+      "action": "update",
+      "entity": "/pages/home/sections/0/subtitle",
+      "message": "Update home hero subtitle from \"Find apartments, houses, and commercial spaces in Kyiv\" to \"Preview a safe in-memory BlueprintPatch before WordPress runtime apply\".",
+      "diff": {
+        "path": "/pages/home/sections/0/subtitle",
+        "label": "Home hero subtitle",
+        "before": "Find apartments, houses, and commercial spaces in Kyiv",
+        "after": "Preview a safe in-memory BlueprintPatch before WordPress runtime apply",
+        "op": "replace"
+      }
+    }
+  ],
+  "summary": {
+    "create": 0,
+    "update": 3,
+    "delete": 0,
+    "skip": 0,
+    "warning": 0,
+    "error": 0
+  },
+  "metadata": {
+    "source": "blueprint_patch_preview",
+    "runtime_apply": false
+  }
+}
