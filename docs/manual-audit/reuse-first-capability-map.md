@@ -28,7 +28,7 @@ Before implementing a new Core or plugin feature, check:
 | Blueprint loading | Audit | Audit | Contract only | Audit | |
 | Blueprint validation | Audit | Exists plugin-side | Exists Core-side | Compare | |
 | Blueprint normalization | Audit | Exists plugin-side | Missing/contract only | Audit | |
-| Dry-run / Plan | Audit | Exists via Factory_Dry_Run_Command | Preview plan for patch only | Reuse plugin logic carefully | |
+| Dry-run / Plan | Exists via Factory_Dry_Run_Command | Exists via Factory_Dry_Run_Command | Patch preview only | Reuse/wrap plugin dry-run; do not rebuild runtime plan in Core | Adapter-driven plan already exists; Core preview should explain blueprint patch only. |
 | Apply | Exists | Exists plugin-side | Not in Core | Keep plugin runtime | |
 | Runtime validation | Exists | Exists plugin-side | Contract validation only | Keep split | |
 | Manifest | Exists | Exists plugin-side | Contract only | Reuse shape | |
