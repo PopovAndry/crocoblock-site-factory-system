@@ -1,0 +1,60 @@
+{
+  "candidate_blueprint": {
+    "version": "0.2",
+    "site": {
+      "name": "Core Patch Realty"
+    },
+    "pages": {
+      "home": {
+        "sections": [
+          {
+            "type": "hero",
+            "title": "Core Patch Realty",
+            "subtitle": "Preview a safe in-memory BlueprintPatch before WordPress runtime apply"
+          }
+        ]
+      }
+    }
+  },
+  "plan": {
+    "items": [
+      {
+        "adapter": "Core BlueprintPatch",
+        "action": "update",
+        "entity": "/site/name",
+        "message": "BlueprintPatch set applied in memory: /site/name.",
+        "diff": {
+          "op": "set",
+          "path": "/site/name"
+        }
+      }
+    ],
+    "summary": {
+      "create": 0,
+      "update": 3,
+      "delete": 0,
+      "skip": 0,
+      "warning": 0,
+      "error": 0
+    },
+    "metadata": {}
+  },
+  "validation": {
+    "status": "ok",
+    "checks": [
+      {
+        "status": "ok",
+        "scope": "operations.0",
+        "message": "BlueprintPatch set applied in memory: /site/name.",
+        "context": {}
+      },
+      {
+        "status": "ok",
+        "scope": "blueprint",
+        "message": "Blueprint desired-state shape is valid for Core v1.",
+        "context": {}
+      }
+    ],
+    "metadata": {}
+  }
+}

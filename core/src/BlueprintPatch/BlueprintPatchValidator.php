@@ -46,16 +46,24 @@ final class BlueprintPatchValidator
             $op = $operation['op'] ?? null;
             $path = $operation['path'] ?? null;
 
-            if (!is_string($op) || !in_array($op, ['add', 'replace', 'remove'], true)) {
-                $checks[] = $this->error($scope, 'BlueprintPatch operation op must be add, replace, or remove.');
+            if (is_string($op) && in_array($op, ['direct_apply', 'wordpress_mutation', 'php_code', 'callback', 'delete', 'remove'], true)) {
+                $checks[] = $this->error($scope, 'BlueprintPatch operation op is unsafe for Core v1: ' . $op . '.');
+            } elseif (!is_string($op) || !in_array($op, ['set', 'add', 'replace'], true)) {
+                $checks[] = $this->error($scope, 'BlueprintPatch operation op must be set, add, or replace.');
             }
 
             if (!is_string($path) || '' === trim($path) || '/' !== substr($path, 0, 1)) {
                 $checks[] = $this->error($scope, 'BlueprintPatch operation path must be a JSON-pointer-like string.');
             }
 
-            if ('remove' !== $op && !array_key_exists('value', $operation)) {
-                $checks[] = $this->error($scope, 'BlueprintPatch add/replace operations must include value.');
+            if (!array_key_exists('value', $operation)) {
+                $checks[] = $this->error($scope, 'BlueprintPatch set/add/replace operations must include value.');
+            }
+
+            foreach (['direct_apply', 'wordpress_mutation', 'php_code', 'callback'] as $unsafeKey) {
+                if (!empty($operation[$unsafeKey])) {
+                    $checks[] = $this->error($scope . '.' . $unsafeKey, 'BlueprintPatch operation must not declare ' . $unsafeKey . '.');
+                }
             }
         }
 

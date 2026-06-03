@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "source": "human-confirmed-safe-copy-change",
+  "applies_changes": false,
+  "operations": [
+    {
+      "op": "set",
+      "path": "/site/name",
+      "value": "Core Patch Realty"
+    },
+    {
+      "op": "replace",
+      "path": "/pages/home/sections/0/title",
+      "value": "Core Patch Realty"
+    },
+    {
+      "op": "replace",
+      "path": "/pages/home/sections/0/subtitle",
+      "value": "Preview a safe in-memory BlueprintPatch before WordPress runtime apply"
+    }
+  ],
+  "metadata": {
+    "preset": "real-estate",
+    "requires_preview": true,
+    "requires_user_confirmation": true
+  }
+}

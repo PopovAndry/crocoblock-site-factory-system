@@ -32,6 +32,7 @@ The invalid fixtures live under `core/examples/invalid/`.
 | `blueprint.unknown-root-warning.invalid.json` | `warning` | Verifies unknown root sections warn rather than hard-fail. |
 | `blueprint-patch.missing-operations.invalid.json` | `error` | Verifies BlueprintPatch requires an operations array. |
 | `blueprint-patch.unsafe-direct-apply.invalid.json` | `error` | Verifies BlueprintPatch cannot declare direct apply behavior. |
+| `blueprint-patch.real-estate-unsafe.invalid.json` | `error` | Verifies BlueprintPatch cannot declare direct WordPress mutation behavior. |
 | `plan.invalid-item-action.invalid.json` | `error` | Verifies unsupported plan item actions fail. |
 | `validation-result.invalid-status.invalid.json` | `error` | Verifies unsupported validation statuses fail. |
 | `run-manifest.missing-validation.invalid.json` | `error` | Verifies RunManifest requires validation output. |

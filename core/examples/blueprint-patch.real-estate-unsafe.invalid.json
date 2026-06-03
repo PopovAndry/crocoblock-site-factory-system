@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "source": "unsafe-runtime-mutation",
+  "applies_changes": true,
+  "operations": [
+    {
+      "op": "wordpress_mutation",
+      "path": "/wp/posts/42",
+      "value": {
+        "post_title": "Do not mutate WordPress directly"
+      },
+      "wordpress_mutation": true
+    }
+  ],
+  "metadata": {
+    "reason": "AI or Core patch proposals must never mutate WordPress directly."
+  }
+}

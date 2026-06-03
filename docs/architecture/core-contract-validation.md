@@ -14,9 +14,11 @@ The draft validators currently cover the existing Core examples:
 
 - `BlueprintPatchValidator`
   - Validates patch operation shape.
-  - Allows `add`, `replace`, and `remove`.
+  - Allows `set`, `add`, and `replace`.
   - Requires JSON-pointer-like paths.
-  - Requires values for `add` and `replace`.
+  - Requires values for all supported operations.
+  - Rejects direct apply, WordPress mutation, PHP code, callbacks, delete, and
+    remove operations.
 
 - `PlanValidator`
   - Validates plan summary and item structure.

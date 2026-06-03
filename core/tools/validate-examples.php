@@ -36,6 +36,16 @@ $examples = [
         'expected' => 'ok',
     ],
     [
+        'file' => 'blueprint-patch.real-estate-safe.example.json',
+        'validator' => new BlueprintPatchValidator(),
+        'expected' => 'ok',
+    ],
+    [
+        'file' => 'blueprint-patch.real-estate-unsafe.invalid.json',
+        'validator' => new BlueprintPatchValidator(),
+        'expected' => 'error',
+    ],
+    [
         'file' => 'plan.example.json',
         'validator' => new PlanValidator(),
         'expected' => 'ok',
