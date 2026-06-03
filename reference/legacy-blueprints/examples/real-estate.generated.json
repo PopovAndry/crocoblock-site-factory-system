@@ -1,0 +1,120 @@
+{
+  "theme": {
+    "slug": "kava",
+    "path": "/var/www/themes/kava.zip"
+  },
+  "plugins": [
+    {
+      "slug": "jet-engine",
+      "path": "/var/www/plugins/jet-engine.zip",
+      "activate": true
+    }
+  ],
+  "version": "0.2",
+  "site": {
+    "name": "AI Real Estate Site",
+    "language": "en",
+    "permalink": "/%postname%/"
+  },
+  "pages": {
+    "archive": {
+      "post_type": "property",
+      "slug": "properties",
+      "title": "Properties"
+    }
+  },
+  "cpt": [
+    {
+      "slug": "property",
+      "label": "Properties",
+      "singular": "Property",
+      "supports": ["title", "editor", "thumbnail"],
+      "meta": [
+        {
+          "key": "price",
+          "type": "number",
+          "label": "Price"
+        },
+        {
+          "key": "address",
+          "type": "text",
+          "label": "Address"
+        },
+        {
+          "key": "bedrooms",
+          "type": "number",
+          "label": "Bedrooms"
+        },
+        {
+          "key": "property_type",
+          "type": "text",
+          "label": "Property Type"
+        }
+      ]
+    }
+  ],
+  "taxonomies": [
+  {
+    "slug": "property_type",
+    "label": "Property Types",
+    "singular": "Property Type",
+    "post_type": "property",
+    "terms": ["Apartment", "House", "Villa"]
+  }
+],
+  "content": {
+    "property": [
+      {
+        "title": "AI Generated Apartment",
+        "content": "Modern apartment in Berlin center.",
+        "meta": {
+          "price": 180000,
+          "address": "Berlin Mitte",
+          "bedrooms": 2,
+          "property_type": "Apartment"
+        },
+        "terms": {
+          "property_type": ["Apartment"]
+        }
+      },
+      {
+        "title": "AI Generated Villa",
+        "content": "Spacious villa with garden.",
+        "meta": {
+          "price": 420000,
+          "address": "Potsdam",
+          "bedrooms": 5,
+          "property_type": "Villa"
+        },
+         "terms": {
+      "property_type": ["Villa"]
+       }
+      }
+    ]
+  },
+  "listings": [
+    {
+      "slug": "property-card",
+      "title": "Property Card",
+      "post_type": "property",
+      "layout": [
+        { "type": "title" },
+        { "type": "meta", "key": "price", "label": "Price", "format": "currency" },
+        { "type": "meta", "key": "address", "label": "Address" },
+        { "type": "meta", "key": "bedrooms", "label": "Bedrooms" },
+        { "type": "meta", "key": "property_type", "label": "Type" }
+      ]
+    }
+  ],
+  "single": {
+    "property": {
+      "layout": [
+        { "type": "meta", "key": "price", "label": "Price", "format": "currency" },
+        { "type": "meta", "key": "bedrooms", "label": "Bedrooms" },
+        { "type": "meta", "key": "property_type", "label": "Type" },
+        { "type": "meta", "key": "address", "label": "Address" },
+        { "type": "content" }
+      ]
+    }
+  }
+}

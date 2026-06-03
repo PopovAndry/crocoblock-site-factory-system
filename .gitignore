@@ -1,0 +1,41 @@
+# Dependencies and build outputs
+vendor/
+node_modules/
+build/
+dist/
+.env
+.env.*
+
+# Generated/runtime artifacts
+blueprints/generated/*
+!blueprints/generated/
+!blueprints/generated/.gitkeep
+generated/
+*.log
+*.tmp
+*.cache
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Accidental WordPress runtime/core copies
+wp/
+wordpress/
+wp-admin/
+wp-includes/
+wp-content/uploads/
+wp-content/cache/
+wordpress-plugin/wp-admin/
+wordpress-plugin/wp-includes/
+wordpress-plugin/wp-content/uploads/
+wordpress-plugin/wp-content/cache/
+
+# Archives created during packaging
+*.zip
+*.tar

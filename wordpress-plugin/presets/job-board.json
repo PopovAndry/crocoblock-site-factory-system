@@ -1,0 +1,98 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Job Board",
+    "language": "en",
+    "permalink": "/%postname%/"
+  },
+  "theme": {
+    "slug": "kava"
+  },
+  "plugins": [
+    {
+      "slug": "jet-engine",
+      "activate": true
+    }
+  ],
+  "taxonomies": [
+    {
+      "slug": "job_type",
+      "post_type": "job",
+      "terms": ["Full-time", "Part-time", "Remote"]
+    }
+  ],
+  "pages": {
+    "archive": {
+      "post_type": "job",
+      "slug": "jobs",
+      "title": "Jobs"
+    }
+  },
+  "cpt": [
+    {
+      "slug": "job",
+      "label": "Jobs",
+      "singular": "Job",
+      "supports": ["title", "editor"],
+      "meta": [
+        {
+          "key": "salary",
+          "type": "number",
+          "label": "Salary"
+        },
+        {
+          "key": "location",
+          "type": "text",
+          "label": "Location"
+        }
+      ]
+    }
+  ],
+  "content": {
+    "job": [
+      {
+        "title": "Frontend Developer",
+        "content": "Build UI with modern tools.",
+        "meta": {
+          "salary": 3000,
+          "location": "Berlin"
+        },
+      "terms": {
+        "job_type": ["Full-time"]
+      }
+      },
+      {
+        "title": "Backend Developer",
+        "content": "Work with APIs and databases.",
+        "meta": {
+          "salary": 4000,
+          "location": "Munich"
+        },
+        "terms": {
+         "job_type": ["Full-time"]
+        }
+      }
+    ]
+  },
+  "listings": [
+    {
+      "slug": "job-card",
+      "title": "Job Card",
+      "post_type": "job",
+      "layout": [
+        { "type": "title" },
+        { "type": "meta", "key": "salary", "label": "Salary" },
+        { "type": "meta", "key": "location", "label": "Location" }
+      ]
+    }
+  ],
+  "single": {
+    "job": {
+      "layout": [
+        { "type": "meta", "key": "salary", "label": "Salary" },
+        { "type": "meta", "key": "location", "label": "Location" },
+        { "type": "content" }
+      ]
+    }
+  }
+}
