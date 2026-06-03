@@ -1,0 +1,57 @@
+# Reuse-first Capability Map
+
+Goal:
+Avoid rebuilding old system capabilities from scratch.
+
+## Product target
+
+Desired site state / Blueprint
+→ Plan
+→ Apply
+→ Validate
+→ Manifest / Proof
+→ Doctor / Fix
+→ Safe modifications through BlueprintPatch
+
+## Rule
+
+Before implementing a new Core or plugin feature, check:
+1. Did old R&D system already have it?
+2. Does current plugin already have it?
+3. Does current Core already have a clean contract for it?
+4. Should we reuse, wrap, port, rewrite, or discard it?
+
+## Capability Matrix
+
+| Capability | Old R&D | Current plugin | Current Core | Decision | Notes |
+|---|---|---|---|---|---|
+| Blueprint loading | Audit | Audit | Contract only | Audit | |
+| Blueprint validation | Audit | Exists plugin-side | Exists Core-side | Compare | |
+| Blueprint normalization | Audit | Exists plugin-side | Missing/contract only | Audit | |
+| Dry-run / Plan | Audit | Exists via Factory_Dry_Run_Command | Preview plan for patch only | Reuse plugin logic carefully | |
+| Apply | Exists | Exists plugin-side | Not in Core | Keep plugin runtime | |
+| Runtime validation | Exists | Exists plugin-side | Contract validation only | Keep split | |
+| Manifest | Exists | Exists plugin-side | Contract only | Reuse shape | |
+| Doctor | Exists | Exists plugin-side | Missing | Audit before rebuilding | |
+| Fix / Repair | Exists | Exists plugin-side | RepairPlan contract only | Audit before rebuilding | |
+| Adapter registry | Exists | Exists plugin-side | Missing runtime | Keep plugin-side, model capabilities in Core later | |
+| AI generator | Exists | Exists plugin-side/mock | Interfaces only | Reuse only safe pieces | |
+| Prompt cache | Audit | Audit | Missing | Audit | |
+| User editing safety | Audit | Exists plugin-side | Missing | Preserve plugin-side | |
+| Core Patch Preview | Not old | Not plugin-side yet | Exists | New safe layer | |
+
+## Decisions
+
+- Do not rebuild apply/validate/fix until old and plugin implementations are mapped.
+- Do not move WordPress adapter runtime into Core.
+- Use Core for contracts, patch safety, candidate blueprint, readable preview plan.
+- Use plugin for WordPress mutation, adapters, REST, dashboard, run persistence.
+- Use old R&D system as a reuse/reference source, not as code to blindly copy.
+
+## Next audit targets
+
+1. Dry-run / Plan
+2. Fix / Repair
+3. Manifest / Run storage
+4. Adapter registry
+5. AI generator
