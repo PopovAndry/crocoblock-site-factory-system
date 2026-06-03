@@ -1,0 +1,65 @@
+{
+  "id": "run-example",
+  "timestamp": "2026-06-03 12:00:00",
+  "status": "ok",
+  "blueprint": {
+    "data": {
+      "version": "0.2",
+      "site": {
+        "name": "Example Realty"
+      }
+    },
+    "metadata": {
+      "preset": "real-estate"
+    }
+  },
+  "plan": {
+    "version": 1,
+    "summary": {
+      "create": 0,
+      "update": 1,
+      "delete": 0,
+      "skip": 3,
+      "warning": 0,
+      "error": 0
+    },
+    "items": []
+  },
+  "validation": {
+    "status": "ok",
+    "checks": [
+      {
+        "status": "ok",
+        "scope": "render",
+        "message": "Generated pages are available.",
+        "context": {}
+      }
+    ]
+  },
+  "context": {
+    "prompt_context": {
+      "prompt": "Dashboard apply: real-estate"
+    },
+    "style_context": {
+      "tone": "premium",
+      "primary_preset": "turquoise"
+    },
+    "image_context": {
+      "source": "demo_pool",
+      "mode": "round_robin"
+    }
+  },
+  "execution": {
+    "version": 1,
+    "items": [
+      {
+        "status": "ok",
+        "action": "update",
+        "type": "render",
+        "entity": "page:home",
+        "message": "Home page updated.",
+        "details": {}
+      }
+    ]
+  }
+}

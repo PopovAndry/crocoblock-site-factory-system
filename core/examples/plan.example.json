@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "summary": {
+    "create": 1,
+    "update": 1,
+    "delete": 0,
+    "skip": 2,
+    "warning": 1,
+    "error": 0
+  },
+  "items": [
+    {
+      "adapter": "Render Pages",
+      "action": "update",
+      "entity": "page:home",
+      "message": "Update generated Home page markup.",
+      "diff": {
+        "hero_title": {
+          "old": "Old title",
+          "new": "New title"
+        }
+      },
+      "context": {
+        "type": "render",
+        "runtime_adapter": "Factory_Render_Adapter"
+      }
+    },
+    {
+      "adapter": "Content",
+      "action": "warning",
+      "entity": "property:sample-property",
+      "message": "Manual edits detected; generated item will be preserved.",
+      "diff": {},
+      "context": {
+        "type": "content",
+        "ownership": "user_modified"
+      }
+    }
+  ]
+}

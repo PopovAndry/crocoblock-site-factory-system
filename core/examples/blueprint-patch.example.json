@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "source": "human-confirmed-suggestion",
+  "applies_changes": false,
+  "operations": [
+    {
+      "op": "replace",
+      "path": "/site/name",
+      "value": "Example Realty",
+      "safety": {
+        "allowed": true,
+        "reason": "Whitelisted safe preset variable."
+      }
+    },
+    {
+      "op": "replace",
+      "path": "/site/style/primary_preset",
+      "value": "turquoise",
+      "safety": {
+        "allowed": true,
+        "reason": "Whitelisted style context enum."
+      }
+    }
+  ],
+  "metadata": {
+    "preset": "real-estate",
+    "requires_preview": true,
+    "requires_user_confirmation": true
+  }
+}

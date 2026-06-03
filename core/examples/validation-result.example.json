@@ -1,0 +1,26 @@
+{
+  "status": "warning",
+  "checks": [
+    {
+      "status": "ok",
+      "scope": "render",
+      "message": "Properties catalog page exists.",
+      "context": {
+        "entity": "page:properties"
+      }
+    },
+    {
+      "status": "warning",
+      "scope": "content",
+      "message": "Manual edits preserved for generated property.",
+      "context": {
+        "entity": "property:sample-property",
+        "ownership": "user_modified"
+      }
+    }
+  ],
+  "metadata": {
+    "source": "runtime-validation",
+    "preset": "real-estate"
+  }
+}
