@@ -33,7 +33,7 @@ Before implementing a new Core or plugin feature, check:
 | Runtime validation | Exists | Exists plugin-side | Contract validation only | Keep split | |
 | Manifest | Exists | Exists plugin-side | Contract only | Reuse shape | |
 | Doctor | Exists | Exists plugin-side | Missing | Audit before rebuilding | |
-| Fix / Repair | Exists | Exists plugin-side | RepairPlan contract only | Audit before rebuilding | |
+| Fix / Repair | Exists via Factory_Fix_Command | Exists via Factory_Fix_Command | RepairPlan contract only | Keep plugin-side execution; Core may model RepairPlan only | Old R&D and current plugin fix are identical/migrated; do not rebuild repair execution in Core. |
 | Adapter registry | Exists | Exists plugin-side | Missing runtime | Keep plugin-side, model capabilities in Core later | |
 | AI generator | Exists | Exists plugin-side/mock | Interfaces only | Reuse only safe pieces | |
 | Prompt cache | Audit | Audit | Missing | Audit | |
