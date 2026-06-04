@@ -1,0 +1,30 @@
+{
+    "version": 1,
+    "mode": "apply",
+    "status": "warning",
+    "applied": false,
+    "runtime_mutation": false,
+    "core": {
+        "preview": {}
+    },
+    "plugin": {
+        "dry_run": {
+            "available": false,
+            "status": "not_run"
+        }
+    },
+    "ownership": {
+        "available": false,
+        "status": "not_checked"
+    },
+    "apply_gate": {
+        "status": "blocked",
+        "can_apply": false,
+        "requires_user_confirmation": true,
+        "blocking_reasons": [
+            "Plugin dry-run has not been executed."
+        ],
+        "warnings": [],
+        "next_required_step": "plugin_dry_run"
+    }
+}

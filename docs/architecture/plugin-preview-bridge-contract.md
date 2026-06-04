@@ -168,3 +168,51 @@ Prompt
 ```
 
 This task defines only the contract. It does not implement the bridge.
+
+## Validation Runner
+
+The Core-only validator for this contract lives at:
+
+```text
+core/src/Bridge/PluginPreviewBridgeValidator.php
+```
+
+Run the example validator locally with:
+
+```powershell
+C:\OSPanel\modules\php\PHP_8.1\php.exe core\tools\validate-plugin-preview-bridge-example.php
+```
+
+The runner validates:
+
+- `core/examples/plugin-preview-bridge-input.example.json`
+- `core/examples/plugin-preview-bridge-response.example.json`
+- invalid bridge fixtures under `core/examples/invalid/`
+
+## Contract Safety Checks
+
+The validator enforces the read-only bridge boundary:
+
+- bridge input and response must use `mode: read_only`;
+- `applied` must be `false`;
+- `runtime_mutation` must be `false`;
+- input constraints must not allow apply or mutation;
+- input constraints must require user confirmation and ownership respect;
+- response must include `core.preview`;
+- response must include `plugin.dry_run`;
+- response must include `ownership`;
+- response must include `apply_gate`;
+- `apply_gate.can_apply` must be `false` when dry-run or ownership placeholders are present;
+- placeholder dry-run and ownership messages must not claim runtime checks were executed.
+
+## Invalid Fixtures
+
+Invalid fixtures document the failure cases the contract must reject:
+
+- `plugin-preview-bridge-input.allows-apply.invalid.json`
+- `plugin-preview-bridge-input.runtime-mutation.invalid.json`
+- `plugin-preview-bridge-response.can-apply-with-placeholders.invalid.json`
+- `plugin-preview-bridge-response.missing-apply-gate.invalid.json`
+- `plugin-preview-bridge-response.invalid-mode.invalid.json`
+
+These fixtures are contract tests only. They do not run plugin dry-run, ownership checks, apply, fix, reset, generate, WordPress APIs, Crocoblock APIs, or adapters.

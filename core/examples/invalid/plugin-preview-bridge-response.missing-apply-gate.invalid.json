@@ -1,0 +1,20 @@
+{
+    "version": 1,
+    "mode": "read_only",
+    "status": "warning",
+    "applied": false,
+    "runtime_mutation": false,
+    "core": {
+        "preview": {}
+    },
+    "plugin": {
+        "dry_run": {
+            "available": false,
+            "status": "not_run"
+        }
+    },
+    "ownership": {
+        "available": false,
+        "status": "not_checked"
+    }
+}

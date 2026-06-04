@@ -1,0 +1,19 @@
+{
+    "version": 1,
+    "mode": "read_only",
+    "intent": "preview_before_apply",
+    "applied": false,
+    "runtime_mutation": false,
+    "source": "core_preview_response",
+    "core_preview": {},
+    "requested_runtime_checks": {
+        "plugin_dry_run": true,
+        "ownership_check": true
+    },
+    "constraints": {
+        "allow_apply": true,
+        "allow_mutation": false,
+        "require_user_confirmation": true,
+        "respect_ownership": true
+    }
+}
