@@ -90,6 +90,20 @@ final class PluginPreviewBridgeValidator
             $checks[] = $this->error('ownership', 'Bridge response must include ownership object.');
         }
 
+        $runtimeEvidence = $data['runtime_evidence'] ?? null;
+        if (isset($runtimeEvidence)) {
+            if (!is_array($runtimeEvidence)) {
+                $checks[] = $this->error('runtime_evidence', 'Bridge response runtime_evidence must be an object when present.');
+            } else {
+                $runtimeEvidenceResult = (new RuntimeEvidenceValidator())->validate($runtimeEvidence);
+                foreach ($runtimeEvidenceResult->checks() as $check) {
+                    if (ManifestStatus::ERROR === $check->status()) {
+                        $checks[] = $this->error('runtime_evidence.' . $check->scope(), $check->message());
+                    }
+                }
+            }
+        }
+
         $applyGate = $data['apply_gate'] ?? null;
         if (!is_array($applyGate)) {
             $checks[] = $this->error('apply_gate', 'Bridge response must include apply_gate object.');

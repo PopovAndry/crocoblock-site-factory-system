@@ -213,6 +213,14 @@ docs/architecture/apply-gate-policy-contract.md
 
 That policy defines when a future bridge response may move from `blocked` to `ready`. In Core-only examples, `ready` still means ready for user confirmation, and `can_apply` remains `false`.
 
+The optional `runtime_evidence` section is validated through `RuntimeEvidenceValidator`, documented in:
+
+```text
+docs/architecture/runtime-evidence-contract.md
+```
+
+RuntimeEvidence groups plugin dry-run and ownership evidence into one read-only object. It must not contain `can_apply`; apply readiness remains the responsibility of the apply gate.
+
 ## Invalid Fixtures
 
 Invalid fixtures document the failure cases the contract must reject:

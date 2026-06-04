@@ -1,0 +1,25 @@
+{
+    "version": 1,
+    "mode": "read_only",
+    "source": "plugin_runtime",
+    "status": "not_ready",
+    "complete": false,
+    "applied": true,
+    "runtime_mutation": true,
+    "message": "Runtime evidence must never claim mutation.",
+    "plugin_dry_run": {
+        "available": false,
+        "status": "not_run"
+    },
+    "ownership": {
+        "available": false,
+        "status": "not_checked"
+    },
+    "summary": {
+        "dry_run_available": false,
+        "ownership_available": false,
+        "runtime_checks_complete": false,
+        "blocking_errors": 0,
+        "warnings": 0
+    }
+}

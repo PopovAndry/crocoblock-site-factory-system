@@ -1,0 +1,52 @@
+{
+    "version": 1,
+    "mode": "read_only",
+    "source": "plugin_runtime",
+    "status": "not_ready",
+    "complete": false,
+    "applied": false,
+    "runtime_mutation": false,
+    "message": "Runtime evidence has not been collected yet.",
+    "plugin_dry_run": {
+        "available": false,
+        "status": "not_run",
+        "source": "plugin_runtime",
+        "message": "Plugin dry-run is not part of this Core-only preview response.",
+        "summary": {
+            "create": 0,
+            "update": 0,
+            "delete": 0,
+            "skip": 0,
+            "warning": 0,
+            "error": 0
+        },
+        "items": [],
+        "requires_runtime": true,
+        "next_required_step": "plugin_dry_run"
+    },
+    "ownership": {
+        "available": false,
+        "status": "not_checked",
+        "source": "plugin_runtime",
+        "message": "Ownership checks require plugin runtime and were not executed.",
+        "requires_runtime": true,
+        "next_required_step": "ownership_check",
+        "summary": {
+            "checked": 0,
+            "safe": 0,
+            "user_modified": 0,
+            "locked": 0,
+            "conflict": 0,
+            "warning": 0,
+            "error": 0
+        },
+        "items": []
+    },
+    "summary": {
+        "dry_run_available": false,
+        "ownership_available": false,
+        "runtime_checks_complete": false,
+        "blocking_errors": 0,
+        "warnings": 0
+    }
+}

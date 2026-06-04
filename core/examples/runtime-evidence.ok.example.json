@@ -1,0 +1,49 @@
+{
+    "version": 1,
+    "mode": "read_only",
+    "source": "plugin_runtime",
+    "status": "ok",
+    "complete": true,
+    "applied": false,
+    "runtime_mutation": false,
+    "message": "Runtime evidence completed successfully.",
+    "plugin_dry_run": {
+        "available": true,
+        "status": "ok",
+        "source": "plugin_runtime",
+        "message": "Plugin dry-run completed.",
+        "summary": {
+            "create": 1,
+            "update": 2,
+            "delete": 0,
+            "skip": 0,
+            "warning": 0,
+            "error": 0
+        },
+        "items": []
+    },
+    "ownership": {
+        "available": true,
+        "status": "ok",
+        "source": "plugin_runtime",
+        "message": "Ownership check completed.",
+        "requires_runtime": true,
+        "summary": {
+            "checked": 3,
+            "safe": 3,
+            "user_modified": 0,
+            "locked": 0,
+            "conflict": 0,
+            "warning": 0,
+            "error": 0
+        },
+        "items": []
+    },
+    "summary": {
+        "dry_run_available": true,
+        "ownership_available": true,
+        "runtime_checks_complete": true,
+        "blocking_errors": 0,
+        "warnings": 0
+    }
+}

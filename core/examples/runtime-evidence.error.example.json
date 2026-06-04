@@ -1,0 +1,71 @@
+{
+    "version": 1,
+    "mode": "read_only",
+    "source": "plugin_runtime",
+    "status": "error",
+    "complete": true,
+    "applied": false,
+    "runtime_mutation": false,
+    "message": "Runtime evidence completed with blocking errors.",
+    "plugin_dry_run": {
+        "available": true,
+        "status": "error",
+        "source": "plugin_runtime",
+        "message": "Plugin dry-run completed with errors.",
+        "summary": {
+            "create": 0,
+            "update": 0,
+            "delete": 0,
+            "skip": 0,
+            "warning": 0,
+            "error": 1
+        },
+        "items": [
+            {
+                "action": "error",
+                "adapter": "content",
+                "type": "runtime_action",
+                "entity": "Home page",
+                "message": "Runtime dry-run found a blocking conflict.",
+                "path": "/pages/home",
+                "details": {}
+            }
+        ]
+    },
+    "ownership": {
+        "available": true,
+        "status": "error",
+        "source": "plugin_runtime",
+        "message": "Ownership check completed with conflicts.",
+        "requires_runtime": true,
+        "summary": {
+            "checked": 1,
+            "safe": 0,
+            "user_modified": 0,
+            "locked": 1,
+            "conflict": 1,
+            "warning": 0,
+            "error": 1
+        },
+        "items": [
+            {
+                "status": "locked",
+                "entity_type": "post",
+                "entity": "Home page",
+                "entity_id": null,
+                "blueprint_path": "/pages/home",
+                "field": "post_content",
+                "ownership": "locked",
+                "message": "Home page is locked and cannot be updated automatically.",
+                "details": {}
+            }
+        ]
+    },
+    "summary": {
+        "dry_run_available": true,
+        "ownership_available": true,
+        "runtime_checks_complete": true,
+        "blocking_errors": 2,
+        "warnings": 0
+    }
+}
