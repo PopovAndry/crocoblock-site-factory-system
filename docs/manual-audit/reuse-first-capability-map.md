@@ -27,7 +27,11 @@ Before implementing a new Core or plugin feature, check:
 |---|---|---|---|---|---|
 | Blueprint loading | Audit | Audit | Contract only | Audit | |
 | Blueprint validation | Audit | Exists plugin-side | Exists Core-side | Compare | |
-| Blueprint normalization | Audit | Exists plugin-side | Missing/contract only | Audit | |
+| Blueprint normalization | Exists but WP sanitizer-based and old-section oriented | Same as old; current runtime overlays style/image separately | Missing pure normalizer | PORT | Port concepts only; build Core pure normalizer for v0.2+ sections. |
+| AI-safe flow | Unsafe full blueprint generation/direct apply path | Safer settings/local interpreter plus legacy generator remains | Interfaces and patch/candidate contracts | REWRITE | Rebuild as PromptInterpretation → BlueprintPatch/Candidate; no direct apply. |
+| Ownership / user-editing safety | Limited/no dedicated layer in audited paths | Exists plugin-side with Factory markers, hashes, skip-on-user-edit | Missing policy contract | KEEP_PLUGIN_SIDE | Runtime markers stay WP-side; Core may model ownership policy later. |
+| REST bridge / dashboard bridge | Exists but older | Product-ready but rest.php is monolithic | Bridge docs only | WRAP | Add thin read-only bridge contract before implementation. |
+| Design profiles / style tokens / component variants | Minimal/legacy visual concepts | Style/image context, deterministic tokens, render consumption | RealEstateProfile defaults only | PORT | Add controlled Core design profiles; AI chooses profiles, not arbitrary CSS. |
 | Dry-run / Plan | Exists via Factory_Dry_Run_Command | Exists via Factory_Dry_Run_Command | Patch preview only | Reuse/wrap plugin dry-run; do not rebuild runtime plan in Core | Adapter-driven plan already exists; Core preview should explain blueprint patch only. |
 | Apply | Exists | Exists plugin-side | Not in Core | Keep plugin runtime | |
 | Runtime validation | Exists adapter-driven | Improved plugin-side with new adapters/proof | Contract and desired-state validation only | Keep plugin-side runtime validation | Core validates blueprint shape; plugin validates real WordPress/Crocoblock state. |
