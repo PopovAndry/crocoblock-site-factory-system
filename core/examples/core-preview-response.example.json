@@ -1,0 +1,540 @@
+{
+    "version": 1,
+    "status": "warning",
+    "mode": "read_only",
+    "applied": false,
+    "runtime_mutation": false,
+    "title": "Core preview",
+    "message": "Read-only Core preview generated. Nothing was applied.",
+    "core": {
+        "available": true,
+        "candidate_valid": true,
+        "normalization": {
+            "status": "warning",
+            "warnings": [
+                "Unknown root section preserved by Core normalizer: experimental_notes."
+            ]
+        },
+        "validation": {
+            "status": "warning",
+            "checks": [
+                {
+                    "status": "warning",
+                    "scope": "experimental_notes",
+                    "message": "Unknown blueprint root section will be preserved but is not validated by Core v1.",
+                    "context": []
+                },
+                {
+                    "status": "ok",
+                    "scope": "blueprint",
+                    "message": "Blueprint desired-state shape is valid for Core v1.",
+                    "context": []
+                }
+            ]
+        },
+        "review": {
+            "plan": {
+                "items": [
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/site/name",
+                        "message": "Site name changed from \"Kyiv Turquoise Realty\" to \"Blueprint Candidate Realty\".",
+                        "diff": {
+                            "path": "/site/name",
+                            "label": "Site name",
+                            "before": "Kyiv Turquoise Realty",
+                            "after": "Blueprint Candidate Realty",
+                            "type": "scalar"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/site/style",
+                        "message": "Site style tokens changed: 3 keys [primary, accent, background] -> 4 keys [primary, accent, background, surface].",
+                        "diff": {
+                            "path": "/site/style",
+                            "label": "Site style tokens",
+                            "before": "3 keys [primary, accent, background]",
+                            "after": "4 keys [primary, accent, background, surface]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "create",
+                        "entity": "/design",
+                        "message": "Design context added: 2 keys [tone, primary_preset].",
+                        "diff": {
+                            "path": "/design",
+                            "label": "Design context",
+                            "before": null,
+                            "after": "2 keys [tone, primary_preset]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "create",
+                        "entity": "/image_context",
+                        "message": "Image context added: 2 keys [source, mode].",
+                        "diff": {
+                            "path": "/image_context",
+                            "label": "Image context",
+                            "before": null,
+                            "after": "2 keys [source, mode]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/pages",
+                        "message": "Pages changed: 6 keys [home, archive, native_filters, contact, queries, navigation] -> 2 keys [home, contact].",
+                        "diff": {
+                            "path": "/pages",
+                            "label": "Pages",
+                            "before": "6 keys [home, archive, native_filters, contact, queries, navigation]",
+                            "after": "2 keys [home, contact]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/cpt",
+                        "message": "CPT definitions changed: 1 item [property] -> 1 item [property].",
+                        "diff": {
+                            "path": "/cpt",
+                            "label": "CPT definitions",
+                            "before": "1 item [property]",
+                            "after": "1 item [property]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/taxonomies",
+                        "message": "Taxonomies changed: 3 items [purpose, property_type, district] -> 2 items [property-type, purpose].",
+                        "diff": {
+                            "path": "/taxonomies",
+                            "label": "Taxonomies",
+                            "before": "3 items [purpose, property_type, district]",
+                            "after": "2 items [property-type, purpose]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "create",
+                        "entity": "/terms",
+                        "message": "Terms added: 1 key [district].",
+                        "diff": {
+                            "path": "/terms",
+                            "label": "Terms",
+                            "before": null,
+                            "after": "1 key [district]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/content",
+                        "message": "Content changed: 1 key [property] -> 1 key [property].",
+                        "diff": {
+                            "path": "/content",
+                            "label": "Content",
+                            "before": "1 key [property]",
+                            "after": "1 key [property]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/queries",
+                        "message": "Query definitions changed: 2 items [real_estate_properties, native_real_estate_properties] -> 1 item [real-estate-properties].",
+                        "diff": {
+                            "path": "/queries",
+                            "label": "Query definitions",
+                            "before": "2 items [real_estate_properties, native_real_estate_properties]",
+                            "after": "1 item [real-estate-properties]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/filters",
+                        "message": "Filter definitions changed: 3 items [property_purpose, property_type, property_district] -> 1 item [property-purpose].",
+                        "diff": {
+                            "path": "/filters",
+                            "label": "Filter definitions",
+                            "before": "3 items [property_purpose, property_type, property_district]",
+                            "after": "1 item [property-purpose]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "create",
+                        "entity": "/forms",
+                        "message": "Form definitions added: 1 item [request-viewing].",
+                        "diff": {
+                            "path": "/forms",
+                            "label": "Form definitions",
+                            "before": null,
+                            "after": "1 item [request-viewing]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/listings",
+                        "message": "Listing definitions changed: 1 item [property-card] -> 1 item [property-card].",
+                        "diff": {
+                            "path": "/listings",
+                            "label": "Listing definitions",
+                            "before": "1 item [property-card]",
+                            "after": "1 item [property-card]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "create",
+                        "entity": "/render",
+                        "message": "Render settings added: 1 key [mode].",
+                        "diff": {
+                            "path": "/render",
+                            "label": "Render settings",
+                            "before": null,
+                            "after": "1 key [mode]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "update",
+                        "entity": "/single",
+                        "message": "Single templates changed: 1 key [property] -> 1 key [property].",
+                        "diff": {
+                            "path": "/single",
+                            "label": "Single templates",
+                            "before": "1 key [property]",
+                            "after": "1 key [property]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "create",
+                        "entity": "/assets",
+                        "message": "Assets added: 1 key [image_pool_policy].",
+                        "diff": {
+                            "path": "/assets",
+                            "label": "Assets",
+                            "before": null,
+                            "after": "1 key [image_pool_policy]",
+                            "type": "section_summary"
+                        }
+                    },
+                    {
+                        "adapter": "Core BlueprintCandidate Review",
+                        "action": "warning",
+                        "entity": "/experimental_notes",
+                        "message": "Unknown candidate section preserved: experimental_notes.",
+                        "diff": {
+                            "path": "/experimental_notes",
+                            "label": "Unknown candidate section",
+                            "after": {
+                                "candidate": "review only"
+                            },
+                            "type": "unknown_section"
+                        }
+                    }
+                ],
+                "summary": {
+                    "create": 6,
+                    "update": 10,
+                    "delete": 0,
+                    "skip": 0,
+                    "warning": 1,
+                    "error": 0
+                },
+                "metadata": {
+                    "source": "blueprint_candidate_review",
+                    "runtime_apply": false,
+                    "plugin_dry_run": false
+                }
+            },
+            "formatted": {
+                "version": 1,
+                "status": "warning",
+                "title": "Candidate review",
+                "summary": {
+                    "create": 6,
+                    "update": 10,
+                    "delete": 0,
+                    "skip": 0,
+                    "warning": 1,
+                    "error": 0
+                },
+                "sections": [
+                    {
+                        "key": "identity",
+                        "title": "Identity & Business",
+                        "description": "Site identity and business information changes.",
+                        "items": [
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "scalar",
+                                "entity": "/site/name",
+                                "message": "Site name changed from \"Kyiv Turquoise Realty\" to \"Blueprint Candidate Realty\".",
+                                "path": "/site/name",
+                                "before": "Kyiv Turquoise Realty",
+                                "after": "Blueprint Candidate Realty"
+                            }
+                        ]
+                    },
+                    {
+                        "key": "design",
+                        "title": "Design & Style",
+                        "description": "Visual profile, style tokens, image context, and component choices.",
+                        "items": [
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/site/style",
+                                "message": "Site style tokens changed: 3 keys [primary, accent, background] -> 4 keys [primary, accent, background, surface].",
+                                "path": "/site/style",
+                                "before": "3 keys [primary, accent, background]",
+                                "after": "4 keys [primary, accent, background, surface]"
+                            },
+                            {
+                                "action": "create",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/design",
+                                "message": "Design context added: 2 keys [tone, primary_preset].",
+                                "path": "/design",
+                                "before": null,
+                                "after": "2 keys [tone, primary_preset]"
+                            },
+                            {
+                                "action": "create",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/image_context",
+                                "message": "Image context added: 2 keys [source, mode].",
+                                "path": "/image_context",
+                                "before": null,
+                                "after": "2 keys [source, mode]"
+                            }
+                        ]
+                    },
+                    {
+                        "key": "structure",
+                        "title": "Site Structure",
+                        "description": "Pages, CPTs, taxonomies, templates, and render structure.",
+                        "items": [
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/pages",
+                                "message": "Pages changed: 6 keys [home, archive, native_filters, contact, queries, navigation] -> 2 keys [home, contact].",
+                                "path": "/pages",
+                                "before": "6 keys [home, archive, native_filters, contact, queries, navigation]",
+                                "after": "2 keys [home, contact]"
+                            },
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/cpt",
+                                "message": "CPT definitions changed: 1 item [property] -> 1 item [property].",
+                                "path": "/cpt",
+                                "before": "1 item [property]",
+                                "after": "1 item [property]"
+                            },
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/taxonomies",
+                                "message": "Taxonomies changed: 3 items [purpose, property_type, district] -> 2 items [property-type, purpose].",
+                                "path": "/taxonomies",
+                                "before": "3 items [purpose, property_type, district]",
+                                "after": "2 items [property-type, purpose]"
+                            },
+                            {
+                                "action": "create",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/terms",
+                                "message": "Terms added: 1 key [district].",
+                                "path": "/terms",
+                                "before": null,
+                                "after": "1 key [district]"
+                            },
+                            {
+                                "action": "create",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/render",
+                                "message": "Render settings added: 1 key [mode].",
+                                "path": "/render",
+                                "before": null,
+                                "after": "1 key [mode]"
+                            },
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/single",
+                                "message": "Single templates changed: 1 key [property] -> 1 key [property].",
+                                "path": "/single",
+                                "before": "1 key [property]",
+                                "after": "1 key [property]"
+                            }
+                        ]
+                    },
+                    {
+                        "key": "dynamic_features",
+                        "title": "Dynamic Features",
+                        "description": "Queries, filters, forms, listings, and Crocoblock-driven features.",
+                        "items": [
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/queries",
+                                "message": "Query definitions changed: 2 items [real_estate_properties, native_real_estate_properties] -> 1 item [real-estate-properties].",
+                                "path": "/queries",
+                                "before": "2 items [real_estate_properties, native_real_estate_properties]",
+                                "after": "1 item [real-estate-properties]"
+                            },
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/filters",
+                                "message": "Filter definitions changed: 3 items [property_purpose, property_type, property_district] -> 1 item [property-purpose].",
+                                "path": "/filters",
+                                "before": "3 items [property_purpose, property_type, property_district]",
+                                "after": "1 item [property-purpose]"
+                            },
+                            {
+                                "action": "create",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/forms",
+                                "message": "Form definitions added: 1 item [request-viewing].",
+                                "path": "/forms",
+                                "before": null,
+                                "after": "1 item [request-viewing]"
+                            },
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/listings",
+                                "message": "Listing definitions changed: 1 item [property-card] -> 1 item [property-card].",
+                                "path": "/listings",
+                                "before": "1 item [property-card]",
+                                "after": "1 item [property-card]"
+                            }
+                        ]
+                    },
+                    {
+                        "key": "content",
+                        "title": "Content & Assets",
+                        "description": "Demo content, media, and asset declarations.",
+                        "items": [
+                            {
+                                "action": "update",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/content",
+                                "message": "Content changed: 1 key [property] -> 1 key [property].",
+                                "path": "/content",
+                                "before": "1 key [property]",
+                                "after": "1 key [property]"
+                            },
+                            {
+                                "action": "create",
+                                "severity": "info",
+                                "type": "section_summary",
+                                "entity": "/assets",
+                                "message": "Assets added: 1 key [image_pool_policy].",
+                                "path": "/assets",
+                                "before": null,
+                                "after": "1 key [image_pool_policy]"
+                            }
+                        ]
+                    },
+                    {
+                        "key": "safety",
+                        "title": "Safety & Warnings",
+                        "description": "Warnings, unknown sections, and review requirements.",
+                        "items": [
+                            {
+                                "action": "warning",
+                                "severity": "warning",
+                                "type": "unknown_section",
+                                "entity": "/experimental_notes",
+                                "message": "Unknown candidate section preserved: experimental_notes.",
+                                "path": "/experimental_notes",
+                                "before": null,
+                                "after": {
+                                    "candidate": "review only"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "key": "advanced",
+                        "title": "Advanced",
+                        "description": "Technical review items that do not fit product-facing groups.",
+                        "items": []
+                    }
+                ]
+            }
+        }
+    },
+    "plugin": {
+        "dry_run": {
+            "available": false,
+            "status": "not_run",
+            "message": "Plugin dry-run is not part of this Core-only preview response.",
+            "summary": {
+                "create": 0,
+                "update": 0,
+                "delete": 0,
+                "skip": 0,
+                "warning": 0,
+                "error": 0
+            },
+            "items": []
+        }
+    },
+    "ownership": {
+        "available": false,
+        "status": "not_checked",
+        "message": "Ownership checks require plugin runtime and were not executed.",
+        "items": []
+    },
+    "next_required_step": "plugin_dry_run",
+    "warnings": [
+        "Unknown root section preserved by Core normalizer: experimental_notes.",
+        "Unknown blueprint root section will be preserved but is not validated by Core v1.",
+        "Formatted candidate review contains warnings."
+    ]
+}
