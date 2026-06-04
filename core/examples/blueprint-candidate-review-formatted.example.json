@@ -1,0 +1,235 @@
+{
+  "version": 1,
+  "status": "warning",
+  "title": "Candidate review",
+  "summary": {
+    "create": 6,
+    "update": 10,
+    "delete": 0,
+    "skip": 0,
+    "warning": 1,
+    "error": 0
+  },
+  "sections": [
+    {
+      "key": "identity",
+      "title": "Identity & Business",
+      "description": "Site identity and business information changes.",
+      "items": [
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "scalar",
+          "entity": "/site/name",
+          "message": "Site name changed from \"Kyiv Turquoise Realty\" to \"Blueprint Candidate Realty\".",
+          "path": "/site/name",
+          "before": "Kyiv Turquoise Realty",
+          "after": "Blueprint Candidate Realty"
+        }
+      ]
+    },
+    {
+      "key": "design",
+      "title": "Design & Style",
+      "description": "Visual profile, style tokens, image context, and component choices.",
+      "items": [
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/site/style",
+          "message": "Site style tokens changed: 3 keys [primary, accent, background] -> 4 keys [primary, accent, background, surface].",
+          "path": "/site/style",
+          "before": "3 keys [primary, accent, background]",
+          "after": "4 keys [primary, accent, background, surface]"
+        },
+        {
+          "action": "create",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/design",
+          "message": "Design context added: 2 keys [tone, primary_preset].",
+          "path": "/design",
+          "before": null,
+          "after": "2 keys [tone, primary_preset]"
+        },
+        {
+          "action": "create",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/image_context",
+          "message": "Image context added: 2 keys [source, mode].",
+          "path": "/image_context",
+          "before": null,
+          "after": "2 keys [source, mode]"
+        }
+      ]
+    },
+    {
+      "key": "structure",
+      "title": "Site Structure",
+      "description": "Pages, CPTs, taxonomies, templates, and render structure.",
+      "items": [
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/pages",
+          "message": "Pages changed: 6 keys [home, archive, native_filters, contact, queries, navigation] -> 2 keys [home, contact].",
+          "path": "/pages",
+          "before": "6 keys [home, archive, native_filters, contact, queries, navigation]",
+          "after": "2 keys [home, contact]"
+        },
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/cpt",
+          "message": "CPT definitions changed: 1 item [property] -> 1 item [property].",
+          "path": "/cpt",
+          "before": "1 item [property]",
+          "after": "1 item [property]"
+        },
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/taxonomies",
+          "message": "Taxonomies changed: 3 items [purpose, property_type, district] -> 2 items [property-type, purpose].",
+          "path": "/taxonomies",
+          "before": "3 items [purpose, property_type, district]",
+          "after": "2 items [property-type, purpose]"
+        },
+        {
+          "action": "create",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/terms",
+          "message": "Terms added: 1 key [district].",
+          "path": "/terms",
+          "before": null,
+          "after": "1 key [district]"
+        },
+        {
+          "action": "create",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/render",
+          "message": "Render settings added: 1 key [mode].",
+          "path": "/render",
+          "before": null,
+          "after": "1 key [mode]"
+        },
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/single",
+          "message": "Single templates changed: 1 key [property] -> 1 key [property].",
+          "path": "/single",
+          "before": "1 key [property]",
+          "after": "1 key [property]"
+        }
+      ]
+    },
+    {
+      "key": "dynamic_features",
+      "title": "Dynamic Features",
+      "description": "Queries, filters, forms, listings, and Crocoblock-driven features.",
+      "items": [
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/queries",
+          "message": "Query definitions changed: 2 items [real_estate_properties, native_real_estate_properties] -> 1 item [real-estate-properties].",
+          "path": "/queries",
+          "before": "2 items [real_estate_properties, native_real_estate_properties]",
+          "after": "1 item [real-estate-properties]"
+        },
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/filters",
+          "message": "Filter definitions changed: 3 items [property_purpose, property_type, property_district] -> 1 item [property-purpose].",
+          "path": "/filters",
+          "before": "3 items [property_purpose, property_type, property_district]",
+          "after": "1 item [property-purpose]"
+        },
+        {
+          "action": "create",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/forms",
+          "message": "Form definitions added: 1 item [request-viewing].",
+          "path": "/forms",
+          "before": null,
+          "after": "1 item [request-viewing]"
+        },
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/listings",
+          "message": "Listing definitions changed: 1 item [property-card] -> 1 item [property-card].",
+          "path": "/listings",
+          "before": "1 item [property-card]",
+          "after": "1 item [property-card]"
+        }
+      ]
+    },
+    {
+      "key": "content",
+      "title": "Content & Assets",
+      "description": "Demo content, media, and asset declarations.",
+      "items": [
+        {
+          "action": "update",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/content",
+          "message": "Content changed: 1 key [property] -> 1 key [property].",
+          "path": "/content",
+          "before": "1 key [property]",
+          "after": "1 key [property]"
+        },
+        {
+          "action": "create",
+          "severity": "info",
+          "type": "section_summary",
+          "entity": "/assets",
+          "message": "Assets added: 1 key [image_pool_policy].",
+          "path": "/assets",
+          "before": null,
+          "after": "1 key [image_pool_policy]"
+        }
+      ]
+    },
+    {
+      "key": "safety",
+      "title": "Safety & Warnings",
+      "description": "Warnings, unknown sections, and review requirements.",
+      "items": [
+        {
+          "action": "warning",
+          "severity": "warning",
+          "type": "unknown_section",
+          "entity": "/experimental_notes",
+          "message": "Unknown candidate section preserved: experimental_notes.",
+          "path": "/experimental_notes",
+          "before": null,
+          "after": {
+            "candidate": "review only"
+          }
+        }
+      ]
+    },
+    {
+      "key": "advanced",
+      "title": "Advanced",
+      "description": "Technical review items that do not fit product-facing groups.",
+      "items": []
+    }
+  ]
+}
