@@ -1,0 +1,18 @@
+{
+  "version": "0.2",
+  "site": [
+    {
+      "name": "Bad Shape Candidate"
+    }
+  ],
+  "plugins": {
+    "jetengine": {
+      "slug": "jetengine"
+    }
+  },
+  "queries": {
+    "real_estate_properties": {
+      "slug": "real_estate_properties"
+    }
+  }
+}

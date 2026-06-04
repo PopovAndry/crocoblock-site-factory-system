@@ -1,0 +1,22 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Unsafe Candidate"
+  },
+  "content": {
+    "property": [
+      {
+        "title": "Unsafe property",
+        "php_code": "<?php echo 'no'; ?>",
+        "callback": "system",
+        "eval": "return true;",
+        "sql": "DROP TABLE wp_posts",
+        "shell": "whoami",
+        "wordpress_mutation": true,
+        "direct_apply": true,
+        "raw_css": ".x { color: red; }",
+        "custom_js": "alert('no')"
+      }
+    ]
+  }
+}

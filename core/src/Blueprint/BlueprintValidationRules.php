@@ -32,6 +32,7 @@ final class BlueprintValidationRules
         'style',
         'design',
         'image_context',
+        'assets',
     ];
 
     /** @var array<int, string> */
@@ -52,6 +53,7 @@ final class BlueprintValidationRules
         'style',
         'design',
         'image_context',
+        'assets',
     ];
 
     /** @var array<int, string> */

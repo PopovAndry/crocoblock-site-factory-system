@@ -1,0 +1,177 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Blueprint Candidate Realty",
+    "language": "EN",
+    "permalink": "/%postname%/",
+    "style": {
+      "primary": "#0f766e",
+      "accent": "#14b8a6",
+      "background": "#ecfeff",
+      "surface": "#ffffff"
+    },
+    "assets": {
+      "property_images": {
+        "Apartment": [
+          "blueprints/assets/real-estate/apartment/apartment-1.png"
+        ],
+        "House": [
+          "blueprints/assets/real-estate/house/house-1.png"
+        ]
+      }
+    }
+  },
+  "theme": {
+    "slug": "kava"
+  },
+  "plugins": [
+    {
+      "slug": "jetengine",
+      "required": true
+    },
+    {
+      "slug": "jetsmartfilters",
+      "required": false
+    }
+  ],
+  "pages": {
+    "home": {
+      "slug": "home",
+      "title": "Blueprint Candidate Realty",
+      "sections": [
+        {
+          "type": "hero",
+          "title": "Blueprint Candidate Realty",
+          "subtitle": "Curated homes and commercial spaces"
+        }
+      ]
+    },
+    "contact": {
+      "slug": "contact",
+      "title": "Contact Blueprint Candidate Realty",
+      "intro": "Schedule a guided property consultation"
+    }
+  },
+  "cpt": [
+    {
+      "slug": "property",
+      "label": "Properties",
+      "supports": [
+        "title",
+        "editor",
+        "thumbnail"
+      ],
+      "meta": [
+        {
+          "key": "price",
+          "type": "number",
+          "label": "Price"
+        },
+        {
+          "key": "bedrooms",
+          "type": "number",
+          "label": "Bedrooms"
+        }
+      ]
+    }
+  ],
+  "taxonomies": [
+    {
+      "slug": "property-type",
+      "post_type": "property",
+      "terms": [
+        "Apartment",
+        "House"
+      ]
+    },
+    {
+      "slug": "purpose",
+      "post_type": "property",
+      "terms": [
+        "Sale",
+        "Rent"
+      ]
+    }
+  ],
+  "terms": {
+    "district": [
+      "Pechersk",
+      "Podil"
+    ]
+  },
+  "content": {
+    "property": [
+      {
+        "title": "Candidate Central Apartment",
+        "meta": {
+          "price": "250000",
+          "bedrooms": "2"
+        }
+      }
+    ]
+  },
+  "queries": [
+    {
+      "slug": "real-estate-properties",
+      "provider": "jetengine",
+      "type": "posts",
+      "post_type": "property"
+    }
+  ],
+  "filters": [
+    {
+      "slug": "property-purpose",
+      "provider": "jetsmartfilters",
+      "type": "select",
+      "source": "taxonomy",
+      "taxonomy": "purpose",
+      "query_var": "purpose"
+    }
+  ],
+  "forms": [
+    {
+      "slug": "request-viewing",
+      "provider": "jetformbuilder"
+    }
+  ],
+  "listings": [
+    {
+      "slug": "property-card",
+      "post_type": "property",
+      "query": "real_estate_properties"
+    }
+  ],
+  "render": {
+    "mode": "factory_fallback"
+  },
+  "single": {
+    "property": {
+      "layout": [
+        {
+          "type": "gallery"
+        },
+        {
+          "type": "facts"
+        }
+      ]
+    }
+  },
+  "design": {
+    "tone": "Premium",
+    "primary_preset": "Turquoise"
+  },
+  "style": {
+    "primary": "#0f766e",
+    "accent": "#14b8a6"
+  },
+  "image_context": {
+    "source": "demo_pool",
+    "mode": "round_robin"
+  },
+  "assets": {
+    "image_pool_policy": "bundled_demo_only"
+  },
+  "experimental_notes": {
+    "candidate": "review only"
+  }
+}
