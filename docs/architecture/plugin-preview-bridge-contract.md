@@ -221,6 +221,14 @@ docs/architecture/runtime-evidence-contract.md
 
 RuntimeEvidence groups plugin dry-run and ownership evidence into one read-only object. It must not contain `can_apply`; apply readiness remains the responsibility of the apply gate.
 
+The Core-only response builder is documented in:
+
+```text
+docs/architecture/plugin-preview-bridge-response-builder.md
+```
+
+That builder composes Core preview, optional RuntimeEvidence, and ApplyGatePolicy into deterministic example responses. It is not the real plugin bridge and does not execute runtime checks.
+
 ## Invalid Fixtures
 
 Invalid fixtures document the failure cases the contract must reject:
