@@ -30,11 +30,12 @@ Before implementing a new Core or plugin feature, check:
 | Blueprint normalization | Audit | Exists plugin-side | Missing/contract only | Audit | |
 | Dry-run / Plan | Exists via Factory_Dry_Run_Command | Exists via Factory_Dry_Run_Command | Patch preview only | Reuse/wrap plugin dry-run; do not rebuild runtime plan in Core | Adapter-driven plan already exists; Core preview should explain blueprint patch only. |
 | Apply | Exists | Exists plugin-side | Not in Core | Keep plugin runtime | |
-| Runtime validation | Exists | Exists plugin-side | Contract validation only | Keep split | |
+| Runtime validation | Exists adapter-driven | Improved plugin-side with new adapters/proof | Contract and desired-state validation only | Keep plugin-side runtime validation | Core validates blueprint shape; plugin validates real WordPress/Crocoblock state. |
 | Manifest / Run storage | Exists via run manifest/registry/storage utilities | Exists plugin-side and richer with context/configurable storage | RunManifest contract only | Keep persistence plugin-side; Core may define schema/status rules | Current plugin adds context support and FACTORY_RUNS_DIR-based storage; do not duplicate run persistence in Core. |
 | Doctor / Health | Exists via Factory_Doctor_Command / Factory_Health_Command | Exists plugin-side and improved with run storage helpers | Missing runtime | Keep plugin-side execution; Core may model health result shape later | Current plugin uses FACTORY_RUNS_DIR/factory_get_runs_registry_path; do not rebuild runtime doctor/health in Core. |
 | Fix / Repair | Exists via Factory_Fix_Command | Exists via Factory_Fix_Command | RepairPlan contract only | Keep plugin-side execution; Core may model RepairPlan only | Old R&D and current plugin fix are identical/migrated; do not rebuild repair execution in Core. |
-| Adapter registry | Exists | Exists plugin-side | Missing runtime | Keep plugin-side, model capabilities in Core later | |
+| Adapter registry | Exists | Improved plugin-side with queries/filters and dependency graph | Missing runtime | Keep plugin-side; Core may consume serialized capability report later | Current plugin registry is runtime source of truth; do not move adapter registry or dependency order into Core. |
+| Adapter plan/apply/validate capabilities | Exists | Improved and complete plugin-side | Core contracts only | Wrap with future capability report | Keep runtime methods in plugin; expose serialized read-only capability report later. |
 | AI generator | Exists | Exists plugin-side/mock | Interfaces only | Reuse only safe pieces | |
 | Prompt cache | Audit | Audit | Missing | Audit | |
 | User editing safety | Audit | Exists plugin-side | Missing | Preserve plugin-side | |
