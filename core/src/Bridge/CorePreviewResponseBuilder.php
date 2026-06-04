@@ -65,12 +65,7 @@ final class CorePreviewResponseBuilder
             'plugin' => [
                 'dry_run' => (new PluginDryRunPlaceholder())->toArray(),
             ],
-            'ownership' => [
-                'available' => false,
-                'status' => 'not_checked',
-                'message' => 'Ownership checks require plugin runtime and were not executed.',
-                'items' => [],
-            ],
+            'ownership' => (new OwnershipPlaceholder())->toArray(),
             'next_required_step' => 'plugin_dry_run',
             'warnings' => $warnings,
         ];
