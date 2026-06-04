@@ -63,20 +63,7 @@ final class CorePreviewResponseBuilder
                 ],
             ],
             'plugin' => [
-                'dry_run' => [
-                    'available' => false,
-                    'status' => 'not_run',
-                    'message' => 'Plugin dry-run is not part of this Core-only preview response.',
-                    'summary' => [
-                        'create' => 0,
-                        'update' => 0,
-                        'delete' => 0,
-                        'skip' => 0,
-                        'warning' => 0,
-                        'error' => 0,
-                    ],
-                    'items' => [],
-                ],
+                'dry_run' => (new PluginDryRunPlaceholder())->toArray(),
             ],
             'ownership' => [
                 'available' => false,

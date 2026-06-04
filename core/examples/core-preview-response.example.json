@@ -513,6 +513,7 @@
         "dry_run": {
             "available": false,
             "status": "not_run",
+            "source": "plugin_runtime",
             "message": "Plugin dry-run is not part of this Core-only preview response.",
             "summary": {
                 "create": 0,
@@ -522,7 +523,9 @@
                 "warning": 0,
                 "error": 0
             },
-            "items": []
+            "items": [],
+            "requires_runtime": true,
+            "next_required_step": "plugin_dry_run"
         }
     },
     "ownership": {
