@@ -1,0 +1,16 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Bad List Shape Fixture"
+  },
+  "plugins": {
+    "jetengine": {
+      "slug": "jetengine"
+    }
+  },
+  "cpt": {
+    "property": {
+      "slug": "property"
+    }
+  }
+}

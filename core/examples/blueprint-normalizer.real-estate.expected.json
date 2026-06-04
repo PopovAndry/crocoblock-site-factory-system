@@ -1,0 +1,137 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Kyiv Turquoise Realty",
+    "language": "EN",
+    "permalink": "/%postname%/",
+    "style": {
+      "primary": "#0f766e",
+      "accent": "#14b8a6",
+      "background": "#ecfeff"
+    },
+    "assets": {
+      "property_images": {
+        "Apartment": [
+          "blueprints/assets/real-estate/apartment/apartment-1.png"
+        ]
+      }
+    }
+  },
+  "theme": {
+    "slug": "kava"
+  },
+  "plugins": [
+    {
+      "slug": "jetengine",
+      "activate": true
+    }
+  ],
+  "pages": {
+    "home": {
+      "slug": "home",
+      "title": "Kyiv Turquoise Realty",
+      "sections": [
+        {
+          "type": "hero",
+          "title": "Kyiv Turquoise Realty",
+          "subtitle": "Find premium apartments"
+        }
+      ]
+    }
+  },
+  "cpt": [
+    {
+      "slug": "property",
+      "label": "Properties",
+      "supports": [
+        "title",
+        "editor",
+        "thumbnail"
+      ],
+      "meta": [
+        {
+          "key": "price",
+          "type": "number",
+          "label": "Price"
+        }
+      ]
+    }
+  ],
+  "taxonomies": [
+    {
+      "slug": "property-type",
+      "post_type": "property",
+      "terms": [
+        "Apartment",
+        "House"
+      ]
+    }
+  ],
+  "terms": {
+    "district": [
+      "Pechersk"
+    ]
+  },
+  "content": {
+    "property": [
+      {
+        "title": "Central Apartment",
+        "meta": {
+          "price": "250000"
+        }
+      }
+    ]
+  },
+  "queries": [
+    {
+      "slug": "real-estate-properties",
+      "provider": "jetengine",
+      "type": "posts",
+      "post_type": "property"
+    }
+  ],
+  "filters": [
+    {
+      "slug": "property-purpose",
+      "provider": "jetsmartfilters",
+      "type": "select",
+      "source": "taxonomy",
+      "taxonomy": "purpose",
+      "query_var": "purpose"
+    }
+  ],
+  "forms": [
+    {
+      "slug": "request-viewing",
+      "provider": "jetformbuilder"
+    }
+  ],
+  "listings": [
+    {
+      "slug": "property-card",
+      "post_type": "property"
+    }
+  ],
+  "render": {
+    "mode": "shortcodes"
+  },
+  "single": {
+    "property": {
+      "layout": [
+        {
+          "type": "title"
+        }
+      ]
+    }
+  },
+  "design": {
+    "profile": "premium agency"
+  },
+  "image_context": {
+    "source": "demo_pool",
+    "mode": "round_robin"
+  },
+  "experimental_notes": {
+    "keep": "yes"
+  }
+}

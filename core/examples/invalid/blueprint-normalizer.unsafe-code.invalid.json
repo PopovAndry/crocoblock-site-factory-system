@@ -1,0 +1,15 @@
+{
+  "version": "0.2",
+  "site": {
+    "name": "Unsafe Code Fixture"
+  },
+  "content": {
+    "property": [
+      {
+        "title": "Unsafe callback",
+        "php_code": "<?php echo 'never execute'; ?>",
+        "custom_js": "alert('never execute');"
+      }
+    ]
+  }
+}

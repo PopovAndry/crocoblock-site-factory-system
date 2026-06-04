@@ -1,0 +1,137 @@
+{
+  "version": " 0.2 ",
+  "site": {
+    "name": " Kyiv Turquoise Realty ",
+    "language": " EN ",
+    "permalink": " /%postname%/ ",
+    "style": {
+      "primary": " #0f766e ",
+      "accent": " #14b8a6 ",
+      "background": " #ecfeff "
+    },
+    "assets": {
+      "property_images": {
+        "Apartment": [
+          " blueprints/assets/real-estate/apartment/apartment-1.png "
+        ]
+      }
+    }
+  },
+  "theme": {
+    "slug": " kava "
+  },
+  "plugins": [
+    {
+      "slug": " JetEngine ",
+      "activate": true
+    }
+  ],
+  "pages": {
+    "home": {
+      "slug": " Home ",
+      "title": " Kyiv Turquoise Realty ",
+      "sections": [
+        {
+          "type": " Hero ",
+          "title": " Kyiv Turquoise Realty ",
+          "subtitle": " Find premium apartments "
+        }
+      ]
+    }
+  },
+  "cpt": [
+    {
+      "slug": " Property ",
+      "label": " Properties ",
+      "supports": [
+        " title ",
+        "editor",
+        "thumbnail"
+      ],
+      "meta": [
+        {
+          "key": " Price ",
+          "type": " Number ",
+          "label": " Price "
+        }
+      ]
+    }
+  ],
+  "taxonomies": [
+    {
+      "slug": " Property Type ",
+      "post_type": " Property ",
+      "terms": [
+        " Apartment ",
+        " House "
+      ]
+    }
+  ],
+  "terms": {
+    "district": [
+      " Pechersk "
+    ]
+  },
+  "content": {
+    "property": [
+      {
+        "title": " Central Apartment ",
+        "meta": {
+          "price": " 250000 "
+        }
+      }
+    ]
+  },
+  "queries": [
+    {
+      "slug": " Real Estate Properties ",
+      "provider": " JetEngine ",
+      "type": " Posts ",
+      "post_type": " Property "
+    }
+  ],
+  "filters": [
+    {
+      "slug": " Property Purpose ",
+      "provider": " JetSmartFilters ",
+      "type": " Select ",
+      "source": " Taxonomy ",
+      "taxonomy": " Purpose ",
+      "query_var": " Purpose "
+    }
+  ],
+  "forms": [
+    {
+      "slug": " Request Viewing ",
+      "provider": " JetFormBuilder "
+    }
+  ],
+  "listings": [
+    {
+      "slug": " Property Card ",
+      "post_type": " Property "
+    }
+  ],
+  "render": {
+    "mode": " Shortcodes "
+  },
+  "single": {
+    "property": {
+      "layout": [
+        {
+          "type": " Title "
+        }
+      ]
+    }
+  },
+  "design": {
+    "profile": " premium agency "
+  },
+  "image_context": {
+    "source": " demo_pool ",
+    "mode": " round_robin "
+  },
+  "experimental_notes": {
+    "keep": " yes "
+  }
+}
