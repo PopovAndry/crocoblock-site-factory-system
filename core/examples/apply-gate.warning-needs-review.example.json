@@ -1,0 +1,56 @@
+{
+    "apply_gate": {
+        "status": "warning",
+        "can_apply": false,
+        "requires_user_confirmation": true,
+        "blocking_reasons": [],
+        "warnings": [
+            "One Factory-managed entity was manually edited and needs review."
+        ],
+        "next_required_step": "user_confirmation"
+    },
+    "plugin_dry_run": {
+        "available": true,
+        "status": "ok",
+        "source": "plugin_runtime",
+        "message": "Plugin dry-run completed.",
+        "summary": {
+            "create": 0,
+            "update": 1,
+            "delete": 0,
+            "skip": 1,
+            "warning": 1,
+            "error": 0
+        },
+        "items": []
+    },
+    "ownership": {
+        "available": true,
+        "status": "warning",
+        "source": "plugin_runtime",
+        "message": "Ownership check completed with review warnings.",
+        "requires_runtime": true,
+        "summary": {
+            "checked": 2,
+            "safe": 1,
+            "user_modified": 1,
+            "locked": 0,
+            "conflict": 0,
+            "warning": 1,
+            "error": 0
+        },
+        "items": [
+            {
+                "status": "user_modified",
+                "entity_type": "post",
+                "entity": "Home page",
+                "entity_id": null,
+                "blueprint_path": "/pages/home",
+                "field": "post_content",
+                "ownership": "mixed",
+                "message": "Home page was manually edited and requires user review.",
+                "details": {}
+            }
+        ]
+    }
+}

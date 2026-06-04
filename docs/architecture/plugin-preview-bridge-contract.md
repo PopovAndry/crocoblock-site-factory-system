@@ -205,6 +205,14 @@ The validator enforces the read-only bridge boundary:
 - `apply_gate.can_apply` must be `false` when dry-run or ownership placeholders are present;
 - placeholder dry-run and ownership messages must not claim runtime checks were executed.
 
+The `apply_gate` section is validated through `ApplyGatePolicyValidator`, documented in:
+
+```text
+docs/architecture/apply-gate-policy-contract.md
+```
+
+That policy defines when a future bridge response may move from `blocked` to `ready`. In Core-only examples, `ready` still means ready for user confirmation, and `can_apply` remains `false`.
+
 ## Invalid Fixtures
 
 Invalid fixtures document the failure cases the contract must reject:

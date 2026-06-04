@@ -1,0 +1,20 @@
+{
+    "apply_gate": {
+        "status": "blocked",
+        "can_apply": true,
+        "requires_user_confirmation": true,
+        "blocking_reasons": [
+            "Plugin dry-run has not been executed."
+        ],
+        "warnings": [],
+        "next_required_step": "plugin_dry_run"
+    },
+    "plugin_dry_run": {
+        "available": false,
+        "status": "not_run"
+    },
+    "ownership": {
+        "available": false,
+        "status": "not_checked"
+    }
+}

@@ -1,0 +1,23 @@
+{
+    "apply_gate": {
+        "status": "ready",
+        "can_apply": false,
+        "requires_user_confirmation": true,
+        "blocking_reasons": [],
+        "warnings": [],
+        "next_required_step": "user_confirmation"
+    },
+    "ownership": {
+        "available": true,
+        "status": "ok",
+        "summary": {
+            "checked": 1,
+            "safe": 1,
+            "user_modified": 0,
+            "locked": 0,
+            "conflict": 0,
+            "warning": 0,
+            "error": 0
+        }
+    }
+}

@@ -96,20 +96,19 @@ final class PluginPreviewBridgeValidator
             return new ValidationResult($checks);
         }
 
-        $this->expectOneOf($checks, 'apply_gate.status', $applyGate['status'] ?? null, ['blocked', 'ready', 'warning', 'error'], 'Apply gate status must be blocked, ready, warning, or error.');
-        $this->expectSame($checks, 'apply_gate.can_apply', $applyGate['can_apply'] ?? null, false, 'Core-only bridge response must not allow apply.');
-        $this->expectSame($checks, 'apply_gate.requires_user_confirmation', $applyGate['requires_user_confirmation'] ?? null, true, 'Apply gate must require user confirmation.');
+        $applyGateResult = (new ApplyGatePolicyValidator())->validate(
+            $applyGate,
+            [
+                'plugin_dry_run' => $pluginDryRun,
+                'ownership' => $ownership,
+                'core_only' => true,
+            ]
+        );
 
-        if (!is_array($applyGate['blocking_reasons'] ?? null) || !$this->isList($applyGate['blocking_reasons'])) {
-            $checks[] = $this->error('apply_gate.blocking_reasons', 'Apply gate blocking_reasons must be a list.');
-        }
-
-        if (!is_array($applyGate['warnings'] ?? null) || !$this->isList($applyGate['warnings'])) {
-            $checks[] = $this->error('apply_gate.warnings', 'Apply gate warnings must be a list.');
-        }
-
-        if (!is_string($applyGate['next_required_step'] ?? null) || '' === $applyGate['next_required_step']) {
-            $checks[] = $this->error('apply_gate.next_required_step', 'Apply gate next_required_step must be a non-empty string.');
+        foreach ($applyGateResult->checks() as $check) {
+            if (ManifestStatus::ERROR === $check->status()) {
+                $checks[] = $this->error('apply_gate.' . $check->scope(), $check->message());
+            }
         }
 
         $dryRunAvailable = is_array($pluginDryRun) ? ($pluginDryRun['available'] ?? null) : null;
@@ -163,14 +162,6 @@ final class PluginPreviewBridgeValidator
         if (!is_string($actual) || !in_array($actual, $allowed, true)) {
             $checks[] = $this->error($scope, $message);
         }
-    }
-
-    /**
-     * @param array<mixed> $value
-     */
-    private function isList(array $value): bool
-    {
-        return array_is_list($value);
     }
 
     private function claimsRuntimeCheckExecuted(string $message): bool

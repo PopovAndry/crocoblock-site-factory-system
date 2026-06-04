@@ -1,0 +1,18 @@
+{
+    "apply_gate": {
+        "status": "open",
+        "can_apply": false,
+        "requires_user_confirmation": true,
+        "blocking_reasons": [],
+        "warnings": [],
+        "next_required_step": "plugin_dry_run"
+    },
+    "plugin_dry_run": {
+        "available": false,
+        "status": "not_run"
+    },
+    "ownership": {
+        "available": false,
+        "status": "not_checked"
+    }
+}
