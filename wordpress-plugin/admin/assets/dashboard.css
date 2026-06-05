@@ -1396,6 +1396,68 @@
 	color: #6d4b00;
 }
 
+.factory-readiness {
+	border: 1px solid #d7eee9;
+	border-radius: 8px;
+	display: grid;
+	gap: 4px;
+	padding: 11px 12px;
+}
+
+.factory-readiness strong {
+	color: #10201d;
+	font-size: 13px;
+	line-height: 1.35;
+}
+
+.factory-readiness p {
+	color: #52635f;
+	font-size: 13px;
+	font-weight: 700;
+	line-height: 1.45;
+	margin: 0;
+}
+
+.factory-readiness--unknown {
+	background: #f6f7f7;
+	border-color: #dcdcde;
+}
+
+.factory-readiness--loading {
+	background: #ecfeff;
+	border-color: #9ddbd2;
+}
+
+.factory-readiness--blocked {
+	background: #fcf0f1;
+	border-color: #e26f75;
+}
+
+.factory-readiness--blocked strong,
+.factory-readiness--blocked p {
+	color: #8a2424;
+}
+
+.factory-readiness--review {
+	background: #fff8e5;
+	border-color: #f0c33c;
+}
+
+.factory-readiness--review strong,
+.factory-readiness--review p {
+	color: #6d4b00;
+}
+
+.factory-readiness--ready {
+	background: #edfaef;
+	border-color: #68de7c;
+}
+
+.factory-readiness--ready strong,
+.factory-readiness--ready p {
+	color: #008a20;
+}
+
 .factory-preview-bridge-raw summary {
 	color: #0f766e;
 	cursor: pointer;

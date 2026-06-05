@@ -1082,6 +1082,95 @@
 		].join( '' );
 	}
 
+	function getRuntimeReadinessState() {
+		const data = state.bridgePreviewData;
+		const applyGate = data && data.apply_gate && typeof data.apply_gate === 'object' ? data.apply_gate : {};
+		const runtimeEvidence = data && data.runtime_evidence && typeof data.runtime_evidence === 'object' ? data.runtime_evidence : {};
+		const bridgeStatus = statusValue( data && data.status );
+		const runtimeStatus = statusValue( runtimeEvidence.status );
+		const applyGateStatus = String( applyGate.status || '' ).toLowerCase();
+		const blockingReasons = Array.isArray( applyGate.blocking_reasons ) ? applyGate.blocking_reasons : [];
+		const warnings = [].concat(
+			Array.isArray( data && data.warnings ) ? data.warnings : [],
+			Array.isArray( applyGate.warnings ) ? applyGate.warnings : []
+		);
+
+		if ( state.bridgePreviewLoading ) {
+			return {
+				key: 'loading',
+				label: 'Loading',
+				message: 'Collecting read-only runtime evidence...',
+			};
+		}
+
+		if ( ! data ) {
+			return {
+				key: 'unknown',
+				label: 'Unknown',
+				message: 'Run the read-only runtime preview before generating to inspect runtime evidence.',
+			};
+		}
+
+		if (
+			bridgeStatus === 'error' ||
+			runtimeStatus === 'error' ||
+			[ 'error', 'blocked' ].includes( applyGateStatus ) ||
+			blockingReasons.length > 0
+		) {
+			return {
+				key: 'blocked',
+				label: 'Blocked',
+				message: 'You can preview the plan, but generation should wait until runtime requirements are resolved.',
+			};
+		}
+
+		if (
+			warnings.length > 0 ||
+			applyGateStatus === 'warning' ||
+			applyGate.can_apply === false
+		) {
+			return {
+				key: 'review',
+				label: 'Review required',
+				message: 'The Preview Bridge is evidence-only in this beta. Review runtime evidence before generating.',
+			};
+		}
+
+		return {
+			key: 'ready',
+			label: 'Ready for review',
+			message: 'Runtime evidence is clean. This still does not authorize automatic apply.',
+		};
+	}
+
+	function renderRuntimeReadinessNotice( context ) {
+		const readiness = getRuntimeReadinessState();
+		const className = 'factory-readiness factory-readiness--' + readiness.key;
+
+		if ( context === 'step6' ) {
+			if ( readiness.key === 'unknown' ) {
+				return '<div class="' + className + '"><strong>Runtime readiness: Unknown</strong><p>Runtime readiness has not been checked. You can continue with the current beta flow, but running the read-only runtime preview is recommended.</p></div>';
+			}
+
+			if ( readiness.key === 'blocked' ) {
+				return '<div class="' + className + '"><strong>Runtime readiness: Blocked</strong><p>Preview is current, but runtime readiness is blocked. Resolve the listed runtime requirements before generating.</p></div>';
+			}
+
+			if ( readiness.key === 'review' ) {
+				return '<div class="' + className + '"><strong>Runtime readiness: Review required</strong><p>Runtime evidence requires review. The Preview Bridge is evidence-only and does not authorize apply yet.</p></div>';
+			}
+
+			return '';
+		}
+
+		return [
+			'<div class="' + className + '">',
+				'<strong>Runtime readiness: ' + escapeHtml( readiness.label ) + '</strong>',
+				'<p>' + escapeHtml( readiness.message ) + '</p>',
+			'</div>',
+		].join( '' );
+	}
+
 	function renderPreviewBridgePanel() {
 		const data = state.bridgePreviewData;
 		const applyGate = data && data.apply_gate && typeof data.apply_gate === 'object' ? data.apply_gate : {};
@@ -1113,6 +1202,7 @@
 						state.bridgePreviewLoading ? 'Checking runtime...' : 'Run read-only runtime preview',
 					'</button>',
 				'</div>',
+				renderRuntimeReadinessNotice( 'bridge' ),
 				state.bridgePreviewError ? '<div class="factory-wizard-notice factory-wizard-notice-warning">Preview Bridge request failed: ' + escapeHtml( state.bridgePreviewError ) + '</div>' : '',
 				! data && ! state.bridgePreviewLoading && ! state.bridgePreviewError ? '<p class="factory-empty">Runtime Preview Bridge has not been run yet.</p>' : '',
 				state.bridgePreviewLoading ? '<div class="factory-demo-progress" role="status" aria-live="polite"><span class="factory-demo-spinner" aria-hidden="true"></span><div><strong>Checking runtime evidence...</strong><span>No apply, generate, fix, reset, or manifest write is performed.</span></div></div>' : '',
@@ -1651,6 +1741,7 @@
 				renderGenerationProgress(),
 				! isRequirementsReady() ? '<div class="factory-wizard-notice factory-wizard-notice-warning">Required setup needed before generation.</div>' : '',
 				renderWizardNotice(),
+				renderRuntimeReadinessNotice( 'step6' ),
 				'<div class="factory-demo-statuses factory-demo-statuses-inline">',
 					renderDemoStatus( 'Site generated', siteGenerated ),
 					renderDemoStatus( 'Validation OK', validationOk ),
