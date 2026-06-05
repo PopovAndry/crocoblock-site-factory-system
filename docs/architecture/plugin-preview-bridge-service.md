@@ -2,7 +2,7 @@
 
 The plugin preview bridge service is an internal WordPress plugin runtime service that composes read-only runtime evidence into a Plugin Preview Bridge response-compatible array.
 
-It is intentionally not exposed through REST or the dashboard yet.
+It is now internally exposed through a read-only REST endpoint for authenticated administrators. Dashboard preview integration is available as a read-only UI layer; apply integration is still not implemented.
 
 ## Location
 
@@ -67,8 +67,6 @@ The service does not import or instantiate Core PHP classes. It mirrors the cont
 
 The service does not:
 
-- add REST endpoints;
-- edit dashboard UI;
 - call `factory_apply_blueprint()`;
 - run apply, fix, reset, or generate commands;
 - write run manifests;
@@ -127,13 +125,16 @@ This service follows the shapes documented in:
 
 It does not make the plugin depend on Core code. The plugin remains installable as its own runtime package.
 
-## Future Integration Points
+## Integration Points
+
+Implemented read-only integration points:
+
+- a read-only REST endpoint;
+- dashboard preview display.
 
 Future tasks may add:
 
-- a read-only REST endpoint;
-- dashboard preview display;
 - confirmation gate state;
 - apply integration after explicit user confirmation.
 
-Those integration points are not implemented here.
+The REST endpoint and dashboard display are read-only bridge layers. Confirmation/apply behavior remains separate and is not implemented here.

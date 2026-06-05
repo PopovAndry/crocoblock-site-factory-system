@@ -131,6 +131,9 @@
 		betaMessage: null,
 		betaPlan: null,
 		betaProductPlan: null,
+		bridgePreviewLoading: false,
+		bridgePreviewError: '',
+		bridgePreviewData: null,
 		promptInterpretation: null,
 		promptInterpretationWarnings: [],
 		promptInterpretationNotices: [],
@@ -1039,6 +1042,107 @@
 		].join( '' );
 	}
 
+	function bridgeBooleanLabel( value ) {
+		return value ? 'true' : 'false';
+	}
+
+	function bridgeStatusBadge( value ) {
+		return badge( statusValue( value ) );
+	}
+
+	function bridgeSummaryItems( summary, keys ) {
+		if ( ! summary || typeof summary !== 'object' ) {
+			return '<p class="factory-empty">No summary available.</p>';
+		}
+
+		return [
+			'<div class="factory-metric-grid factory-bridge-metrics">',
+				keys.map( function ( key ) {
+					return renderMetric( key.replace( /_/g, ' ' ), summaryValue( summary, key ) );
+				} ).join( '' ),
+			'</div>',
+		].join( '' );
+	}
+
+	function bridgeMessageList( label, items, status ) {
+		if ( ! Array.isArray( items ) || ! items.length ) {
+			return '';
+		}
+
+		return [
+			'<div class="factory-bridge-message-group factory-bridge-message-group-' + escapeHtml( statusValue( status ) ) + '">',
+				'<strong>' + escapeHtml( label ) + '</strong>',
+				'<ul>',
+					items.map( function ( item ) {
+						const message = typeof item === 'string' ? item : ( item.message || JSON.stringify( item ) );
+						return '<li>' + escapeHtml( message ) + '</li>';
+					} ).join( '' ),
+				'</ul>',
+			'</div>',
+		].join( '' );
+	}
+
+	function renderPreviewBridgePanel() {
+		const data = state.bridgePreviewData;
+		const applyGate = data && data.apply_gate && typeof data.apply_gate === 'object' ? data.apply_gate : {};
+		const dryRun = data && data.plugin && data.plugin.dry_run && typeof data.plugin.dry_run === 'object'
+			? data.plugin.dry_run
+			: {};
+		const ownership = data && data.ownership && typeof data.ownership === 'object' ? data.ownership : {};
+		const dryRunSummary = dryRun.summary || null;
+		const ownershipSummary = ownership.summary || null;
+		const canApply = Boolean( applyGate.can_apply );
+		const errors = [].concat(
+			Array.isArray( data && data.errors ) ? data.errors : [],
+			Array.isArray( applyGate.blocking_reasons ) ? applyGate.blocking_reasons : []
+		);
+		const warnings = [].concat(
+			Array.isArray( data && data.warnings ) ? data.warnings : [],
+			Array.isArray( applyGate.warnings ) ? applyGate.warnings : []
+		);
+
+		return [
+			'<section class="factory-preview-bridge-panel">',
+				'<div class="factory-preview-bridge-header">',
+					'<div>',
+						'<span>Read-only evidence</span>',
+						'<h4>Runtime Preview Bridge</h4>',
+						'<p>Read-only runtime evidence. No changes are applied. Bridge status may be error when runtime dependencies are missing.</p>',
+					'</div>',
+					'<button type="button" class="button button-secondary" data-factory-bridge-action="run"' + ( state.bridgePreviewLoading || state.betaAction ? ' disabled' : '' ) + '>',
+						state.bridgePreviewLoading ? 'Checking runtime...' : 'Run read-only runtime preview',
+					'</button>',
+				'</div>',
+				state.bridgePreviewError ? '<div class="factory-wizard-notice factory-wizard-notice-warning">Preview Bridge request failed: ' + escapeHtml( state.bridgePreviewError ) + '</div>' : '',
+				! data && ! state.bridgePreviewLoading && ! state.bridgePreviewError ? '<p class="factory-empty">Runtime Preview Bridge has not been run yet.</p>' : '',
+				state.bridgePreviewLoading ? '<div class="factory-demo-progress" role="status" aria-live="polite"><span class="factory-demo-spinner" aria-hidden="true"></span><div><strong>Checking runtime evidence...</strong><span>No apply, generate, fix, reset, or manifest write is performed.</span></div></div>' : '',
+				data ? [
+					'<div class="factory-preview-bridge-status">',
+						renderMetric( 'Bridge status', data.status || 'unknown' ),
+						renderMetric( 'Applied', bridgeBooleanLabel( data.applied ) ),
+						renderMetric( 'Runtime mutation', bridgeBooleanLabel( data.runtime_mutation ) ),
+						renderMetric( 'Can apply', bridgeBooleanLabel( canApply ) ),
+						renderMetric( 'Apply gate', applyGate.status || 'unknown' ),
+						renderMetric( 'Next step', applyGate.next_required_step || '-' ),
+					'</div>',
+					'<div class="factory-preview-bridge-grid">',
+						'<section>',
+							'<div class="factory-card-heading"><h5>Dry-run summary</h5>' + bridgeStatusBadge( dryRun.status ) + '</div>',
+							bridgeSummaryItems( dryRunSummary, [ 'create', 'update', 'delete', 'skip', 'warning', 'error' ] ),
+						'</section>',
+						'<section>',
+							'<div class="factory-card-heading"><h5>Ownership summary</h5>' + bridgeStatusBadge( ownership.status ) + '</div>',
+							bridgeSummaryItems( ownershipSummary, [ 'checked', 'safe', 'user_modified', 'locked', 'conflict', 'warning', 'error' ] ),
+						'</section>',
+					'</div>',
+					bridgeMessageList( 'Errors', errors, 'error' ),
+					bridgeMessageList( 'Warnings', warnings, 'warning' ),
+					'<details class="factory-preview-bridge-raw"><summary>Raw Preview Bridge response</summary><pre></pre></details>',
+				].join( '' ) : '',
+			'</section>',
+		].join( '' );
+	}
+
 	function renderFrontendLinks() {
 		return [
 			'<div class="factory-human-link-groups">',
@@ -1525,6 +1629,7 @@
 					renderBetaMessage(),
 					renderWizardNotice(),
 					renderHumanPreviewReport(),
+					renderPreviewBridgePanel(),
 				'</section>',
 			].join( '' );
 		}
@@ -1773,6 +1878,12 @@
 			blueprintPre.textContent = JSON.stringify( selected.blueprint, null, 2 );
 		}
 
+		const bridgePre = root.querySelector( '.factory-preview-bridge-raw pre' );
+
+		if ( bridgePre && state.bridgePreviewData ) {
+			bridgePre.textContent = JSON.stringify( state.bridgePreviewData, null, 2 );
+		}
+
 		root.querySelectorAll( '.factory-run-row' ).forEach( function ( row ) {
 			row.addEventListener( 'click', function () {
 				const file = row.getAttribute( 'data-file' );
@@ -1845,6 +1956,16 @@
 
 				if ( action === 'interpret' ) {
 					interpretPrompt();
+				}
+			} );
+		} );
+
+		root.querySelectorAll( '[data-factory-bridge-action]' ).forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				const action = button.getAttribute( 'data-factory-bridge-action' );
+
+				if ( action === 'run' ) {
+					runPreviewBridge();
 				}
 			} );
 		} );
@@ -2026,6 +2147,32 @@
 		updatePreviewFreshness();
 		state.promptInterpretationNotices = [ 'Suggestions applied to dashboard fields. Run Preview before Generate.' ];
 		render();
+	}
+
+	function runPreviewBridge() {
+		state.bridgePreviewLoading = true;
+		state.bridgePreviewError = '';
+		render();
+
+		request(
+			config.endpoints?.previewBridge || '/preview-bridge',
+			{
+				method: 'POST',
+				body: {
+					preset: 'real-estate',
+				},
+			}
+		)
+			.then( function ( data ) {
+				state.bridgePreviewData = data || null;
+			} )
+			.catch( function ( error ) {
+				state.bridgePreviewError = error.message;
+			} )
+			.finally( function () {
+				state.bridgePreviewLoading = false;
+				render();
+			} );
 	}
 
 	function previewRealEstatePlan() {

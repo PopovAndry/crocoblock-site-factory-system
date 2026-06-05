@@ -55,6 +55,7 @@ function factory_enqueue_admin_dashboard_assets( string $hook ): void {
 				'latest'          => esc_url_raw( rest_url( 'factory/v1/run/latest' ) ),
 				'run'             => esc_url_raw( rest_url( 'factory/v1/run/{file}' ) ),
 				'adapters'        => esc_url_raw( rest_url( 'factory/v1/adapters' ) ),
+				'previewBridge'   => esc_url_raw( rest_url( 'factory/v1/preview-bridge' ) ),
 				'realEstatePlan'    => esc_url_raw( rest_url( 'factory/v1/beta/real-estate/plan' ) ),
 				'realEstateApply'   => esc_url_raw( rest_url( 'factory/v1/beta/real-estate/apply' ) ),
 				'aiInterpretPrompt' => esc_url_raw( rest_url( 'factory/v1/ai/interpret-prompt' ) ),
