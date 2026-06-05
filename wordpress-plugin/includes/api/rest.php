@@ -50,6 +50,10 @@ function factory_register_rest_routes(): void {
 			'methods'  => 'GET',
 			'callback' => 'factory_rest_capabilities',
 		],
+		'/preview-bridge' => [
+			'methods'  => 'POST',
+			'callback' => 'factory_rest_preview_bridge',
+		],
 		'/beta/real-estate/plan' => [
 			'methods'  => [ 'GET', 'POST' ],
 			'callback' => 'factory_rest_beta_real_estate_plan',
@@ -194,6 +198,103 @@ function factory_register_rest_routes(): void {
 
         return true;
     }
+
+	function factory_rest_preview_bridge( WP_REST_Request $request ) {
+		$blueprint_result = factory_rest_get_preview_bridge_blueprint( $request );
+
+		if ( is_wp_error( $blueprint_result ) ) {
+			return $blueprint_result;
+		}
+
+		if ( ! function_exists( 'factory_build_plugin_preview_bridge_response' ) ) {
+			return new WP_Error(
+				'factory_preview_bridge_unavailable',
+				'Plugin preview bridge service is unavailable.',
+				[ 'status' => 500 ]
+			);
+		}
+
+		$core_preview = $request->get_param( 'core_preview' );
+
+		if ( ! is_array( $core_preview ) ) {
+			$core_preview = [];
+		}
+
+		$ownership_targets = $request->get_param( 'ownership_targets' );
+
+		if ( ! is_array( $ownership_targets ) ) {
+			$ownership_targets = [];
+		}
+
+		try {
+			return new WP_REST_Response(
+				factory_build_plugin_preview_bridge_response(
+					$blueprint_result,
+					$core_preview,
+					$ownership_targets
+				)
+			);
+		} catch ( Throwable $e ) {
+			return new WP_Error(
+				'factory_preview_bridge_failed',
+				$e->getMessage(),
+				[ 'status' => 500 ]
+			);
+		}
+	}
+
+	function factory_rest_get_preview_bridge_blueprint( WP_REST_Request $request ) {
+		$blueprint = $request->get_param( 'blueprint' );
+
+		if ( null !== $blueprint ) {
+			if ( ! is_array( $blueprint ) ) {
+				return new WP_Error(
+					'factory_preview_bridge_invalid_blueprint',
+					'Preview bridge blueprint must be an object.',
+					[ 'status' => 400 ]
+				);
+			}
+
+			return $blueprint;
+		}
+
+		$preset = $request->get_param( 'preset' );
+		$preset = is_string( $preset ) || is_numeric( $preset )
+			? sanitize_key( (string) $preset )
+			: 'real-estate';
+
+		if ( '' === $preset ) {
+			$preset = 'real-estate';
+		}
+
+		if ( 'real-estate' !== $preset ) {
+			return new WP_Error(
+				'factory_preview_bridge_invalid_preset',
+				'Preview bridge supports the bundled real-estate preset only.',
+				[ 'status' => 400 ]
+			);
+		}
+
+		try {
+			$blueprint = factory_rest_load_real_estate_blueprint();
+		} catch ( Throwable $e ) {
+			return new WP_Error(
+				'factory_preview_bridge_preset_unavailable',
+				$e->getMessage(),
+				[ 'status' => 500 ]
+			);
+		}
+
+		if ( empty( $blueprint ) ) {
+			return new WP_Error(
+				'factory_preview_bridge_empty_blueprint',
+				'Preview bridge blueprint is empty.',
+				[ 'status' => 400 ]
+			);
+		}
+
+		return $blueprint;
+	}
 
     function factory_rest_beta_real_estate_plan( WP_REST_Request $request ): WP_REST_Response {
         try {
