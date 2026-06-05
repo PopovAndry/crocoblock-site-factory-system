@@ -28,6 +28,7 @@ require_once __DIR__ . '/blueprint/blueprint-validator.php';
 require_once __DIR__ . '/blueprint/blueprint-preset-manager.php';
 require_once __DIR__ . '/bridge/plugin-dry-run-evidence-collector.php';
 require_once __DIR__ . '/bridge/ownership-evidence-collector.php';
+require_once __DIR__ . '/bridge/plugin-preview-bridge-service.php';
 require_once __DIR__ . '/ai/settings.php';
 require_once __DIR__ . '/ai/prompt-interpreter.php';
 require_once __DIR__ . '/ai/blueprint-generator.php';
