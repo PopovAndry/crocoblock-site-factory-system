@@ -37,6 +37,50 @@
 		[ 'green', 'Green' ],
 		[ 'beige', 'Beige' ],
 	];
+	const verticals = [
+		{
+			id: 'real-estate',
+			label: 'Real Estate',
+			status: 'available',
+			description: 'Property catalog, listings, filters, single property pages, contact/request viewing flow.',
+		},
+		{
+			id: 'travel-agency',
+			label: 'Travel Agency',
+			status: 'coming-soon',
+			description: 'Tours, destinations, trip packages, and inquiry flows.',
+		},
+		{
+			id: 'online-store',
+			label: 'Online Store',
+			status: 'coming-soon',
+			description: 'Product catalog, commerce pages, and checkout-oriented structure.',
+		},
+		{
+			id: 'medical-clinic',
+			label: 'Medical Clinic',
+			status: 'coming-soon',
+			description: 'Services, doctors, appointment requests, and clinic contact pages.',
+		},
+		{
+			id: 'barbershop',
+			label: 'Barbershop',
+			status: 'coming-soon',
+			description: 'Services, staff, booking prompts, and local business pages.',
+		},
+		{
+			id: 'restaurant-pizzeria',
+			label: 'Restaurant / Pizzeria',
+			status: 'coming-soon',
+			description: 'Menu sections, location, reservations, and food-focused presentation.',
+		},
+		{
+			id: 'job-board-directory',
+			label: 'Job Board / Directory',
+			status: 'coming-soon',
+			description: 'Listings, categories, detail pages, and submission-oriented flows.',
+		},
+	];
 	const colorPresetTokens = {
 		turquoise: {
 			primary: '#0f766e',
@@ -101,6 +145,7 @@
 		},
 	};
 	const wizardSteps = [
+		{ title: 'Choose Site Type', subtitle: 'Vertical' },
 		{ title: 'Requirements', subtitle: 'Theme and plugins' },
 		{ title: 'Describe Business', subtitle: 'Preset and prompt' },
 		{ title: 'Business Info', subtitle: 'Safe copy fields' },
@@ -143,6 +188,8 @@
 		presetVariables: Object.assign( {}, defaultPresetVariables ),
 		styleContext: Object.assign( {}, defaultStyleContext ),
 		imageContext: Object.assign( {}, defaultImageContext ),
+		selectedVertical: 'real-estate',
+		verticalNotice: '',
 		wizardStep: 0,
 		maxWizardStep: 0,
 		previewPayloadKey: '',
@@ -398,7 +445,7 @@
 	}
 
 	function canVisitWizardStep( step, allowNext ) {
-		if ( step >= 6 && ! isPreviewCurrent() ) {
+		if ( step >= 7 && ! isPreviewCurrent() ) {
 			return false;
 		}
 
@@ -1306,7 +1353,7 @@
 				renderSafetyNotice( true ),
 				'<div class="factory-human-secondary-actions">',
 					'<button type="button" class="button" data-factory-beta-action="refresh"' + ( isBusy ? ' disabled' : '' ) + '>Refresh validation proof</button>',
-					'<button type="button" class="button" data-factory-wizard-step="2"' + ( isBusy ? ' disabled' : '' ) + '>Back to edit setup</button>',
+					'<button type="button" class="button" data-factory-wizard-step="3"' + ( isBusy ? ' disabled' : '' ) + '>Back to edit setup</button>',
 					'<button type="button" class="button" data-factory-toggle-advanced' + ( isBusy ? ' disabled' : '' ) + '>Show developer proof</button>',
 				'</div>',
 			'</div>',
@@ -1575,7 +1622,7 @@
 
 					return [
 						'<button type="button" class="' + escapeHtml( classes ) + '" data-factory-wizard-step="' + escapeHtml( index ) + '"' + ( isNextAvailable ? ' data-factory-wizard-next-available="true"' : '' ) + ' aria-label="' + escapeHtml( label ) + '" title="' + escapeHtml( label ) + '"' + ( isLocked || state.betaAction ? ' disabled' : '' ) + '>',
-							'<span>' + escapeHtml( index ) + '</span>',
+							'<span>' + escapeHtml( index + 1 ) + '</span>',
 							'<strong>' + escapeHtml( step.title ) + '</strong>',
 							'<small>' + escapeHtml( step.subtitle ) + '</small>',
 							isNextAvailable ? '<em>Next step</em>' : '',
@@ -1641,6 +1688,33 @@
 		].join( '' );
 	}
 
+	function renderVerticalSelector() {
+		return [
+			'<div class="factory-vertical-selector">',
+				verticals.map( function ( vertical ) {
+					const isAvailable = vertical.status === 'available';
+					const isSelected = state.selectedVertical === vertical.id;
+					const classes = [
+						'factory-vertical-card',
+						isAvailable ? 'factory-vertical-card-available' : 'factory-vertical-card-disabled',
+						isSelected ? 'factory-vertical-card-selected' : '',
+					].filter( Boolean ).join( ' ' );
+					const statusLabel = isAvailable ? 'Available' : 'Coming soon';
+					const ariaLabel = isAvailable ? 'Select ' + vertical.label : vertical.label + ' coming soon';
+
+					return [
+						'<button type="button" class="' + escapeHtml( classes ) + '" data-factory-vertical="' + escapeHtml( vertical.id ) + '" aria-pressed="' + ( isSelected ? 'true' : 'false' ) + '" aria-label="' + escapeHtml( ariaLabel ) + '">',
+							'<span class="factory-vertical-badge factory-vertical-badge-' + escapeHtml( isAvailable ? 'available' : 'soon' ) + '">' + escapeHtml( statusLabel ) + '</span>',
+							'<strong>' + escapeHtml( vertical.label ) + '</strong>',
+							'<p>' + escapeHtml( vertical.description ) + '</p>',
+						'</button>',
+					].join( '' );
+				} ).join( '' ),
+			'</div>',
+			state.verticalNotice ? '<div class="factory-wizard-notice">' + escapeHtml( state.verticalNotice ) + '</div>' : '',
+		].join( '' );
+	}
+
 	function renderWizardStepContent() {
 		const step = state.wizardStep;
 		const run = runFromLatest();
@@ -1652,13 +1726,23 @@
 		const isBusy = Boolean( state.betaAction );
 
 		if ( step === 0 ) {
+			return [
+				'<section class="factory-wizard-step-panel">',
+					'<h3>Choose website type</h3>',
+					'<p>Select the kind of site Site Factory should generate. Real Estate is available now; other verticals are shown for product direction only.</p>',
+					renderVerticalSelector(),
+				'</section>',
+			].join( '' );
+		}
+
+		if ( step === 1 ) {
 			const summary = state.requirements
 				? state.requirements.summary || 'Requirements checked.'
 				: ( state.requirementsError ? 'Unable to verify requirements.' : 'Checking requirements...' );
 
 			return [
 				'<section class="factory-wizard-step-panel">',
-					'<h3>Requirements</h3>',
+					'<h3>Required setup for Real Estate</h3>',
 					'<p>Kava and JetEngine are required for this beta. JetSmartFilters and JetFormBuilder are optional; the generated site keeps working through safe fallbacks.</p>',
 					'<div class="factory-requirements-summary ' + ( isRequirementsReady() ? 'factory-requirements-summary-ready' : 'factory-requirements-summary-attention' ) + '">',
 						escapeHtml( summary ),
@@ -1671,17 +1755,17 @@
 			].join( '' );
 		}
 
-		if ( step === 1 ) {
+		if ( step === 2 ) {
 			return [
 				'<section class="factory-wizard-step-panel">',
 					'<h3>Describe business</h3>',
-					'<div class="factory-wizard-fixed-choice"><span>Website type</span><strong>Real Estate</strong><small>More verticals will come later.</small></div>',
+					'<div class="factory-wizard-fixed-choice"><span>Selected website type</span><strong>Real Estate</strong><small>Deterministic Real Estate preset is used for this beta.</small></div>',
 					renderPromptPreview(),
 				'</section>',
 			].join( '' );
 		}
 
-		if ( step === 2 ) {
+		if ( step === 3 ) {
 			return [
 				'<section class="factory-wizard-step-panel">',
 					'<h3>Business info</h3>',
@@ -1691,7 +1775,7 @@
 			].join( '' );
 		}
 
-		if ( step === 3 ) {
+		if ( step === 4 ) {
 			return [
 				'<section class="factory-wizard-step-panel">',
 					renderStyleContext(),
@@ -1699,7 +1783,7 @@
 			].join( '' );
 		}
 
-		if ( step === 4 ) {
+		if ( step === 5 ) {
 			return [
 				'<section class="factory-wizard-step-panel">',
 					renderImageContext(),
@@ -1707,7 +1791,7 @@
 			].join( '' );
 		}
 
-		if ( step === 5 ) {
+		if ( step === 6 ) {
 			return [
 				'<section class="factory-wizard-step-panel">',
 					'<div class="factory-wizard-step-heading">',
@@ -1988,6 +2072,25 @@
 		root.querySelectorAll( '[data-factory-toggle-advanced]' ).forEach( function ( button ) {
 			button.addEventListener( 'click', function () {
 				state.advancedOpen = ! state.advancedOpen;
+				render();
+			} );
+		} );
+
+		root.querySelectorAll( '[data-factory-vertical]' ).forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				const verticalId = button.getAttribute( 'data-factory-vertical' );
+				const vertical = verticals.find( function ( item ) {
+					return item.id === verticalId;
+				} );
+
+				if ( ! vertical || vertical.status !== 'available' ) {
+					state.verticalNotice = vertical ? vertical.label + ' is coming soon. Real Estate is the available beta vertical.' : 'This vertical is coming soon.';
+					render();
+					return;
+				}
+
+				state.selectedVertical = vertical.id;
+				state.verticalNotice = '';
 				render();
 			} );
 		} );
@@ -2293,7 +2396,7 @@
 				state.betaProductPlan = data.product_plan || null;
 				state.previewPayloadKey = payloadKey;
 				state.previewStale = false;
-				markWizardProgress( 6 );
+				markWizardProgress( 7 );
 				markLastAction();
 				setBetaMessage( 'ok', 'Preview plan generated.' );
 			} )
@@ -2359,8 +2462,8 @@
 				} else {
 					setBetaMessage( 'ok', 'Real Estate demo generated successfully.' );
 				}
-				state.wizardStep = 6;
-				markWizardProgress( 6 );
+				state.wizardStep = 7;
+				markWizardProgress( 7 );
 				return refreshDashboardData();
 			} )
 			.catch( function ( error ) {
