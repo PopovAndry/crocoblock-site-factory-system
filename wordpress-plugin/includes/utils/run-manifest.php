@@ -23,6 +23,10 @@ function factory_save_run_manifest(
 		wp_mkdir_p( $dir );
 	}
 
+	if ( ! is_dir( $dir ) || ! is_writable( $dir ) ) {
+		throw new RuntimeException( "Factory run directory is not writable: {$dir}" );
+	}
+
 	$timestamp = current_time( 'Ymd-His' );
 
 	$path = trailingslashit( $dir ) .
@@ -45,7 +49,7 @@ function factory_save_run_manifest(
 		$data = array_merge( $data, $context );
 	}
 
-	file_put_contents(
+	$written = file_put_contents(
 		$path,
 		wp_json_encode(
 			$data,
@@ -53,6 +57,10 @@ function factory_save_run_manifest(
 			JSON_UNESCAPED_UNICODE
 		)
 	);
+
+	if ( false === $written ) {
+		throw new RuntimeException( "Factory run manifest could not be written: {$path}" );
+	}
 
 	$manifest = $data;
 	$manifest['file'] = $path;

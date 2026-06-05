@@ -11,6 +11,10 @@ function factory_update_run_registry( array $manifest ): void {
 		wp_mkdir_p( $dir );
 	}
 
+	if ( ! is_dir( $dir ) || ! is_writable( $dir ) ) {
+		throw new RuntimeException( "Factory run registry directory is not writable: {$dir}" );
+	}
+
 	$registry_path = $dir . '/registry.json';
 
 	$registry = [
@@ -77,11 +81,15 @@ function factory_update_run_registry( array $manifest ): void {
 
 	$registry['runs'] = array_slice( $registry['runs'], 0, 50 );
 
-	file_put_contents(
+	$written = file_put_contents(
 		$registry_path,
 		wp_json_encode(
 			$registry,
 			JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
 		)
 	);
+
+	if ( false === $written ) {
+		throw new RuntimeException( "Factory run registry could not be written: {$registry_path}" );
+	}
 }

@@ -186,6 +186,19 @@ public function plan( array $blueprint ): array {
 							: "Terms mismatch: {$title}.{$taxonomy}. Expected " . implode( ', ', $expected_terms ) . ', got ' . implode( ', ', $actual_terms ),
 					];
 				}
+
+				$current_image = $current_state['image'] ?? [];
+				$target_image  = $target_state['image'] ?? [];
+
+				if ( ! empty( $target_image ) ) {
+					$image_matches = $current_image === $target_image;
+					$results[]     = [
+						'status'  => $image_matches ? 'ok' : 'warning',
+						'message' => $image_matches
+							? "Featured image ok: {$title}"
+							: "Featured image missing or out of sync: {$title}",
+					];
+				}
 			}
 		}
 
@@ -200,8 +213,6 @@ public function plan( array $blueprint ): array {
 		$title = $item['title'];
 		$post = $this->find_post( $post_type, $item );
 
-		$target_state = $this->get_target_post_state( $post_type, $item, $blueprint );
-
 		if ( ! $post ) {
 			$post_id = $this->create_post( $post_type, $item );
 
@@ -209,7 +220,7 @@ public function plan( array $blueprint ): array {
 				$this->sync_post_meta( $post_id, $item );
 				$this->sync_post_terms( $post_id, $item );
 				$this->sync_featured_image( $post_id, $post_type, $item, $blueprint );
-				$this->mark_post_factory_managed( $post_id, $post_type, $item, $target_state );
+				$this->mark_post_factory_managed_from_current_state( $post_id, $post_type, $item );
 				$this->log_success( "Created: {$item['title']}" );
 
 				return $this->execution_item(
@@ -230,6 +241,7 @@ public function plan( array $blueprint ): array {
 			);
 		}
 
+		$target_state = $this->get_target_post_state( $post_type, $item, $blueprint );
 		$current_state = $this->get_current_post_state( $post, $item );
 
 		if ( factory_is_post_user_modified( $post->ID, $current_state, $target_state ) ) {
@@ -249,7 +261,7 @@ public function plan( array $blueprint ): array {
 
 		if ( empty( $diff ) ) {
 			$this->sync_featured_image( $post->ID, $post_type, $item, $blueprint );
-			$this->mark_post_factory_managed( $post->ID, $post_type, $item, $target_state );
+			$this->mark_post_factory_managed_from_current_state( $post->ID, $post_type, $item );
 			$this->log( "Post up-to-date: {$item['title']}" );
 
 			return $this->execution_item(
@@ -265,7 +277,7 @@ public function plan( array $blueprint ): array {
 		$this->sync_post_meta( $post->ID, $item );
 		$this->sync_post_terms( $post->ID, $item );
 		$this->sync_featured_image( $post->ID, $post_type, $item, $blueprint );
-		$this->mark_post_factory_managed( $post->ID, $post_type, $item, $target_state );
+		$this->mark_post_factory_managed_from_current_state( $post->ID, $post_type, $item );
 
 		$this->log_success( "Updated: {$item['title']}" );
 
@@ -760,14 +772,22 @@ public function plan( array $blueprint ): array {
 		];
 	}
 
-	private function mark_post_factory_managed( int $post_id, string $post_type, array $item, array $target_state ): void {
+	private function mark_post_factory_managed_from_current_state( int $post_id, string $post_type, array $item ): void {
+		$post = get_post( $post_id );
+
+		if ( ! $post instanceof WP_Post ) {
+			return;
+		}
+
+		$current_state = $this->get_current_post_state( $post, $item );
+
 		factory_mark_post_managed(
 			$post_id,
 			[
 				'source'      => 'real-estate',
 				'entity_type' => 'content',
 				'source_key'  => $this->get_source_key( $post_type, $item ),
-				'hash'        => factory_ownership_hash_state( $target_state ),
+				'hash'        => factory_ownership_hash_state( $current_state ),
 			]
 		);
 	}
