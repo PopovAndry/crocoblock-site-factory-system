@@ -586,6 +586,8 @@
 					'<span>Interpretation only. No changes are applied automatically.</span>',
 				'</div>',
 				renderPromptEstimate(),
+				renderAIModeNotice(),
+				renderLiveAIConfirmation(),
 			'</div>',
 			renderPromptInterpretation(),
 		].join( '' );
@@ -653,6 +655,49 @@
 		if ( panel ) {
 			panel.outerHTML = renderPromptEstimate();
 		}
+	}
+
+	function liveAIReadyMessage() {
+		const settings = state.aiSettings || {};
+
+		if ( ! settings.has_key ) {
+			return 'Live AI suggestions require an API key. Local suggestions are available.';
+		}
+
+		return 'Live AI is prepared for a future step. Current suggestions use local safe mode.';
+	}
+
+	function renderAIModeNotice() {
+		return [
+			'<div class="factory-ai-mode-note">',
+				'<strong>Current AI mode: Local safe suggestions</strong>',
+				'<p>' + escapeHtml( liveAIReadyMessage() ) + '</p>',
+			'</div>',
+		].join( '' );
+	}
+
+	function renderLiveAIConfirmation() {
+		const estimate = state.aiEstimate ? estimateContract( state.aiEstimate ) : null;
+		const totalTokens = estimate ? estimate.totalTokens : 0;
+		const usageText = totalTokens > 0 ? '~' + formatTokenCount( totalTokens ) + ' tokens' : 'Estimate unavailable';
+
+		return [
+			'<details class="factory-ai-live-confirmation">',
+				'<summary>Future live AI confirmation</summary>',
+				'<div>',
+					'<strong>This will call OpenAI and may use tokens.</strong>',
+					'<p>Estimated usage: ' + escapeHtml( usageText ) + '.</p>',
+					'<p>Cost estimate unavailable until pricing is configured.</p>',
+					'<p>No site changes will be applied automatically.</p>',
+					'<p>AI suggestions must be reviewed before applying.</p>',
+					'<div class="factory-ai-live-actions">',
+						'<button type="button" class="button" data-factory-ai-live-cancel>Cancel</button>',
+						'<button type="button" class="button button-primary" disabled>Generate AI suggestions</button>',
+						'<span>Live provider not implemented yet.</span>',
+					'</div>',
+				'</div>',
+			'</details>',
+		].join( '' );
 	}
 
 	function confidencePercent( value ) {
@@ -2270,6 +2315,16 @@
 
 				if ( action === 'interpret' ) {
 					interpretPrompt();
+				}
+			} );
+		} );
+
+		root.querySelectorAll( '[data-factory-ai-live-cancel]' ).forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				const details = button.closest( 'details' );
+
+				if ( details ) {
+					details.open = false;
 				}
 			} );
 		} );

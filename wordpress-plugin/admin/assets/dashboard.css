@@ -873,6 +873,78 @@
 	margin: 0;
 }
 
+.factory-ai-mode-note {
+	background: #ffffff;
+	border: 1px solid #d7eee9;
+	border-radius: 8px;
+	margin-top: 10px;
+	padding: 10px 12px;
+}
+
+.factory-ai-mode-note strong {
+	color: #10201d;
+	display: block;
+	font-size: 13px;
+	margin-bottom: 3px;
+}
+
+.factory-ai-mode-note p {
+	color: #52635f;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1.4;
+	margin: 0;
+}
+
+.factory-ai-live-confirmation {
+	background: #fffdf5;
+	border: 1px solid #efd891;
+	border-radius: 8px;
+	margin-top: 10px;
+	padding: 10px 12px;
+}
+
+.factory-ai-live-confirmation summary {
+	color: #7a5900;
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.factory-ai-live-confirmation > div {
+	display: grid;
+	gap: 6px;
+	margin-top: 10px;
+}
+
+.factory-ai-live-confirmation strong {
+	color: #10201d;
+	font-size: 13px;
+}
+
+.factory-ai-live-confirmation p {
+	color: #52635f;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1.4;
+	margin: 0;
+}
+
+.factory-ai-live-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.factory-ai-live-actions span {
+	color: #7a5900;
+	font-size: 12px;
+	font-weight: 800;
+}
+
 .factory-prompt-intelligence {
 	background: #ffffff;
 	border: 1px solid #d7eee9;
