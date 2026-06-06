@@ -50,6 +50,7 @@ require_once __DIR__ . '/commands/adapters.php';
 require_once __DIR__ . '/api/rest.php';
 require_once __DIR__ . '/api/ai-settings-rest.php';
 require_once __DIR__ . '/api/ai-interpret-rest.php';
+require_once __DIR__ . '/api/ai-live-rest.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/dashboard.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/ai-settings.php';
 
