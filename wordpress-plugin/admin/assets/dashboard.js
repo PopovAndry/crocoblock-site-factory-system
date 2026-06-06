@@ -187,6 +187,10 @@
 		promptInterpretationNotices: [],
 		promptInterpretationError: '',
 		promptAnalyzing: false,
+		aiEstimate: null,
+		aiEstimateError: '',
+		aiEstimateLoading: false,
+		aiEstimatePrompt: '',
 		prompt: realEstatePrompt,
 		presetVariables: Object.assign( {}, defaultPresetVariables ),
 		styleContext: Object.assign( {}, defaultStyleContext ),
@@ -201,6 +205,8 @@
 		advancedOpen: false,
 		noRunsYet: false,
 	};
+	let aiEstimateTimer = null;
+	let aiEstimateRequestId = 0;
 
 	function endpoint( path ) {
 		if ( /^https?:\/\//i.test( path ) ) {
@@ -579,9 +585,74 @@
 					'</button>',
 					'<span>Interpretation only. No changes are applied automatically.</span>',
 				'</div>',
+				renderPromptEstimate(),
 			'</div>',
 			renderPromptInterpretation(),
 		].join( '' );
+	}
+
+	function estimateContract( estimate ) {
+		const nested = estimate && typeof estimate.estimate === 'object' && estimate.estimate ? estimate.estimate : {};
+
+		return {
+			inputTokens: Number( nested.input_tokens ?? estimate?.estimated_prompt_tokens ?? 0 ),
+			outputTokens: Number( nested.output_tokens ?? estimate?.estimated_output_tokens ?? 0 ),
+			totalTokens: Number( nested.total_tokens ?? estimate?.estimated_total_tokens ?? 0 ),
+			costMin: nested.cost_min ?? null,
+			costMax: nested.cost_max ?? null,
+			isRough: Boolean( nested.is_rough ?? estimate?.approximate ),
+			method: nested.method || estimate?.method || 'character_count_divided_by_4',
+			warnings: Array.isArray( estimate?.warnings ) ? estimate.warnings : [],
+		};
+	}
+
+	function formatTokenCount( value ) {
+		value = Number( value || 0 );
+
+		return value.toLocaleString ? value.toLocaleString() : String( value );
+	}
+
+	function renderPromptEstimate() {
+		const prompt = String( state.prompt || '' ).trim();
+		let body = '';
+
+		if ( ! prompt ) {
+			body = '<p>Enter a prompt to see a local token estimate before future AI usage.</p>';
+		} else if ( state.aiEstimateLoading ) {
+			body = '<p>Estimating AI usage locally...</p>';
+		} else if ( state.aiEstimateError ) {
+			body = '<p>Estimate unavailable. Prompt interpretation and generation still work.</p>';
+		} else if ( state.aiEstimate ) {
+			const estimate = estimateContract( state.aiEstimate );
+			const costMessage = estimate.costMin === null || estimate.costMax === null
+				? 'Cost estimate unavailable until model pricing is configured.'
+				: 'Estimated cost: ' + escapeHtml( estimate.costMin ) + '-' + escapeHtml( estimate.costMax );
+			const warning = estimate.warnings[0] || 'Local estimate only. No provider call was made.';
+			const localMessage = warning.replace( 'No provider call was made.', 'No provider call. No token spend.' );
+
+			body = [
+				'<strong>~' + escapeHtml( formatTokenCount( estimate.inputTokens ) ) + ' input tokens / ' + escapeHtml( formatTokenCount( estimate.outputTokens ) ) + ' output allowance</strong>',
+				'<p>' + escapeHtml( localMessage ) + '</p>',
+				'<p>' + escapeHtml( costMessage ) + '</p>',
+			].join( '' );
+		} else {
+			body = '<p>Local estimate only. No provider call. No token spend.</p>';
+		}
+
+		return [
+			'<div class="factory-ai-estimate-compact" data-factory-ai-estimate-panel>',
+				'<span>Estimated AI usage</span>',
+				body,
+			'</div>',
+		].join( '' );
+	}
+
+	function updatePromptEstimatePanel() {
+		const panel = root.querySelector( '[data-factory-ai-estimate-panel]' );
+
+		if ( panel ) {
+			panel.outerHTML = renderPromptEstimate();
+		}
 	}
 
 	function confidencePercent( value ) {
@@ -2166,6 +2237,7 @@
 			textarea.addEventListener( 'input', function () {
 				state.prompt = textarea.value;
 				updatePreviewFreshness();
+				schedulePromptEstimate();
 			} );
 		} );
 
@@ -2273,6 +2345,71 @@
 		return state.prompt;
 	}
 
+	function selectedAIModelProfile() {
+		return state.aiSettings && state.aiSettings.selected_model ? state.aiSettings.selected_model : 'balanced';
+	}
+
+	function schedulePromptEstimate() {
+		const prompt = String( state.prompt || '' ).trim();
+
+		if ( aiEstimateTimer ) {
+			window.clearTimeout( aiEstimateTimer );
+		}
+
+		if ( ! prompt ) {
+			state.aiEstimate = null;
+			state.aiEstimateError = '';
+			state.aiEstimateLoading = false;
+			state.aiEstimatePrompt = '';
+			updatePromptEstimatePanel();
+			return;
+		}
+
+		state.aiEstimateLoading = true;
+		state.aiEstimateError = '';
+		updatePromptEstimatePanel();
+
+		aiEstimateTimer = window.setTimeout( function () {
+			runPromptEstimate( prompt );
+		}, 500 );
+	}
+
+	function runPromptEstimate( prompt ) {
+		const requestId = ++aiEstimateRequestId;
+
+		return request(
+			config.endpoints?.aiEstimate || '/ai/estimate',
+			{
+				method: 'POST',
+				body: {
+					text: prompt,
+					selected_model: selectedAIModelProfile(),
+				},
+			}
+		).then( function ( data ) {
+			if ( requestId !== aiEstimateRequestId ) {
+				return;
+			}
+
+			state.aiEstimate = data;
+			state.aiEstimatePrompt = prompt;
+			state.aiEstimateError = '';
+		} ).catch( function ( error ) {
+			if ( requestId !== aiEstimateRequestId ) {
+				return;
+			}
+
+			state.aiEstimateError = error.message || 'Estimate unavailable.';
+		} ).finally( function () {
+			if ( requestId !== aiEstimateRequestId ) {
+				return;
+			}
+
+			state.aiEstimateLoading = false;
+			updatePromptEstimatePanel();
+		} );
+	}
+
 	function currentPresetVariables() {
 		const variables = Object.assign( {}, state.presetVariables );
 
@@ -2316,6 +2453,10 @@
 		const presetVariables = currentPresetVariables();
 		const styleContext = currentStyleContext();
 		const imageContext = currentImageContext();
+
+		if ( String( prompt || '' ).trim() ) {
+			runPromptEstimate( prompt );
+		}
 
 		state.promptAnalyzing = true;
 		state.promptInterpretationError = '';

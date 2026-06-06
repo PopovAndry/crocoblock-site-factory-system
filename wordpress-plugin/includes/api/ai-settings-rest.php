@@ -87,18 +87,12 @@ function factory_rest_ai_save_settings( WP_REST_Request $request ): WP_REST_Resp
 function factory_rest_ai_estimate( WP_REST_Request $request ): WP_REST_Response {
 	$text = $request->get_param( 'text' );
 	$model = factory_ai_sanitize_model_key( (string) $request->get_param( 'selected_model' ) );
-	$output_by_model = [
-		'fast'      => 600,
-		'balanced'  => 1200,
-		'reasoning' => 2000,
-	];
 
-	$estimate = factory_ai_estimate_tokens(
-		is_string( $text ) ? sanitize_textarea_field( wp_unslash( $text ) ) : '',
-		$output_by_model[ $model ] ?? $output_by_model['balanced']
+	return new WP_REST_Response(
+		factory_ai_estimate_tokens(
+			is_string( $text ) ? sanitize_textarea_field( wp_unslash( $text ) ) : '',
+			factory_ai_model_output_allowance( $model ),
+			$model
+		)
 	);
-
-	$estimate['selected_model'] = $model;
-
-	return new WP_REST_Response( $estimate );
 }

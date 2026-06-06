@@ -842,6 +842,37 @@
 	font-weight: 800;
 }
 
+.factory-ai-estimate-compact {
+	background: #f7fffd;
+	border: 1px solid #cde9e5;
+	border-radius: 8px;
+	display: grid;
+	gap: 5px;
+	margin-top: 12px;
+	padding: 10px 12px;
+}
+
+.factory-ai-estimate-compact span {
+	color: #0f766e;
+	font-size: 11px;
+	font-weight: 900;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.factory-ai-estimate-compact strong {
+	color: #10201d;
+	font-size: 13px;
+}
+
+.factory-ai-estimate-compact p {
+	color: #52635f;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1.4;
+	margin: 0;
+}
+
 .factory-prompt-intelligence {
 	background: #ffffff;
 	border: 1px solid #d7eee9;

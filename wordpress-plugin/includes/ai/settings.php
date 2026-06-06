@@ -74,6 +74,17 @@ function factory_ai_sanitize_model_key( string $model ): string {
 	return in_array( $model, $allowed, true ) ? $model : factory_ai_model_config()['default'];
 }
 
+function factory_ai_model_output_allowance( string $model ): int {
+	$model = factory_ai_sanitize_model_key( $model );
+	$output_by_model = [
+		'fast'      => 600,
+		'balanced'  => 1200,
+		'reasoning' => 2000,
+	];
+
+	return $output_by_model[ $model ] ?? $output_by_model['balanced'];
+}
+
 function factory_ai_storage_available(): bool {
 	return function_exists( 'sodium_crypto_secretbox' )
 		&& function_exists( 'sodium_crypto_secretbox_open' )
@@ -183,16 +194,42 @@ function factory_ai_redact_string( string $value ): string {
 	return str_replace( $key, factory_ai_mask_secret( $key ), $value );
 }
 
-function factory_ai_estimate_tokens( string $text, int $estimated_output_tokens = 1200 ): array {
+function factory_ai_estimate_tokens( string $text, int $estimated_output_tokens = 1200, string $model_profile = 'balanced' ): array {
+	$model_profile = factory_ai_sanitize_model_key( $model_profile );
 	$prompt_tokens = (int) ceil( strlen( $text ) / 4 );
 	$output_tokens = max( 0, $estimated_output_tokens );
+	$total_tokens = $prompt_tokens + $output_tokens;
+	$warnings = [
+		'Local estimate only. No provider call was made.',
+		'Cost estimate unavailable until model pricing is configured.',
+	];
 
 	return [
+		'status'                  => 'ok',
+		'provider'                => 'openai',
+		'model_profile'           => $model_profile,
+		'model'                   => null,
+		'currency'                => 'USD',
+		'estimate'                => [
+			'input_tokens'  => $prompt_tokens,
+			'output_tokens' => $output_tokens,
+			'total_tokens'  => $total_tokens,
+			'cost_min'      => null,
+			'cost_max'      => null,
+			'is_rough'      => true,
+			'method'        => 'character_count_divided_by_4',
+		],
+		'budget'                  => [
+			'limit'      => null,
+			'over_limit' => false,
+		],
+		'warnings'                => $warnings,
 		'estimated_prompt_tokens' => $prompt_tokens,
 		'estimated_output_tokens' => $output_tokens,
-		'estimated_total_tokens'  => $prompt_tokens + $output_tokens,
+		'estimated_total_tokens'  => $total_tokens,
 		'approximate'             => true,
 		'method'                  => 'character_count_divided_by_4',
+		'selected_model'          => $model_profile,
 	];
 }
 
