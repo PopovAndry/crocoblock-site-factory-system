@@ -10,11 +10,11 @@ function factory_ai_interpret_prompt_local( string $prompt, array $current_conte
 
 	$city     = factory_ai_interpreter_detect_city( $prompt );
 	$business = factory_ai_interpreter_detect_business_name( $prompt, $city );
-	$tone     = factory_ai_interpreter_detect_enum( $lower, [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ], 'premium' );
-	$color    = factory_ai_interpreter_detect_enum( $lower, [ 'turquoise', 'blue', 'green', 'beige' ], 'turquoise' );
 	$vertical = factory_ai_interpreter_detect_vertical( $lower );
 	$features = factory_ai_interpreter_requested_features( $lower );
 	$unsupported = factory_ai_interpreter_unsupported_requests( $lower );
+	$phone = factory_ai_interpreter_detect_phone( $prompt );
+	$email = factory_ai_interpreter_detect_email( $prompt );
 	$missing = [];
 
 	if ( '' === $business ) {
@@ -28,68 +28,47 @@ function factory_ai_interpret_prompt_local( string $prompt, array $current_conte
 	}
 
 	$hero_subtitle = sprintf( 'Find apartments, houses, and commercial spaces in %s', $city );
+	$hero_cta_text = false !== strpos( $lower, 'featured' ) ? 'View featured homes' : factory_ai_interpreter_context_value( $current_context, 'preset_variables', 'hero_cta_text', 'Browse properties' );
 	$contact_intro = sprintf( 'Schedule a viewing or request more details about %s properties.', $city );
+	$phone = '' !== $phone ? $phone : factory_ai_interpreter_context_value( $current_context, 'preset_variables', 'phone', '' );
+	$email = '' !== $email ? $email : factory_ai_interpreter_context_value( $current_context, 'preset_variables', 'email', '' );
 	$confidence = 'real_estate' === $vertical ? 0.78 : 0.42;
 
 	$raw = [
 		'version'                          => '1.0',
-		'mode'                             => 'interpretation_only',
+		'mode'                             => 'safe_variables_only',
 		'applies_changes'                  => false,
-		'detected_vertical'                => $vertical,
+		'vertical'                         => $vertical,
 		'recommended_preset'               => 'real-estate',
-		'business_name'                    => [
-			'value'      => $business,
-			'confidence' => '' !== $business ? 0.78 : 0.0,
+		'preset_variables'                 => [
+			'agency_name'   => $business,
+			'hero_title'    => $business,
+			'hero_subtitle' => $hero_subtitle,
+			'hero_cta_text' => $hero_cta_text,
+			'contact_title' => 'Contact ' . $business,
+			'contact_intro' => $contact_intro,
+			'phone'         => $phone,
+			'email'         => $email,
 		],
-		'location'                         => [
-			'value'      => $city,
-			'confidence' => '' !== $city ? 0.72 : 0.0,
-		],
-		'tone'                             => [
-			'value'          => $tone,
-			'allowed_values' => [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ],
-			'confidence'     => false !== strpos( $lower, $tone ) ? 0.72 : 0.44,
-		],
-		'color_preference'                 => [
-			'value'          => $color,
-			'allowed_values' => [ 'turquoise', 'blue', 'green', 'beige' ],
-			'confidence'     => false !== strpos( $lower, $color ) ? 0.74 : 0.44,
-		],
-		'image_preference'                 => [
-			'source'     => 'demo_pool',
-			'mode'       => 'round_robin',
-			'confidence' => 1.0,
+		'unsupported_requests'             => $unsupported,
+		'warnings'                         => $missing,
+		'confidence'                       => [
+			'overall' => $confidence,
+			'fields'  => [
+				'agency_name'   => '' !== $business ? 0.78 : 0.0,
+				'hero_title'    => '' !== $business ? 0.74 : 0.0,
+				'hero_subtitle' => 0.72,
+				'hero_cta_text' => 0.62,
+				'contact_title' => '' !== $business ? 0.72 : 0.0,
+				'contact_intro' => 0.7,
+				'phone'         => '' !== $phone ? 0.74 : 0.0,
+				'email'         => '' !== $email ? 0.74 : 0.0,
+			],
 		],
 		'requested_features'               => $features,
-		'unsupported_requests'             => $unsupported,
-		'missing_questions'                => $missing,
-		'safe_preset_variable_suggestions' => [
-			'agency_name'   => factory_ai_interpreter_suggestion( $business, 0.78 ),
-			'hero_title'    => factory_ai_interpreter_suggestion( $business, 0.74 ),
-			'hero_subtitle' => factory_ai_interpreter_suggestion( $hero_subtitle, 0.72 ),
-			'contact_title' => factory_ai_interpreter_suggestion( 'Contact ' . $business, 0.72 ),
-			'contact_intro' => factory_ai_interpreter_suggestion( $contact_intro, 0.7 ),
-		],
-		'safe_style_context_suggestions'    => [
-			'tone'           => factory_ai_interpreter_suggestion( $tone, 0.72 ),
-			'primary_preset' => factory_ai_interpreter_suggestion( $color, 0.74 ),
-		],
-		'safe_image_context_suggestions'    => [
-			'source' => [
-				'value'                 => 'demo_pool',
-				'confidence'            => 1.0,
-				'requires_confirmation' => false,
-			],
-			'mode'   => [
-				'value'                 => 'round_robin',
-				'confidence'            => 1.0,
-				'requires_confirmation' => false,
-			],
-		],
-		'confidence'                       => $confidence,
 	];
 
-	return factory_ai_normalize_prompt_interpretation( $raw );
+	return factory_ai_validate_safe_prompt_interpretation( $raw );
 }
 
 function factory_ai_interpreter_detect_vertical( string $lower ): string {
@@ -199,8 +178,13 @@ function factory_ai_interpreter_unsupported_requests( string $lower ): array {
 	$checks = [
 		[ [ 'upload', 'my images' ], 'Uploaded images', 'Image upload flows are not implemented in this beta.', 'Use bundled real estate image pools.' ],
 		[ [ 'ai generated images', 'ai images', 'generate images', 'generated images', 'image ai' ], 'AI generated images', 'AI image generation is not implemented in this beta.', 'Use bundled real estate image pools.' ],
+		[ [ 'london district', 'london districts', 'custom district', 'custom districts', 'districts' ], 'Custom districts', 'District taxonomy terms and demo property locations are not prompt-controlled in this beta.', 'Use the prepared Real Estate district set.' ],
+		[ [ 'dark mode', 'light mode', 'dark/light', 'dark and light', 'theme toggle' ], 'Dark/light mode', 'Dark mode and theme mode toggles are not implemented in this beta.', 'Use the prepared deterministic style presets.' ],
+		[ [ 'assistant panel', 'chat assistant', 'ai assistant panel' ], 'Assistant panel', 'Assistant panels are not implemented in this beta.', 'Use the dashboard prompt interpretation panel for safe suggestions.' ],
+		[ [ 'mobile app', 'app version', 'native app' ], 'Mobile app', 'Mobile app generation is outside this WordPress beta.', 'Generate the Real Estate WordPress demo only.' ],
 		[ [ 'custom filter', 'custom filters' ], 'Custom filters', 'Filter schema is not prompt-controlled.', 'Use the prepared Real Estate filter set.' ],
 		[ [ 'custom layout', 'arbitrary layout', 'new layout' ], 'Arbitrary layouts', 'Layout topology is not prompt-controlled.', 'Use the prepared Real Estate layout.' ],
+		[ [ 'appointment', 'appointments', 'booking', 'book viewing', 'calendar' ], 'Appointments or booking', 'Booking and appointment workflows are not implemented as safe variables in this beta.', 'Use the prepared request viewing contact flow.' ],
 		[ [ 'job board', 'restaurant', 'hotel', 'clinic', 'shop' ], 'Other vertical', 'Only the Real Estate preset is available in this beta flow.', 'Use the Real Estate demo preset.' ],
 	];
 
@@ -218,6 +202,22 @@ function factory_ai_interpreter_unsupported_requests( string $lower ): array {
 	}
 
 	return $unsupported;
+}
+
+function factory_ai_interpreter_detect_phone( string $prompt ): string {
+	if ( preg_match( '/(?:\+?\d[\d().\-\s]{6,}\d)/', $prompt, $matches ) ) {
+		return factory_ai_sanitize_safe_variable( $matches[0], 'phone', 60 );
+	}
+
+	return '';
+}
+
+function factory_ai_interpreter_detect_email( string $prompt ): string {
+	if ( preg_match( '/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $prompt, $matches ) ) {
+		return factory_ai_sanitize_safe_variable( $matches[0], 'email', 120 );
+	}
+
+	return '';
 }
 
 function factory_ai_interpreter_context_value( array $context, string $group, string $key, string $fallback ): string {
@@ -292,6 +292,105 @@ function factory_ai_normalize_prompt_interpretation( array $raw ): array {
 		],
 		'confidence'                       => factory_ai_normalize_confidence( $raw['confidence'] ?? 0 ),
 	];
+}
+
+function factory_ai_safe_variable_schema(): array {
+	return [
+		'agency_name'   => [
+			'max'       => 80,
+			'sanitizer' => 'text',
+		],
+		'hero_title'    => [
+			'max'       => 120,
+			'sanitizer' => 'text',
+		],
+		'hero_subtitle' => [
+			'max'       => 240,
+			'sanitizer' => 'textarea',
+		],
+		'hero_cta_text' => [
+			'max'       => 60,
+			'sanitizer' => 'text',
+		],
+		'contact_title' => [
+			'max'       => 120,
+			'sanitizer' => 'text',
+		],
+		'contact_intro' => [
+			'max'       => 400,
+			'sanitizer' => 'textarea',
+		],
+		'phone'         => [
+			'max'       => 60,
+			'sanitizer' => 'phone',
+		],
+		'email'         => [
+			'max'       => 120,
+			'sanitizer' => 'email',
+		],
+	];
+}
+
+function factory_ai_validate_safe_prompt_interpretation( array $raw ): array {
+	$preset_variables = is_array( $raw['preset_variables'] ?? null ) ? $raw['preset_variables'] : [];
+	$variables = [];
+	$field_confidence = [];
+	$raw_confidence = is_array( $raw['confidence'] ?? null ) ? $raw['confidence'] : [];
+	$raw_field_confidence = is_array( $raw_confidence['fields'] ?? null ) ? $raw_confidence['fields'] : [];
+
+	foreach ( factory_ai_safe_variable_schema() as $key => $schema ) {
+		$variables[ $key ] = factory_ai_sanitize_safe_variable(
+			$preset_variables[ $key ] ?? '',
+			$schema['sanitizer'],
+			(int) $schema['max']
+		);
+		$field_confidence[ $key ] = factory_ai_normalize_confidence( $raw_field_confidence[ $key ] ?? 0 );
+	}
+
+	return [
+		'version'              => '1.0',
+		'mode'                 => 'safe_variables_only',
+		'applies_changes'      => false,
+		'vertical'             => 'real_estate',
+		'recommended_preset'   => 'real-estate',
+		'preset_variables'     => $variables,
+		'unsupported_requests' => factory_ai_normalize_unsupported_items( $raw['unsupported_requests'] ?? [] ),
+		'warnings'             => factory_ai_normalize_string_list( $raw['warnings'] ?? [], 160 ),
+		'confidence'           => [
+			'overall' => factory_ai_normalize_confidence( $raw_confidence['overall'] ?? $raw['confidence'] ?? 0 ),
+			'fields'  => $field_confidence,
+		],
+	];
+}
+
+function factory_ai_sanitize_safe_variable( $value, string $sanitizer, int $max ): string {
+	if ( is_array( $value ) || is_object( $value ) ) {
+		return '';
+	}
+
+	$value = is_string( $value ) || is_numeric( $value ) ? (string) $value : '';
+	$value = function_exists( 'wp_unslash' ) ? wp_unslash( $value ) : $value;
+
+	if ( 'textarea' === $sanitizer && function_exists( 'sanitize_textarea_field' ) ) {
+		$value = sanitize_textarea_field( $value );
+	} elseif ( 'email' === $sanitizer ) {
+		$value = function_exists( 'sanitize_email' ) ? sanitize_email( $value ) : sanitize_text_field( $value );
+		$value = function_exists( 'is_email' ) && ! is_email( $value ) ? '' : $value;
+	} elseif ( 'phone' === $sanitizer ) {
+		$value = sanitize_text_field( $value );
+		$value = preg_replace( '/[^0-9+().\-\s]/', '', $value );
+	} else {
+		$value = sanitize_text_field( $value );
+	}
+
+	$value = trim( (string) $value );
+	$max = max( 1, $max );
+
+	if ( function_exists( 'mb_substr' ) ) {
+		return mb_substr( $value, 0, $max );
+	}
+
+	return substr( $value, 0, $max );
 }
 
 function factory_ai_normalize_value_confidence( $item, int $max ): array {

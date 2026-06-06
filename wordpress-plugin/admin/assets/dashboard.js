@@ -591,6 +591,10 @@
 	}
 
 	function suggestionValue( item ) {
+		if ( typeof item === 'string' || typeof item === 'number' ) {
+			return String( item );
+		}
+
 		return item && typeof item === 'object' ? String( item.value || '' ) : '';
 	}
 
@@ -645,12 +649,16 @@
 		const location = interpretation.location || {};
 		const tone = interpretation.tone || {};
 		const color = interpretation.color_preference || {};
+		const variables = interpretation.preset_variables || {};
+		const confidence = interpretation.confidence && typeof interpretation.confidence === 'object'
+			? interpretation.confidence.overall
+			: interpretation.confidence;
 
 		return [
 			'<div class="factory-prompt-intent-grid">',
-				renderPromptIntentItem( 'Detected vertical', interpretation.detected_vertical || 'unknown', confidencePercent( interpretation.confidence ) ),
+				renderPromptIntentItem( 'Detected vertical', interpretation.vertical || interpretation.detected_vertical || 'unknown', confidencePercent( confidence ) ),
 				renderPromptIntentItem( 'Recommended preset', interpretation.recommended_preset || 'real-estate', 'Safe preset' ),
-				renderPromptIntentItem( 'Business name', business.value || '-', confidencePercent( business.confidence ) ),
+				renderPromptIntentItem( 'Business name', variables.agency_name || business.value || '-', confidencePercent( business.confidence ) ),
 				renderPromptIntentItem( 'Location', location.value || '-', confidencePercent( location.confidence ) ),
 				renderPromptIntentItem( 'Tone', tone.value || '-', confidencePercent( tone.confidence ) ),
 				renderPromptIntentItem( 'Color', color.value || '-', confidencePercent( color.confidence ) ),
@@ -669,10 +677,10 @@
 	}
 
 	function renderPromptSuggestionGroups( interpretation ) {
-		const copySuggestions = interpretation.safe_preset_variable_suggestions || {};
+		const copySuggestions = interpretation.preset_variables || interpretation.safe_preset_variable_suggestions || {};
 		const styleSuggestions = interpretation.safe_style_context_suggestions || {};
 		const imageSuggestions = interpretation.safe_image_context_suggestions || {};
-		const copyKeys = [ 'agency_name', 'hero_title', 'hero_subtitle', 'contact_title', 'contact_intro' ];
+		const copyKeys = [ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text', 'contact_title', 'contact_intro', 'phone', 'email' ];
 		const styleKeys = [ 'tone', 'primary_preset' ];
 
 		return [
@@ -731,12 +739,14 @@
 
 	function renderPromptMissingQuestions( interpretation ) {
 		const questions = Array.isArray( interpretation.missing_questions ) ? interpretation.missing_questions : [];
+		const warnings = Array.isArray( interpretation.warnings ) ? interpretation.warnings : [];
+		const items = questions.length ? questions : warnings;
 
-		if ( ! questions.length ) {
+		if ( ! items.length ) {
 			return '';
 		}
 
-		return '<div class="factory-prompt-questions"><h5>Missing questions</h5><ul>' + questions.map( function ( question ) {
+		return '<div class="factory-prompt-questions"><h5>' + ( questions.length ? 'Missing questions' : 'Warnings' ) + '</h5><ul>' + items.map( function ( question ) {
 			return '<li>' + escapeHtml( question ) + '</li>';
 		} ).join( '' ) + '</ul></div>';
 	}
@@ -2339,7 +2349,7 @@
 		}
 
 		if ( group === 'copy' ) {
-			const suggestions = interpretation.safe_preset_variable_suggestions || {};
+			const suggestions = interpretation.preset_variables || interpretation.safe_preset_variable_suggestions || {};
 			[ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text', 'contact_title', 'contact_intro', 'phone', 'email' ].forEach( function ( key ) {
 				const value = suggestionValue( suggestions[ key ] );
 

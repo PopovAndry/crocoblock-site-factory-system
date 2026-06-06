@@ -48,6 +48,7 @@ function factory_rest_ai_interpret_prompt( WP_REST_Request $request ): WP_REST_R
 		$prompt,
 		factory_rest_ai_sanitize_interpret_context( $current_context )
 	);
+	$interpretation = factory_ai_validate_safe_prompt_interpretation( $interpretation );
 
 	return new WP_REST_Response(
 		[
@@ -70,11 +71,14 @@ function factory_rest_ai_sanitize_interpret_context( array $context ): array {
 	return [
 		'preset'           => 'real-estate' === $preset ? 'real-estate' : 'real-estate',
 		'preset_variables' => [
-			'agency_name'   => factory_ai_clamp_prompt_string( $preset_variables['agency_name'] ?? '', 80 ),
-			'hero_title'    => factory_ai_clamp_prompt_string( $preset_variables['hero_title'] ?? '', 120 ),
-			'hero_subtitle' => factory_ai_clamp_prompt_string( $preset_variables['hero_subtitle'] ?? '', 240 ),
-			'contact_title' => factory_ai_clamp_prompt_string( $preset_variables['contact_title'] ?? '', 120 ),
-			'contact_intro' => factory_ai_clamp_prompt_string( $preset_variables['contact_intro'] ?? '', 400 ),
+			'agency_name'   => factory_ai_sanitize_safe_variable( $preset_variables['agency_name'] ?? '', 'text', 80 ),
+			'hero_title'    => factory_ai_sanitize_safe_variable( $preset_variables['hero_title'] ?? '', 'text', 120 ),
+			'hero_subtitle' => factory_ai_sanitize_safe_variable( $preset_variables['hero_subtitle'] ?? '', 'textarea', 240 ),
+			'hero_cta_text' => factory_ai_sanitize_safe_variable( $preset_variables['hero_cta_text'] ?? '', 'text', 60 ),
+			'contact_title' => factory_ai_sanitize_safe_variable( $preset_variables['contact_title'] ?? '', 'text', 120 ),
+			'contact_intro' => factory_ai_sanitize_safe_variable( $preset_variables['contact_intro'] ?? '', 'textarea', 400 ),
+			'phone'         => factory_ai_sanitize_safe_variable( $preset_variables['phone'] ?? '', 'phone', 60 ),
+			'email'         => factory_ai_sanitize_safe_variable( $preset_variables['email'] ?? '', 'email', 120 ),
 		],
 		'style_context'    => [
 			'tone'           => factory_ai_normalize_enum( $style_context['tone'] ?? 'premium', [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ], 'premium' ),
