@@ -1304,8 +1304,8 @@
 			'<section class="factory-open-edit-block">',
 				'<div>',
 					'<span>Next steps</span>',
-					'<h3>Open and edit your site</h3>',
-					'<p>Generated pages use managed layout markup. Property content can be edited in WordPress. For safe site copy and design changes, use Site Factory setup before regenerating.</p>',
+					'<h3>Open and manage your site</h3>',
+					'<p>Generated pages use managed layout markup. Edit site copy in Site Factory setup fields. Property content can be edited in WordPress.</p>',
 				'</div>',
 				'<div class="factory-open-edit-grid">',
 					'<div>',
@@ -1317,11 +1317,9 @@
 					'</div>',
 					'</div>',
 					'<div>',
-						'<h4>Editing in WordPress</h4>',
+						'<h4>Safe editing</h4>',
 						'<div class="factory-demo-links factory-demo-links-secondary">',
-							'<a href="' + escapeHtml( homeUrl( '/wp-admin/edit.php?post_type=page&s=Home' ) ) + '" target="_blank" rel="noopener noreferrer">Review Home page</a>',
-							'<a href="' + escapeHtml( homeUrl( '/wp-admin/edit.php?post_type=page&s=Properties' ) ) + '" target="_blank" rel="noopener noreferrer">Review Properties page</a>',
-							'<a href="' + escapeHtml( homeUrl( '/wp-admin/edit.php?post_type=page&s=Contact' ) ) + '" target="_blank" rel="noopener noreferrer">Review Contact page</a>',
+							'<button type="button" class="button" data-factory-wizard-step="3">Edit site copy in setup</button>',
 							'<a href="' + escapeHtml( homeUrl( '/wp-admin/edit.php?post_type=property' ) ) + '" target="_blank" rel="noopener noreferrer">Manage Properties</a>',
 						'</div>',
 					'</div>',
@@ -1333,6 +1331,20 @@
 						'<a href="' + escapeHtml( homeUrl( '/property/solomianskyi-business-office/' ) ) + '" target="_blank" rel="noopener noreferrer">Sample Commercial</a>',
 					'</div>',
 					'</div>',
+				'</div>',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderDeveloperPageInspectLinks() {
+		return [
+			'<section class="factory-card factory-card-wide">',
+				'<h2>Generated Page Inspection</h2>',
+				'<p class="factory-empty">Generated pages are managed layout markup. These links are for developer inspection, not normal visual editing.</p>',
+				'<div class="factory-demo-links factory-demo-links-secondary">',
+					'<a href="' + escapeHtml( homeUrl( '/wp-admin/edit.php?post_type=page&s=Home' ) ) + '" target="_blank" rel="noopener noreferrer">Inspect generated Home page</a>',
+					'<a href="' + escapeHtml( homeUrl( '/wp-admin/edit.php?post_type=page&s=Properties' ) ) + '" target="_blank" rel="noopener noreferrer">Inspect generated Properties page</a>',
+					'<a href="' + escapeHtml( homeUrl( '/wp-admin/edit.php?post_type=page&s=Contact' ) ) + '" target="_blank" rel="noopener noreferrer">Inspect generated Contact page</a>',
 				'</div>',
 			'</section>',
 		].join( '' );
@@ -2058,6 +2070,7 @@
 				'</div>',
 				expanded
 					? '<div class="factory-advanced-body">' +
+						renderDeveloperPageInspectLinks() +
 						renderRawPlanDetails() +
 						renderRunsTable() +
 						renderSelectedRun() +

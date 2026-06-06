@@ -1676,8 +1676,10 @@
 	gap: 10px;
 }
 
-.factory-demo-links a {
+.factory-demo-links a,
+.factory-demo-links button.button {
 	background: #0f766e;
+	border: 0;
 	border-radius: 999px;
 	color: #ffffff;
 	display: inline-flex;
@@ -1688,7 +1690,9 @@
 }
 
 .factory-demo-links a:hover,
-.factory-demo-links a:focus {
+.factory-demo-links a:focus,
+.factory-demo-links button.button:hover,
+.factory-demo-links button.button:focus {
 	background: #14b8a6;
 	color: #ffffff;
 }
