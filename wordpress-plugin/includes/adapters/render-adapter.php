@@ -2651,6 +2651,7 @@ class Factory_Render_Adapter {
 		$text         = $style_tokens['text'];
 		$muted        = $style_tokens['muted'];
 		$border       = $style_tokens['border'];
+		$hero_image   = plugins_url( '../../assets/real-estate/hero/kyiv-panorama.png', __FILE__ );
 		$html         = '<style>body.front-page .entry-title, body.front-page .page-title, body.home .entry-title, body.home .page-title { display: none !important; }</style>';
 		$html        .= '<div class="factory-home-page" style="background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $text ) . '; margin: -40px 0 0;">';
 
@@ -2667,12 +2668,14 @@ class Factory_Render_Adapter {
 				$cta_label = $section['cta_label'] ?? 'Browse properties';
 				$cta_url   = $this->resolve_frontend_url( $section['cta_url'] ?? '', '/properties/' );
 
-				$html .= '<section class="factory-home-hero" style="width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); background: ' . esc_attr( $background ) . '; padding: 76px 0 54px;">';
-				$html .= '<div style="max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
-				$html .= '<div style="max-width: 720px;">';
-				$html .= '<span style="display: inline-flex; border-radius: 999px; background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">Real Estate Beta</span>';
-				$html .= '<h1 style="font-size: clamp(36px, 4.5vw, 56px); line-height: 1.05; margin: 0 0 18px; letter-spacing: 0; color: ' . esc_attr( $style_tokens['heading'] ) . ';">' . esc_html( $title ) . '</h1>';
-				$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: ' . esc_attr( $muted ) . '; margin: 0 0 28px;">' . esc_html( $subtitle ) . '</p>';
+				$html .= '<section class="factory-home-hero" style="position: relative; width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); min-height: clamp(520px, 72vw, 720px); padding: clamp(96px, 12vw, 150px) 0 clamp(92px, 10vw, 130px); overflow: hidden; background: ' . esc_attr( $style_tokens['heading'] ) . ';">';
+				$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background-image: url(\'' . esc_url( $hero_image ) . '\'); background-size: cover; background-position: center; opacity: 1;"></div>';
+				$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5, 30, 28, 0.55) 0%, rgba(7, 47, 43, 0.38) 32%, rgba(15, 118, 110, 0.1) 58%, rgba(15, 118, 110, 0) 100%);"></div>';
+				$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
+				$html .= '<div style="max-width: 700px;">';
+				$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">Real Estate Beta</span>';
+				$html .= '<h1 style="font-size: clamp(38px, 5vw, 68px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
+				$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.92); margin: 0 0 28px; max-width: 640px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';
 				$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; border-radius: 999px; background: ' . esc_attr( $style_tokens['button'] ) . '; color: ' . esc_attr( $style_tokens['button_text'] ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';
 				$html .= '</div>';
 				$html .= '</div>';
