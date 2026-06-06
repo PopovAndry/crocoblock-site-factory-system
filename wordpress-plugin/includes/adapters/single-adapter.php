@@ -288,12 +288,116 @@ class Factory_Single_Adapter {
 		ob_start();
 		?>
 
+		<style>
+			.factory-property-gallery-trigger {
+				appearance: none;
+				background: transparent;
+				border: 0;
+				color: inherit;
+				cursor: pointer;
+				display: block;
+				font: inherit;
+				padding: 0;
+				text-align: inherit;
+				width: 100%;
+			}
+
+			.factory-property-gallery-trigger:focus-visible {
+				outline: 2px solid <?php echo esc_attr( $accent ); ?>;
+				outline-offset: 3px;
+			}
+
+			.factory-property-lightbox[hidden] {
+				display: none !important;
+			}
+
+			.factory-property-lightbox {
+				align-items: center;
+				background: rgba(5, 20, 18, 0.84);
+				display: flex;
+				inset: 0;
+				justify-content: center;
+				padding: 28px;
+				position: fixed;
+				z-index: 99999;
+			}
+
+			.factory-property-lightbox__dialog {
+				max-width: min(1080px, 92vw);
+				position: relative;
+				width: 100%;
+			}
+
+			.factory-property-lightbox__image {
+				background: <?php echo esc_attr( $background ); ?>;
+				border-radius: 22px;
+				display: block;
+				max-height: 82vh;
+				object-fit: contain;
+				width: 100%;
+			}
+
+			.factory-property-lightbox__close,
+			.factory-property-lightbox__nav {
+				align-items: center;
+				background: rgba(255, 255, 255, 0.94);
+				border: 0;
+				border-radius: 999px;
+				color: <?php echo esc_attr( $style_tokens['heading'] ); ?>;
+				cursor: pointer;
+				display: inline-flex;
+				font-size: 24px;
+				font-weight: 900;
+				justify-content: center;
+				min-height: 42px;
+				min-width: 42px;
+				line-height: 1;
+				padding: 0;
+			}
+
+			.factory-property-lightbox__close:focus-visible,
+			.factory-property-lightbox__nav:focus-visible {
+				outline: 2px solid <?php echo esc_attr( $accent ); ?>;
+				outline-offset: 3px;
+			}
+
+			.factory-property-lightbox__close {
+				position: absolute;
+				right: 14px;
+				top: 14px;
+			}
+
+			.factory-property-lightbox__nav {
+				position: absolute;
+				top: 50%;
+				transform: translateY(-50%);
+			}
+
+			.factory-property-lightbox__nav--prev {
+				left: 14px;
+			}
+
+			.factory-property-lightbox__nav--next {
+				right: 14px;
+			}
+
+			.factory-property-lightbox__caption {
+				color: rgba(255, 255, 255, 0.9);
+				font-size: 14px;
+				line-height: 1.5;
+				margin-top: 10px;
+				text-align: center;
+			}
+		</style>
+
 		<main class="factory-single-wrap factory-property-single-wrap" style="max-width: 1180px; margin: 40px auto 36px; padding: 0 24px;">
 			<article <?php post_class( 'factory-single factory-property-single', $post_id ); ?>>
 				<header style="margin-bottom: 34px;">
 					<?php if ( ! empty( $gallery_images ) ) : ?>
 						<div class="factory-property-hero-image" style="margin-bottom: 20px; border-radius: 28px; overflow: hidden; background: <?php echo esc_attr( $background ); ?>; box-shadow: 0 22px 52px rgba(15, 118, 110, 0.14);">
-							<img src="<?php echo esc_url( $gallery_images[0]['url'] ); ?>" alt="<?php echo esc_attr( $gallery_images[0]['alt'] ); ?>" style="display: block; width: 100%; height: min(58vw, 540px); min-height: 340px; object-fit: cover;">
+							<button type="button" class="factory-property-gallery-trigger" data-factory-gallery-index="0" aria-label="<?php echo esc_attr( 'Open property image' ); ?>">
+								<img src="<?php echo esc_url( $gallery_images[0]['url'] ); ?>" alt="<?php echo esc_attr( $gallery_images[0]['alt'] ); ?>" style="display: block; width: 100%; height: min(58vw, 540px); min-height: 340px; object-fit: cover;">
+							</button>
 						</div>
 					<?php endif; ?>
 
@@ -359,8 +463,10 @@ class Factory_Single_Adapter {
 							More photos
 						</h2>
 						<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
-							<?php foreach ( array_slice( $gallery_images, 1, 3 ) as $image ) : ?>
-								<img src="<?php echo esc_url( $image['url'] ); ?>" alt="<?php echo esc_attr( $image['alt'] ); ?>" style="display: block; width: 100%; height: 150px; object-fit: cover; border-radius: 18px;">
+							<?php foreach ( array_slice( $gallery_images, 1, 3 ) as $gallery_index => $image ) : ?>
+								<button type="button" class="factory-property-gallery-trigger" data-factory-gallery-index="<?php echo esc_attr( $gallery_index + 1 ); ?>" aria-label="<?php echo esc_attr( 'Open property image' ); ?>">
+									<img src="<?php echo esc_url( $image['url'] ); ?>" alt="<?php echo esc_attr( $image['alt'] ); ?>" style="display: block; width: 100%; height: 150px; object-fit: cover; border-radius: 18px;">
+								</button>
 							<?php endforeach; ?>
 						</div>
 					</section>
@@ -430,6 +536,110 @@ class Factory_Single_Adapter {
 				</div>
 			</article>
 		</main>
+		<?php if ( ! empty( $gallery_images ) ) : ?>
+			<div class="factory-property-lightbox" role="dialog" aria-modal="true" aria-label="<?php echo esc_attr( 'Property image gallery' ); ?>" hidden>
+					<div class="factory-property-lightbox__dialog">
+					<button type="button" class="factory-property-lightbox__close" aria-label="<?php echo esc_attr( 'Close image' ); ?>">&times;</button>
+					<button type="button" class="factory-property-lightbox__nav factory-property-lightbox__nav--prev" aria-label="<?php echo esc_attr( 'Previous image' ); ?>">&lsaquo;</button>
+					<img class="factory-property-lightbox__image" src="" alt="">
+					<button type="button" class="factory-property-lightbox__nav factory-property-lightbox__nav--next" aria-label="<?php echo esc_attr( 'Next image' ); ?>">&rsaquo;</button>
+					<div class="factory-property-lightbox__caption" aria-live="polite"></div>
+				</div>
+			</div>
+			<script>
+				(function () {
+					var wrap = document.querySelector('.factory-property-single-wrap');
+					var modal = document.querySelector('.factory-property-lightbox');
+
+					if (!wrap || !modal) {
+						return;
+					}
+
+					var triggers = Array.prototype.slice.call(wrap.querySelectorAll('.factory-property-gallery-trigger'));
+					var image = modal.querySelector('.factory-property-lightbox__image');
+					var caption = modal.querySelector('.factory-property-lightbox__caption');
+					var closeButton = modal.querySelector('.factory-property-lightbox__close');
+					var previousButton = modal.querySelector('.factory-property-lightbox__nav--prev');
+					var nextButton = modal.querySelector('.factory-property-lightbox__nav--next');
+					var currentIndex = 0;
+
+					if (!triggers.length || !image || !caption || !closeButton || !previousButton || !nextButton) {
+						return;
+					}
+
+					function showImage(index) {
+						var trigger = triggers[index];
+						var source = trigger ? trigger.querySelector('img') : null;
+
+						if (!source) {
+							return;
+						}
+
+						currentIndex = index;
+						image.src = source.currentSrc || source.src;
+						image.alt = source.alt || '';
+						caption.textContent = (source.alt || 'Property image') + ' (' + (currentIndex + 1) + ' of ' + triggers.length + ')';
+						previousButton.hidden = triggers.length < 2;
+						nextButton.hidden = triggers.length < 2;
+					}
+
+					function openGallery(index) {
+						showImage(index);
+						modal.hidden = false;
+						document.documentElement.style.overflow = 'hidden';
+						closeButton.focus();
+					}
+
+					function closeGallery() {
+						modal.hidden = true;
+						document.documentElement.style.overflow = '';
+						triggers[currentIndex].focus();
+					}
+
+					function moveGallery(offset) {
+						showImage((currentIndex + offset + triggers.length) % triggers.length);
+					}
+
+					triggers.forEach(function (trigger, index) {
+						trigger.addEventListener('click', function () {
+							openGallery(index);
+						});
+					});
+
+					closeButton.addEventListener('click', closeGallery);
+					previousButton.addEventListener('click', function () {
+						moveGallery(-1);
+					});
+					nextButton.addEventListener('click', function () {
+						moveGallery(1);
+					});
+
+					modal.addEventListener('click', function (event) {
+						if (event.target === modal) {
+							closeGallery();
+						}
+					});
+
+					document.addEventListener('keydown', function (event) {
+						if (modal.hidden) {
+							return;
+						}
+
+						if ('Escape' === event.key) {
+							closeGallery();
+						}
+
+						if ('ArrowLeft' === event.key && triggers.length > 1) {
+							moveGallery(-1);
+						}
+
+						if ('ArrowRight' === event.key && triggers.length > 1) {
+							moveGallery(1);
+						}
+					});
+				})();
+			</script>
+		<?php endif; ?>
 		<?php echo $this->render_generated_footer( $blueprint ); ?>
 
 		<?php
