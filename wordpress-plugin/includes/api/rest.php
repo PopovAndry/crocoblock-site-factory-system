@@ -499,6 +499,10 @@ function factory_register_rest_routes(): void {
                 'max'       => 240,
                 'sanitizer' => 'textarea',
             ],
+            'hero_cta_text' => [
+                'max'       => 60,
+                'sanitizer' => 'text',
+            ],
             'contact_title' => [
                 'max'       => 120,
                 'sanitizer' => 'text',
@@ -506,6 +510,14 @@ function factory_register_rest_routes(): void {
             'contact_intro' => [
                 'max'       => 400,
                 'sanitizer' => 'textarea',
+            ],
+            'phone'         => [
+                'max'       => 60,
+                'sanitizer' => 'phone',
+            ],
+            'email'         => [
+                'max'       => 120,
+                'sanitizer' => 'email',
             ],
         ];
     }
@@ -693,9 +705,20 @@ function factory_register_rest_routes(): void {
 
         $value = is_string( $value ) || is_numeric( $value ) ? (string) $value : '';
         $value = function_exists( 'wp_unslash' ) ? wp_unslash( $value ) : $value;
-        $value = 'textarea' === ( $schema['sanitizer'] ?? 'text' ) && function_exists( 'sanitize_textarea_field' )
-            ? sanitize_textarea_field( $value )
-            : sanitize_text_field( $value );
+        $sanitizer = $schema['sanitizer'] ?? 'text';
+
+        if ( 'textarea' === $sanitizer && function_exists( 'sanitize_textarea_field' ) ) {
+            $value = sanitize_textarea_field( $value );
+        } elseif ( 'email' === $sanitizer ) {
+            $value = function_exists( 'sanitize_email' ) ? sanitize_email( $value ) : sanitize_text_field( $value );
+            $value = function_exists( 'is_email' ) && ! is_email( $value ) ? '' : $value;
+        } elseif ( 'phone' === $sanitizer ) {
+            $value = sanitize_text_field( $value );
+            $value = preg_replace( '/[^0-9+().\-\s]/', '', $value );
+        } else {
+            $value = sanitize_text_field( $value );
+        }
+
         $value = trim( $value );
         $max   = max( 1, (int) ( $schema['max'] ?? 120 ) );
 
@@ -715,8 +738,11 @@ function factory_register_rest_routes(): void {
             'agency_name'   => (string) ( $blueprint['site']['name'] ?? $home['title'] ?? 'Kyiv Turquoise Realty' ),
             'hero_title'    => (string) ( $hero_section['title'] ?? $home['title'] ?? 'Kyiv Turquoise Realty' ),
             'hero_subtitle' => (string) ( $hero_section['subtitle'] ?? 'Find apartments, houses, and commercial spaces in Kyiv' ),
+            'hero_cta_text' => (string) ( $hero_section['cta_label'] ?? 'Browse properties' ),
             'contact_title' => (string) ( $contact['title'] ?? 'Contact Kyiv Turquoise Realty' ),
             'contact_intro' => (string) ( $contact['text'] ?? 'Schedule a viewing or request more details about Kyiv properties.' ),
+            'phone'         => (string) ( $contact['phone'] ?? '+380 44 000 0000' ),
+            'email'         => (string) ( $contact['email'] ?? $blueprint['site']['forms']['request_viewing']['fallback_email'] ?? 'hello@example.com' ),
         ];
     }
 
@@ -749,6 +775,10 @@ function factory_register_rest_routes(): void {
                 $blueprint['pages']['home']['sections'][ $index ]['subtitle'] = $variables['hero_subtitle'];
             }
 
+            if ( isset( $variables['hero_cta_text'] ) ) {
+                $blueprint['pages']['home']['sections'][ $index ]['cta_label'] = $variables['hero_cta_text'];
+            }
+
             break;
         }
 
@@ -758,6 +788,15 @@ function factory_register_rest_routes(): void {
 
         if ( isset( $variables['contact_intro'] ) ) {
             $blueprint['pages']['contact']['text'] = $variables['contact_intro'];
+        }
+
+        if ( isset( $variables['phone'] ) ) {
+            $blueprint['pages']['contact']['phone'] = $variables['phone'];
+        }
+
+        if ( isset( $variables['email'] ) ) {
+            $blueprint['pages']['contact']['email'] = $variables['email'];
+            $blueprint['site']['forms']['request_viewing']['fallback_email'] = $variables['email'];
         }
 
         return $blueprint;

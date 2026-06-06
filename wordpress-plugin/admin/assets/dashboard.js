@@ -8,8 +8,11 @@
 		agency_name: 'Kyiv Turquoise Realty',
 		hero_title: 'Kyiv Turquoise Realty',
 		hero_subtitle: 'Find apartments, houses, and commercial spaces in Kyiv',
+		hero_cta_text: 'Browse properties',
 		contact_title: 'Contact Kyiv Turquoise Realty',
 		contact_intro: 'Schedule a viewing or request more details about Kyiv properties.',
+		phone: '+380 44 000 0000',
+		email: 'hello@example.com',
 	};
 	const defaultStyleContext = {
 		tone: 'premium',
@@ -319,8 +322,11 @@
 			agency_name: 'Agency name',
 			hero_title: 'Hero title',
 			hero_subtitle: 'Hero subtitle',
+			hero_cta_text: 'Hero CTA text',
 			contact_title: 'Contact title',
 			contact_intro: 'Contact intro',
+			phone: 'Phone',
+			email: 'Email',
 		};
 
 		return labels[ key ] || key;
@@ -740,8 +746,11 @@
 			[ 'agency_name', 'text' ],
 			[ 'hero_title', 'text' ],
 			[ 'hero_subtitle', 'textarea' ],
+			[ 'hero_cta_text', 'text' ],
 			[ 'contact_title', 'text' ],
 			[ 'contact_intro', 'textarea' ],
+			[ 'phone', 'text' ],
+			[ 'email', 'email' ],
 		];
 
 		return [
@@ -761,7 +770,7 @@
 							return '<label><span>' + escapeHtml( presetVariableLabel( key ) ) + '</span><textarea rows="2" data-factory-preset-variable="' + escapeHtml( key ) + '">' + escapeHtml( value ) + '</textarea></label>';
 						}
 
-						return '<label><span>' + escapeHtml( presetVariableLabel( key ) ) + '</span><input type="text" data-factory-preset-variable="' + escapeHtml( key ) + '" value="' + escapeHtml( value ) + '"></label>';
+						return '<label><span>' + escapeHtml( presetVariableLabel( key ) ) + '</span><input type="' + escapeHtml( type ) + '" data-factory-preset-variable="' + escapeHtml( key ) + '" value="' + escapeHtml( value ) + '"></label>';
 					} ).join( '' ),
 				'</div>',
 			'</div>',
@@ -2331,7 +2340,7 @@
 
 		if ( group === 'copy' ) {
 			const suggestions = interpretation.safe_preset_variable_suggestions || {};
-			[ 'agency_name', 'hero_title', 'hero_subtitle', 'contact_title', 'contact_intro' ].forEach( function ( key ) {
+			[ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text', 'contact_title', 'contact_intro', 'phone', 'email' ].forEach( function ( key ) {
 				const value = suggestionValue( suggestions[ key ] );
 
 				if ( value ) {
