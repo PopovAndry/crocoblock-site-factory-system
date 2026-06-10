@@ -15,18 +15,14 @@ This is not a finished consumer-grade AI website builder yet. It is an installab
 ## Current package checkpoint
 
 ```text
-Repository: C:\crocoblock-site-factory-system
+Repository: the project repository
 Branch: main
 Current docs checkpoint: 011492f
 ZIP source checkpoint: ad47c6f
 Package: crocoblock-site-factory-v0.2-beta-system-ad47c6f.zip
 ```
 
-The ZIP package was built from:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build-plugin-zip.ps1
-```
+Use the provided beta ZIP package from the release or from the project maintainer.
 
 Confirmed package output:
 
@@ -71,13 +67,13 @@ This mode requires:
 The prepared local runtime for full demo testing is:
 
 ```text
-C:\sf-playable-beta
+your prepared full Real Estate demo WordPress site
 ```
 
 The clean ZIP smoke runtime is:
 
 ```text
-C:\sf-zip-smoke
+your clean WordPress install smoke site
 ```
 
 ## Clean ZIP install smoke
@@ -87,13 +83,13 @@ C:\sf-zip-smoke
 Create a clean Docker runtime, for example:
 
 ```text
-C:\sf-zip-smoke
+your clean WordPress install smoke site
 ```
 
 The runtime should expose WordPress at:
 
 ```text
-http://localhost:8099
+your clean install smoke site URL
 ```
 
 ### Step 2 — Install WordPress
@@ -153,7 +149,7 @@ This confirms the live AI endpoint boundary exists but does not call any provide
 Expected:
 
 ```text
-http://localhost:8099
+your clean install smoke site URL
 StatusCode: 200
 ```
 
@@ -315,7 +311,7 @@ Do not promise:
 
 1. Implement OpenAI Safe Provider Service v1.
 2. Keep provider output restricted to `safe_variables_only`.
-3. Do not reuse legacy AI blueprint generator paths.
+3. Do not allow AI output to bypass safe variables.
 4. Wire dashboard live confirmation to `/ai/interpret-live`.
 5. Capture provider usage metadata.
 6. Run full AI-assisted Real Estate demo smoke.

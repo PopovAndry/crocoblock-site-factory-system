@@ -32,8 +32,8 @@ Property content can be edited in WordPress.
 Use this environment to verify plugin installation and activation:
 
 ```text
-C:\sf-zip-smoke
-http://localhost:8099
+your clean WordPress install smoke site
+your clean install smoke site URL
 ```
 
 Expected:
@@ -50,8 +50,8 @@ Expected:
 Use this environment to test generation:
 
 ```text
-C:\sf-playable-beta
-http://localhost:8098
+your prepared full Real Estate demo WordPress site
+your full demo site URL
 ```
 
 Expected required dependencies:
@@ -346,7 +346,7 @@ FAIL if:
 
 * AI suggestions directly mutate WordPress.
 * AI output bypasses safe variables.
-* Legacy AI blueprint generator is used from dashboard.
+* AI output bypasses safe variables or suggestions auto-apply without review.
 * Provider response is written into normal proof files.
 
 ## 11. Known limitations

@@ -17,7 +17,7 @@ The demo should show that Site Factory can generate a structured WordPress/Croco
 Current source checkpoint:
 
 ```text
-Repository: C:\crocoblock-site-factory-system
+Repository: the project repository
 Branch: main
 Latest documented package checkpoint: ad47c6f / 49175cc
 Package: crocoblock-site-factory-v0.2-beta-system-ad47c6f.zip
@@ -98,7 +98,7 @@ The current AI mode is safe/local/preparatory unless live provider integration i
 For a full Real Estate generation demo, use the prepared playable runtime:
 
 ```text
-C:\sf-playable-beta
+your prepared full Real Estate demo WordPress site
 ```
 
 Required active components:
@@ -116,7 +116,7 @@ Optional components:
 The clean ZIP smoke runtime at:
 
 ```text
-C:\sf-zip-smoke
+your clean WordPress install smoke site
 ```
 
 is useful for install/activation smoke only. It does not include the full Real Estate generation dependencies.
@@ -128,7 +128,7 @@ is useful for install/activation smoke only. It does not include the full Real E
 Open:
 
 ```text
-http://localhost:8098/wp-admin/admin.php?page=factory-control-panel
+your full demo site URL/wp-admin/admin.php?page=factory-control-panel
 ```
 
 Explain:
@@ -418,7 +418,7 @@ Crocoblock Site Factory turns a vertical-specific blueprint into a real WordPres
 
 1. Implement OpenAI Safe Provider Service v1.
 2. Keep provider output restricted to `safe_variables_only`.
-3. Do not reuse legacy AI blueprint generator paths.
+3. Do not allow AI output to bypass safe variables.
 4. Wire dashboard live confirmation to `/ai/interpret-live`.
 5. Capture actual provider usage metadata.
 6. Run AI-assisted Real Estate demo smoke.
