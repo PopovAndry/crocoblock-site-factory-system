@@ -31,6 +31,8 @@ require_once __DIR__ . '/bridge/ownership-evidence-collector.php';
 require_once __DIR__ . '/bridge/plugin-preview-bridge-service.php';
 require_once __DIR__ . '/ai/settings.php';
 require_once __DIR__ . '/ai/prompt-interpreter.php';
+require_once __DIR__ . '/ai/openai-safe-provider.php';
+require_once __DIR__ . '/ai/live-prompt-service.php';
 require_once __DIR__ . '/ai/blueprint-generator.php';
 require_once __DIR__ . '/commands/fix.php';
 require_once __DIR__ . '/commands/dry-run.php';
