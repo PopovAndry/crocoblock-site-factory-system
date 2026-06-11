@@ -33,6 +33,7 @@ require_once __DIR__ . '/ai/settings.php';
 require_once __DIR__ . '/ai/prompt-interpreter.php';
 require_once __DIR__ . '/ai/openai-safe-provider.php';
 require_once __DIR__ . '/ai/live-prompt-service.php';
+require_once __DIR__ . '/ai/site-plan-service.php';
 require_once __DIR__ . '/ai/blueprint-generator.php';
 require_once __DIR__ . '/commands/fix.php';
 require_once __DIR__ . '/commands/dry-run.php';
@@ -53,6 +54,7 @@ require_once __DIR__ . '/api/rest.php';
 require_once __DIR__ . '/api/ai-settings-rest.php';
 require_once __DIR__ . '/api/ai-interpret-rest.php';
 require_once __DIR__ . '/api/ai-live-rest.php';
+require_once __DIR__ . '/api/ai-site-plan-rest.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/dashboard.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/ai-settings.php';
 

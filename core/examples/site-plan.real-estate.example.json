@@ -1,0 +1,82 @@
+{
+  "status": "ok",
+  "provider": "local",
+  "mode": "site_plan_v1",
+  "applies_changes": false,
+  "provider_called": false,
+  "vertical": "real_estate",
+  "confidence": 0.85,
+  "recommended_preset": "real-estate",
+  "site_type": "real_estate",
+  "business_summary": "Kyiv Realty is a real estate business focused on properties in Kyiv.",
+  "pages": [
+    {
+      "slug": "home",
+      "title": "Home",
+      "purpose": "Landing page for the agency and featured properties."
+    },
+    {
+      "slug": "properties",
+      "title": "Properties",
+      "purpose": "Catalog page for property browsing and filters."
+    },
+    {
+      "slug": "contact",
+      "title": "Contact",
+      "purpose": "Lead capture and request viewing contact page."
+    }
+  ],
+  "sections": [
+    {
+      "page": "home",
+      "type": "hero",
+      "purpose": "Introduce the agency and highlight the Kyiv real estate market."
+    },
+    {
+      "page": "home",
+      "type": "featured_properties",
+      "purpose": "Show highlighted property cards from the prepared demo content."
+    },
+    {
+      "page": "properties",
+      "type": "filters_and_listing",
+      "purpose": "Provide deterministic filtering and property listing results."
+    },
+    {
+      "page": "contact",
+      "type": "request_viewing",
+      "purpose": "Capture property lead requests through the supported contact flow."
+    }
+  ],
+  "required_structures": [
+    "Property CPT",
+    "Property meta fields",
+    "Property taxonomy terms",
+    "Property listing",
+    "Single property template",
+    "Navigation menu"
+  ],
+  "crocoblock_components": [
+    "JetEngine required",
+    "JetSmartFilters optional",
+    "JetFormBuilder optional"
+  ],
+  "supported_features": [
+    "Deterministic Real Estate preset",
+    "Property catalog page",
+    "Single property pages",
+    "Contact and request viewing flow",
+    "Prepared property filtering"
+  ],
+  "unsupported_requests": [],
+  "risks": [
+    "JetEngine and the required theme must be available before controlled generation.",
+    "JetSmartFilters and JetFormBuilder are optional and may limit enhanced proof features when missing."
+  ],
+  "next_step": "review_site_plan",
+  "warnings": [
+    "Interpretation only. No blueprint, candidate, or patch was generated.",
+    "No site changes were applied."
+  ],
+  "usage": null
+}
