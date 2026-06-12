@@ -1,0 +1,409 @@
+{
+  "status": "ok",
+  "code": "preview_diff_ready",
+  "message": "Preview/diff ready for review.",
+  "provider": "local",
+  "mode": "preview_diff_v1",
+  "applies_changes": false,
+  "provider_called": false,
+  "vertical": "real_estate",
+  "recommended_preset": "real-estate",
+  "source_site_plan": {
+    "status": "ok",
+    "code": "site_plan_ready",
+    "message": "Site plan ready for review.",
+    "provider": "local",
+    "mode": "site_plan_v1",
+    "applies_changes": false,
+    "provider_called": false,
+    "vertical": "real_estate",
+    "confidence": 0.85,
+    "recommended_preset": "real-estate",
+    "site_type": "real_estate",
+    "business_summary": "Kyiv Realty is a real estate business focused on properties in Kyiv.",
+    "pages": [
+      {
+        "slug": "home",
+        "title": "Home",
+        "purpose": "Landing page for the agency and featured properties."
+      },
+      {
+        "slug": "properties",
+        "title": "Properties",
+        "purpose": "Catalog page for property browsing and filters."
+      },
+      {
+        "slug": "contact",
+        "title": "Contact",
+        "purpose": "Lead capture and request viewing contact page."
+      }
+    ],
+    "sections": [
+      {
+        "page": "home",
+        "type": "hero",
+        "purpose": "Introduce the agency and highlight the Kyiv real estate market."
+      }
+    ],
+    "required_structures": [
+      "Property CPT",
+      "Property meta fields",
+      "Property taxonomy terms",
+      "Property listing",
+      "Single property template",
+      "Navigation menu"
+    ],
+    "crocoblock_components": [
+      "JetEngine required",
+      "JetSmartFilters optional",
+      "JetFormBuilder optional"
+    ],
+    "supported_features": [
+      "Deterministic Real Estate preset",
+      "Property catalog page",
+      "Single property pages",
+      "Contact and request viewing flow"
+    ],
+    "unsupported_requests": [],
+    "risks": [
+      "JetEngine and the required theme must be available before controlled generation."
+    ],
+    "next_step": "review_site_plan",
+    "warnings": [
+      "Interpretation only. No blueprint, candidate, or patch was generated.",
+      "No site changes were applied."
+    ],
+    "usage": null
+  },
+  "source_blueprint_candidate": {
+    "status": "ok",
+    "code": "blueprint_candidate_ready",
+    "message": "Blueprint candidate ready for review.",
+    "provider": "local",
+    "mode": "blueprint_candidate_v1",
+    "applies_changes": false,
+    "provider_called": false,
+    "vertical": "real_estate",
+    "recommended_preset": "real-estate",
+    "site_type": "real_estate",
+    "candidate": {
+      "version": "candidate-v1",
+      "baseline_version": "0.2",
+      "site": {
+        "name": "Kyiv Realty",
+        "language": "en",
+        "permalink": "/%postname%/",
+        "theme": "kava",
+        "style": {
+          "primary": "#0f766e",
+          "accent": "#14b8a6",
+          "background": "#ecfeff"
+        },
+        "navigation": {
+          "menu_name": "Factory Main Menu",
+          "theme_location": "main",
+          "planned_labels": [
+            "Home",
+            "Properties",
+            "Contact"
+          ]
+        },
+        "business_summary": "Kyiv Realty is a real estate business focused on properties in Kyiv.",
+        "front_page_slug": "home",
+        "archive_page_slug": "properties",
+        "contact_page_slug": "contact"
+      },
+      "pages": [
+        {
+          "key": "home",
+          "slug": "home",
+          "title": "Kyiv Realty",
+          "front_page": true,
+          "experimental": false,
+          "planned_sections": [
+            {
+              "type": "hero",
+              "title": "Kyiv Realty",
+              "purpose": "Introduce the business and primary call to action."
+            }
+          ],
+          "purpose": ""
+        },
+        {
+          "key": "archive",
+          "slug": "properties",
+          "title": "Properties",
+          "front_page": false,
+          "experimental": false,
+          "planned_sections": [],
+          "purpose": ""
+        },
+        {
+          "key": "contact",
+          "slug": "contact",
+          "title": "Contact Kyiv Realty",
+          "front_page": false,
+          "experimental": false,
+          "planned_sections": [],
+          "purpose": ""
+        }
+      ],
+      "cpt": [
+        {
+          "slug": "property",
+          "label": "Properties",
+          "singular": "Property",
+          "supports": [
+            "title",
+            "editor",
+            "thumbnail"
+          ]
+        }
+      ],
+      "meta_fields": [
+        {
+          "post_type": "property",
+          "key": "price",
+          "type": "number",
+          "label": "Price"
+        }
+      ],
+      "taxonomies": [
+        {
+          "slug": "purpose",
+          "label": "Purposes",
+          "post_type": "property",
+          "term_count": 2,
+          "sample_terms": [
+            "Sale",
+            "Rent"
+          ]
+        }
+      ],
+      "content_model": {
+        "entity": "property",
+        "items_planned": 30,
+        "featured_image_strategy": "bundled_demo_pool",
+        "sample_titles": [
+          "Candidate sample property"
+        ]
+      },
+      "queries": [
+        {
+          "slug": "real_estate_properties",
+          "label": "Real Estate Properties",
+          "provider": "jetengine",
+          "type": "posts",
+          "post_type": "property",
+          "posts_per_page": 30,
+          "native_filters": false
+        }
+      ],
+      "listings": [
+        {
+          "slug": "property_card",
+          "title": "Property Card",
+          "post_type": "property",
+          "query": "real_estate_properties",
+          "layout_items": 9
+        }
+      ],
+      "templates": [
+        {
+          "entity": "property",
+          "layout_items": 9,
+          "layout_types": [
+            "meta",
+            "content"
+          ]
+        }
+      ],
+      "forms": [
+        {
+          "slug": "request_viewing",
+          "title": "Request a Viewing",
+          "enabled": true,
+          "provider": "auto",
+          "fallback_email": "hello@example.com"
+        }
+      ],
+      "filters": [
+        {
+          "slug": "property_purpose",
+          "label": "Purpose",
+          "provider": "jetsmartfilters",
+          "type": "select",
+          "source": "taxonomy",
+          "taxonomy": "purpose",
+          "query_var": "purpose",
+          "required": false
+        }
+      ],
+      "assets": {
+        "image_strategy": "bundled_demo_pool",
+        "image_mode": "round_robin",
+        "image_pools": [
+          {
+            "pool": "Apartment",
+            "count": 10,
+            "source": "bundled_demo_pool"
+          }
+        ]
+      },
+      "validation_expectations": [
+        "Required runtime dependencies must be available before controlled generate.",
+        "Factory-managed pages should render Home, Properties, and Contact correctly."
+      ]
+    },
+    "supported_sections": [
+      "site",
+      "theme",
+      "plugins",
+      "pages",
+      "cpt",
+      "meta_fields",
+      "taxonomies",
+      "content_model",
+      "queries",
+      "listings",
+      "templates",
+      "forms",
+      "filters",
+      "assets",
+      "validation_expectations"
+    ],
+    "unsupported_requests": [],
+    "risks": [
+      "Candidate review does not validate runtime dependencies or apply behavior by itself."
+    ],
+    "warnings": [
+      "Candidate only. No blueprint was applied.",
+      "No site changes were made."
+    ],
+    "next_step": "review_blueprint_candidate",
+    "usage": null
+  },
+  "preview": {
+    "summary": "This will prepare Kyiv Realty as a Real Estate site based on the supported deterministic baseline.",
+    "readiness": "review_required",
+    "can_generate_later": true
+  },
+  "diff_summary": {
+    "creates": 8,
+    "updates": 3,
+    "skips": 2,
+    "warnings": 3,
+    "unsupported": 0,
+    "note": "This is a proposal preview only. Runtime diff will be computed during controlled generate or dry-run later."
+  },
+  "create_preview": [
+    {
+      "type": "page",
+      "label": "Kyiv Realty",
+      "source": "candidate",
+      "message": "Create the Kyiv Realty page as part of the generated Real Estate site."
+    },
+    {
+      "type": "page",
+      "label": "Properties",
+      "source": "candidate",
+      "message": "Create the Properties page as part of the generated Real Estate site."
+    },
+    {
+      "type": "page",
+      "label": "Contact Kyiv Realty",
+      "source": "candidate",
+      "message": "Create the Contact Kyiv Realty page as part of the generated Real Estate site."
+    },
+    {
+      "type": "cpt",
+      "label": "Properties",
+      "source": "candidate",
+      "message": "Prepare the Properties content structure for generated property content."
+    },
+    {
+      "type": "taxonomy",
+      "label": "Purposes",
+      "source": "candidate",
+      "message": "Prepare the Purposes taxonomy for property browsing and filtering."
+    },
+    {
+      "type": "listing",
+      "label": "Property Card",
+      "source": "candidate",
+      "message": "Prepare the Property Card listing for deterministic property cards."
+    },
+    {
+      "type": "template",
+      "label": "Property template",
+      "source": "candidate",
+      "message": "Prepare the single property template for the Real Estate site."
+    },
+    {
+      "type": "form",
+      "label": "Request a Viewing",
+      "source": "candidate",
+      "message": "Prepare the Request a Viewing form flow when the optional form runtime is available."
+    }
+  ],
+  "update_preview": [
+    {
+      "type": "site",
+      "label": "Site identity",
+      "source": "candidate",
+      "message": "Use \"Kyiv Realty\" as the planned site identity for the generated Real Estate experience."
+    },
+    {
+      "type": "content",
+      "label": "Business summary",
+      "source": "site_plan",
+      "message": "Use the planned business summary: Kyiv Realty is a real estate business focused on properties in Kyiv."
+    },
+    {
+      "type": "runtime",
+      "label": "Crocoblock runtime",
+      "source": "site_plan",
+      "message": "Plan around these Crocoblock components: JetEngine required, JetSmartFilters optional, JetFormBuilder optional."
+    }
+  ],
+  "skip_preview": [
+    {
+      "type": "skip",
+      "label": "Plugins",
+      "source": "candidate",
+      "message": "This preview describes plugins conceptually but does not compute a runtime diff for it yet."
+    },
+    {
+      "type": "skip",
+      "label": "Validation Expectations",
+      "source": "candidate",
+      "message": "This preview describes validation expectations conceptually but does not compute a runtime diff for it yet."
+    }
+  ],
+  "unsupported_requests": [],
+  "optional_features": [
+    {
+      "feature": "JetSmartFilters",
+      "status": "optional",
+      "note": "Optional filtering enhancements remain available when the runtime dependency is installed."
+    },
+    {
+      "feature": "JetFormBuilder",
+      "status": "optional",
+      "note": "Optional form enhancements remain available when the runtime dependency is installed."
+    }
+  ],
+  "risks": [
+    "Runtime dependency status is not verified by this preview endpoint.",
+    "This preview does not compute a live WordPress diff or ownership check by itself.",
+    "Candidate review does not validate runtime dependencies or apply behavior by itself.",
+    "JetEngine and the required theme must be available before controlled generation."
+  ],
+  "warnings": [
+    "Preview only. No site changes were made.",
+    "No BlueprintPatch was generated.",
+    "Runtime diff will be computed during controlled generate or dry-run later."
+  ],
+  "next_step": "review_preview_diff",
+  "usage": null
+}
