@@ -1,0 +1,142 @@
+{
+  "status": "ok",
+  "code": "generate_gate_ready",
+  "message": "Controlled generation gate is ready for review.",
+  "provider": "local",
+  "mode": "generate_gate_v1",
+  "applies_changes": false,
+  "provider_called": false,
+  "vertical": "real_estate",
+  "recommended_preset": "real-estate",
+  "can_generate": true,
+  "requires_user_confirmation": true,
+  "confirmation_required_phrase": "GENERATE REAL ESTATE DEMO",
+  "generation_target": {
+    "type": "preset",
+    "preset": "real-estate",
+    "operation": "controlled_generate_later"
+  },
+  "source_preview_diff": {
+    "status": "ok",
+    "code": "preview_diff_ready",
+    "message": "Preview/diff ready for review.",
+    "vertical": "real_estate",
+    "recommended_preset": "real-estate",
+    "preview": {
+      "summary": "This will prepare Kyiv Realty as a Real Estate site based on the supported deterministic baseline.",
+      "readiness": "review_required",
+      "can_generate_later": true
+    },
+    "diff_summary": {
+      "creates": 8,
+      "updates": 3,
+      "skips": 2,
+      "warnings": 3,
+      "unsupported": 0,
+      "note": "This is a proposal preview only. Runtime diff will be computed during controlled generate or dry-run later."
+    },
+    "create_preview": [
+      {
+        "type": "page",
+        "label": "Kyiv Realty",
+        "source": "candidate",
+        "message": "Create the Kyiv Realty page as part of the generated Real Estate site."
+      }
+    ],
+    "update_preview": [
+      {
+        "type": "site",
+        "label": "Site identity",
+        "source": "candidate",
+        "message": "Use \"Kyiv Realty\" as the planned site identity for the generated Real Estate experience."
+      }
+    ],
+    "skip_preview": [
+      {
+        "type": "skip",
+        "label": "Plugins",
+        "source": "candidate",
+        "message": "This preview describes plugins conceptually but does not compute a runtime diff for it yet."
+      }
+    ],
+    "unsupported_requests": [],
+    "optional_features": [
+      {
+        "feature": "JetSmartFilters",
+        "status": "optional",
+        "note": "Optional filtering enhancements remain available when the runtime dependency is installed."
+      },
+      {
+        "feature": "JetFormBuilder",
+        "status": "optional",
+        "note": "Optional form enhancements remain available when the runtime dependency is installed."
+      }
+    ],
+    "risks": [
+      "Runtime dependency status is not verified by this preview endpoint."
+    ],
+    "warnings": [
+      "Preview only. No site changes were made.",
+      "No BlueprintPatch was generated."
+    ],
+    "next_step": "review_preview_diff"
+  },
+  "required_dependencies": [
+    {
+      "name": "WordPress",
+      "required": true,
+      "note": "A working WordPress runtime is required for controlled generate later."
+    },
+    {
+      "name": "Kava theme",
+      "required": true,
+      "note": "The deterministic Real Estate preset expects the supported theme runtime."
+    },
+    {
+      "name": "JetEngine",
+      "required": true,
+      "note": "JetEngine provides the required Real Estate structures."
+    }
+  ],
+  "optional_dependencies": [
+    {
+      "name": "JetSmartFilters",
+      "required": false,
+      "note": "Optional filtering enhancements can be applied when this plugin is available."
+    },
+    {
+      "name": "JetFormBuilder",
+      "required": false,
+      "note": "Optional form enhancements can be applied when this plugin is available."
+    }
+  ],
+  "ownership_checks": [
+    "Factory-managed content must be safe to update before controlled generate later.",
+    "User-modified generated content must be preserved or blocked before controlled generate later.",
+    "User-created unrelated content must remain untouched by the controlled generate flow."
+  ],
+  "preflight_checks": [
+    "preview/diff review",
+    "dependency check",
+    "ownership check",
+    "dry-run proof",
+    "confirmation phrase"
+  ],
+  "blocking_reasons": [],
+  "warnings": [
+    "Gate only. No site changes were made.",
+    "Actual generation requires explicit confirmation."
+  ],
+  "risks": [
+    "This gate does not execute runtime dependency, ownership, or doctor checks by itself.",
+    "Controlled generate must still run runtime preflight checks before any WordPress mutation later."
+  ],
+  "post_generate_checks": [
+    "run validation",
+    "run doctor",
+    "refresh latest run proof",
+    "open generated Home, Properties, and Contact pages"
+  ],
+  "next_step": "confirm_controlled_generate",
+  "usage": null
+}

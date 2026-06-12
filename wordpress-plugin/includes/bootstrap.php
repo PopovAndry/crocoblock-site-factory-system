@@ -36,6 +36,7 @@ require_once __DIR__ . '/ai/live-prompt-service.php';
 require_once __DIR__ . '/ai/site-plan-service.php';
 require_once __DIR__ . '/ai/blueprint-candidate-service.php';
 require_once __DIR__ . '/ai/preview-diff-service.php';
+require_once __DIR__ . '/ai/generate-gate-service.php';
 require_once __DIR__ . '/ai/blueprint-generator.php';
 require_once __DIR__ . '/commands/fix.php';
 require_once __DIR__ . '/commands/dry-run.php';
@@ -59,6 +60,7 @@ require_once __DIR__ . '/api/ai-live-rest.php';
 require_once __DIR__ . '/api/ai-site-plan-rest.php';
 require_once __DIR__ . '/api/ai-blueprint-candidate-rest.php';
 require_once __DIR__ . '/api/ai-preview-diff-rest.php';
+require_once __DIR__ . '/api/ai-generate-gate-rest.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/dashboard.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/ai-settings.php';
 
