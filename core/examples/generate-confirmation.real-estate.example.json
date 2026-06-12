@@ -1,0 +1,193 @@
+{
+  "status": "ok",
+  "code": "generate_confirmation_ready",
+  "message": "Final confirmation evidence is ready for review.",
+  "provider": "local",
+  "mode": "generate_confirmation_v1",
+  "applies_changes": false,
+  "provider_called": false,
+  "vertical": "real_estate",
+  "recommended_preset": "real-estate",
+  "source_generate_preflight": {
+    "status": "ok",
+    "code": "generate_preflight_ready",
+    "message": "Controlled generation preflight is ready for review.",
+    "vertical": "real_estate",
+    "recommended_preset": "real-estate",
+    "preflight_ready": true,
+    "can_proceed_to_confirmation": true,
+    "requires_user_confirmation": true,
+    "confirmation_required_phrase": "GENERATE REAL ESTATE DEMO"
+  },
+  "confirmation_ready": true,
+  "can_proceed_to_controlled_generate_later": true,
+  "requires_user_confirmation": true,
+  "confirmation_required_phrase": "GENERATE REAL ESTATE DEMO",
+  "confirmation_instructions": {
+    "type": "exact_phrase",
+    "required_phrase": "GENERATE REAL ESTATE DEMO",
+    "note": "A future controlled generate endpoint must require this exact phrase again."
+  },
+  "runtime_evidence": {
+    "pages": 6,
+    "properties": 30,
+    "attachments": 22,
+    "active_theme": "Kava (kava)",
+    "plugins": [
+      {
+        "name": "Site Factory plugin",
+        "active": true
+      },
+      {
+        "name": "JetEngine",
+        "active": true
+      },
+      {
+        "name": "JetSmartFilters",
+        "active": true
+      },
+      {
+        "name": "JetFormBuilder",
+        "active": true
+      }
+    ],
+    "observed_at": "2026-06-13 10:40:00"
+  },
+  "runtime_diff_evidence": {
+    "target_preset": "real-estate",
+    "expected_vertical": "real_estate",
+    "expected_pages": [
+      "Kyiv Realty",
+      "Properties",
+      "Contact Kyiv Realty"
+    ],
+    "expected_entity_types": [
+      "page",
+      "cpt",
+      "taxonomy",
+      "listing",
+      "template",
+      "form"
+    ],
+    "expected_managed_objects_summary": {
+      "creates": 8,
+      "updates": 3,
+      "skips": 2
+    },
+    "current_counts": {
+      "pages": 6,
+      "properties": 30,
+      "attachments": 22
+    },
+    "bridge_status": "warning",
+    "bridge_runtime_status": "warning",
+    "bridge_apply_gate_status": "warning",
+    "bridge_can_apply": false,
+    "bridge_runtime_mutation": false,
+    "bridge_dry_run_summary": {
+      "create": 8,
+      "update": 3,
+      "delete": 0,
+      "skip": 2,
+      "warning": 0,
+      "error": 0
+    },
+    "final_runtime_diff_must_be_recomputed_before_apply": true,
+    "no_patch_operations_generated": true,
+    "no_apply_performed": true,
+    "warnings": [
+      "Runtime evidence requires review."
+    ]
+  },
+  "ownership_evidence": {
+    "status": "ok",
+    "blocking_conflicts": [],
+    "notes": [
+      "Menu and taxonomy ownership should be checked again during final runtime preflight before apply."
+    ],
+    "factory_managed_total": 33,
+    "user_modified_total": 0,
+    "locked_total": 0,
+    "counts": {
+      "pages_managed": 3,
+      "pages_user_modified": 0,
+      "pages_locked": 0,
+      "properties_managed": 30,
+      "properties_user_modified": 0,
+      "properties_locked": 0
+    },
+    "must_recheck_before_apply": true
+  },
+  "dependency_evidence": {
+    "ready": true,
+    "summary": "Ready to generate.",
+    "required": [
+      {
+        "key": "kava",
+        "label": "Kava theme",
+        "required": true,
+        "status": "active",
+        "message": "Kava theme is active.",
+        "installed": true,
+        "active": true
+      },
+      {
+        "key": "jet_engine",
+        "label": "JetEngine",
+        "required": true,
+        "status": "active",
+        "message": "JetEngine is active.",
+        "installed": true,
+        "active": true
+      }
+    ],
+    "optional": [
+      {
+        "key": "jetsmartfilters",
+        "label": "JetSmartFilters",
+        "required": false,
+        "status": "active",
+        "message": "Native filters proof is available.",
+        "installed": true,
+        "active": true
+      },
+      {
+        "key": "jetformbuilder",
+        "label": "JetFormBuilder",
+        "required": false,
+        "status": "active",
+        "message": "Request Viewing form enhancements are available.",
+        "installed": true,
+        "active": true
+      }
+    ],
+    "blocking": [],
+    "warnings": [],
+    "site_factory_plugin": {
+      "name": "Site Factory plugin",
+      "required": true,
+      "active": true,
+      "status": "active",
+      "note": "Site Factory plugin is active in the current runtime."
+    },
+    "must_recheck_before_apply": true
+  },
+  "final_recheck_required": true,
+  "blocking_reasons": [],
+  "warnings": [
+    "Confirmation evidence only. No site changes were made.",
+    "Actual controlled generation must recompute dependency, ownership, and runtime diff checks."
+  ],
+  "risks": [
+    "This endpoint does not apply or guarantee that a later apply remains safe without rechecking runtime state.",
+    "Final dependency, ownership, and runtime diff evidence must be recomputed immediately inside the future controlled apply endpoint."
+  ],
+  "next_step": "controlled_generate_requires_exact_confirmation",
+  "post_generate_checks": [
+    "run validation",
+    "run doctor",
+    "refresh latest run proof",
+    "open generated Home, Properties, and Contact pages"
+  ],
+  "usage": null
+}
