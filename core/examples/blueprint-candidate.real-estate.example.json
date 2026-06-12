@@ -1,0 +1,258 @@
+{
+  "status": "ok",
+  "code": "blueprint_candidate_ready",
+  "message": "Blueprint candidate ready for review.",
+  "provider": "local",
+  "mode": "blueprint_candidate_v1",
+  "applies_changes": false,
+  "provider_called": false,
+  "vertical": "real_estate",
+  "recommended_preset": "real-estate",
+  "site_type": "real_estate",
+  "source_site_plan": {
+    "status": "ok",
+    "code": "site_plan_ready",
+    "message": "Site plan ready for review.",
+    "provider": "local",
+    "mode": "site_plan_v1",
+    "applies_changes": false,
+    "provider_called": false,
+    "vertical": "real_estate",
+    "confidence": 0.85,
+    "recommended_preset": "real-estate",
+    "site_type": "real_estate",
+    "business_summary": "Kyiv Realty is a real estate business focused on properties in Kyiv.",
+    "pages": [
+      {
+        "slug": "home",
+        "title": "Home",
+        "purpose": "Landing page for the agency and featured properties."
+      },
+      {
+        "slug": "properties",
+        "title": "Properties",
+        "purpose": "Catalog page for property browsing and filters."
+      },
+      {
+        "slug": "contact",
+        "title": "Contact",
+        "purpose": "Lead capture and request viewing contact page."
+      }
+    ],
+    "sections": [
+      {
+        "page": "home",
+        "type": "hero",
+        "purpose": "Introduce the agency and highlight the Kyiv real estate market."
+      }
+    ],
+    "required_structures": [
+      "Property CPT",
+      "Property meta fields",
+      "Property taxonomy terms",
+      "Property listing",
+      "Single property template",
+      "Navigation menu"
+    ],
+    "crocoblock_components": [
+      "JetEngine required",
+      "JetSmartFilters optional",
+      "JetFormBuilder optional"
+    ],
+    "supported_features": [
+      "Deterministic Real Estate preset",
+      "Property catalog page",
+      "Single property pages",
+      "Contact and request viewing flow"
+    ],
+    "unsupported_requests": [],
+    "risks": [
+      "JetEngine and the required theme must be available before controlled generation."
+    ],
+    "next_step": "review_site_plan",
+    "warnings": [
+      "Interpretation only. No blueprint, candidate, or patch was generated.",
+      "No site changes were applied."
+    ],
+    "usage": null
+  },
+  "candidate": {
+    "version": "candidate-v1",
+    "baseline_version": "0.2",
+    "site": {
+      "name": "Kyiv Realty",
+      "language": "en",
+      "permalink": "/%postname%/",
+      "theme": "kava",
+      "style": {
+        "primary": "#0f766e",
+        "accent": "#14b8a6",
+        "background": "#ecfeff"
+      },
+      "navigation": {
+        "menu_name": "Factory Main Menu",
+        "theme_location": "main",
+        "planned_labels": [
+          "Home",
+          "Properties",
+          "Contact"
+        ]
+      },
+      "business_summary": "Kyiv Realty is a real estate business focused on properties in Kyiv.",
+      "front_page_slug": "home",
+      "archive_page_slug": "properties",
+      "contact_page_slug": "contact"
+    },
+    "pages": [
+      {
+        "key": "home",
+        "slug": "home",
+        "title": "Kyiv Realty",
+        "front_page": true,
+        "experimental": false,
+        "planned_sections": [
+          {
+            "page": "",
+            "type": "hero",
+            "title": "Kyiv Turquoise Realty",
+            "purpose": "Introduce the business and primary call to action."
+          }
+        ],
+        "purpose": ""
+      }
+    ],
+    "cpt": [
+      {
+        "slug": "property",
+        "label": "Properties",
+        "singular": "Property",
+        "supports": [
+          "title",
+          "editor",
+          "thumbnail"
+        ]
+      }
+    ],
+    "meta_fields": [
+      {
+        "post_type": "property",
+        "key": "price",
+        "type": "number",
+        "label": "Price"
+      }
+    ],
+    "taxonomies": [
+      {
+        "slug": "purpose",
+        "label": "Purposes",
+        "post_type": "property",
+        "term_count": 2,
+        "sample_terms": [
+          "Sale",
+          "Rent"
+        ]
+      }
+    ],
+    "content_model": {
+      "entity": "property",
+      "items_planned": 30,
+      "featured_image_strategy": "bundled_demo_pool",
+      "sample_titles": [
+        "Candidate sample property"
+      ]
+    },
+    "queries": [
+      {
+        "slug": "real_estate_properties",
+        "label": "Real Estate Properties",
+        "provider": "jetengine",
+        "type": "posts",
+        "post_type": "property",
+        "posts_per_page": 30,
+        "native_filters": false
+      }
+    ],
+    "listings": [
+      {
+        "slug": "property_card",
+        "title": "Property Card",
+        "post_type": "property",
+        "query": "real_estate_properties",
+        "layout_items": 9
+      }
+    ],
+    "templates": [
+      {
+        "entity": "property",
+        "layout_items": 9,
+        "layout_types": [
+          "meta",
+          "content"
+        ]
+      }
+    ],
+    "forms": [
+      {
+        "slug": "request_viewing",
+        "title": "Request a Viewing",
+        "enabled": true,
+        "provider": "auto",
+        "fallback_email": "hello@example.com"
+      }
+    ],
+    "filters": [
+      {
+        "slug": "property_purpose",
+        "label": "Purpose",
+        "provider": "jetsmartfilters",
+        "type": "select",
+        "source": "taxonomy",
+        "taxonomy": "purpose",
+        "query_var": "purpose",
+        "required": false
+      }
+    ],
+    "assets": {
+      "image_strategy": "bundled_demo_pool",
+      "image_mode": "round_robin",
+      "image_pools": [
+        {
+          "pool": "Apartment",
+          "count": 10,
+          "source": "bundled_demo_pool"
+        }
+      ]
+    },
+    "validation_expectations": [
+      "Required runtime dependencies must be available before controlled generate.",
+      "Factory-managed pages should render Home, Properties, and Contact correctly."
+    ]
+  },
+  "supported_sections": [
+    "site",
+    "theme",
+    "plugins",
+    "pages",
+    "cpt",
+    "meta_fields",
+    "taxonomies",
+    "content_model",
+    "queries",
+    "listings",
+    "templates",
+    "forms",
+    "filters",
+    "assets",
+    "validation_expectations"
+  ],
+  "unsupported_requests": [],
+  "risks": [
+    "Candidate review does not validate runtime dependencies or apply behavior by itself."
+  ],
+  "warnings": [
+    "Candidate only. No blueprint was applied.",
+    "No site changes were made."
+  ],
+  "next_step": "review_blueprint_candidate",
+  "usage": null
+}
