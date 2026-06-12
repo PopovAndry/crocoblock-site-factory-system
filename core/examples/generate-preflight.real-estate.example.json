@@ -1,0 +1,250 @@
+{
+  "status": "ok",
+  "code": "generate_preflight_ready",
+  "message": "Controlled generation preflight is ready for review.",
+  "provider": "local",
+  "mode": "generate_preflight_v1",
+  "applies_changes": false,
+  "provider_called": false,
+  "vertical": "real_estate",
+  "recommended_preset": "real-estate",
+  "source_generate_gate": {
+    "status": "ok",
+    "code": "generate_gate_ready",
+    "message": "Controlled generation gate is ready for review.",
+    "vertical": "real_estate",
+    "recommended_preset": "real-estate",
+    "can_generate": true,
+    "requires_user_confirmation": true,
+    "confirmation_required_phrase": "GENERATE REAL ESTATE DEMO",
+    "generation_target": {
+      "type": "preset",
+      "preset": "real-estate",
+      "operation": "controlled_generate_later"
+    },
+    "source_preview_diff": {
+      "status": "ok",
+      "code": "preview_diff_ready",
+      "message": "Preview/diff ready for review.",
+      "vertical": "real_estate",
+      "recommended_preset": "real-estate",
+      "preview": {
+        "summary": "This will prepare Kyiv Realty as a Real Estate site based on the supported deterministic baseline.",
+        "readiness": "review_required",
+        "can_generate_later": true
+      },
+      "diff_summary": {
+        "creates": 8,
+        "updates": 3,
+        "skips": 2,
+        "warnings": 3,
+        "unsupported": 0,
+        "note": "This is a proposal preview only. Runtime diff will be computed during controlled generate or dry-run later."
+      }
+    },
+    "required_dependencies": [
+      {
+        "name": "WordPress",
+        "required": true,
+        "note": "A working WordPress runtime is required for controlled generate later."
+      },
+      {
+        "name": "Kava theme",
+        "required": true,
+        "note": "The deterministic Real Estate preset expects the supported theme runtime."
+      },
+      {
+        "name": "JetEngine",
+        "required": true,
+        "note": "JetEngine provides the required Real Estate structures."
+      }
+    ],
+    "optional_dependencies": [
+      {
+        "name": "JetSmartFilters",
+        "required": false,
+        "note": "Optional filtering enhancements can be applied when this plugin is available."
+      },
+      {
+        "name": "JetFormBuilder",
+        "required": false,
+        "note": "Optional form enhancements can be applied when this plugin is available."
+      }
+    ],
+    "ownership_checks": [
+      "Factory-managed content must be safe to update before controlled generate later.",
+      "User-modified generated content must be preserved or blocked before controlled generate later."
+    ],
+    "preflight_checks": [
+      "preview/diff review",
+      "dependency check",
+      "ownership check",
+      "dry-run proof",
+      "confirmation phrase"
+    ],
+    "blocking_reasons": [],
+    "warnings": [
+      "Gate only. No site changes were made.",
+      "Actual generation requires explicit confirmation."
+    ],
+    "risks": [
+      "This gate does not execute runtime dependency, ownership, or doctor checks by itself."
+    ],
+    "post_generate_checks": [
+      "run validation",
+      "run doctor",
+      "refresh latest run proof",
+      "open generated Home, Properties, and Contact pages"
+    ],
+    "next_step": "confirm_controlled_generate"
+  },
+  "preflight_ready": true,
+  "can_proceed_to_confirmation": true,
+  "requires_user_confirmation": true,
+  "confirmation_required_phrase": "GENERATE REAL ESTATE DEMO",
+  "dependency_status": {
+    "ready": true,
+    "summary": "Ready to generate.",
+    "required": [
+      {
+        "key": "kava",
+        "label": "Kava theme",
+        "required": true,
+        "status": "active",
+        "message": "Kava theme is active.",
+        "installed": true,
+        "active": true
+      },
+      {
+        "key": "jet_engine",
+        "label": "JetEngine",
+        "required": true,
+        "status": "active",
+        "message": "JetEngine is active.",
+        "installed": true,
+        "active": true
+      }
+    ],
+    "optional": [
+      {
+        "key": "jetsmartfilters",
+        "label": "JetSmartFilters",
+        "required": false,
+        "status": "active",
+        "message": "Native filters proof is available.",
+        "installed": true,
+        "active": true
+      },
+      {
+        "key": "jetformbuilder",
+        "label": "JetFormBuilder",
+        "required": false,
+        "status": "active",
+        "message": "Request Viewing form enhancements are available.",
+        "installed": true,
+        "active": true
+      }
+    ],
+    "blocking": [],
+    "warnings": [],
+    "site_factory_plugin": {
+      "name": "Site Factory plugin",
+      "required": true,
+      "active": true,
+      "status": "active",
+      "note": "Site Factory plugin is active in the current runtime."
+    }
+  },
+  "ownership_status": {
+    "status": "ok",
+    "blocking_conflicts": [],
+    "notes": [
+      "Menu and taxonomy ownership should be checked again during final runtime preflight before apply."
+    ],
+    "factory_managed_total": 33,
+    "user_modified_total": 0,
+    "locked_total": 0,
+    "counts": {
+      "pages_managed": 3,
+      "pages_user_modified": 0,
+      "pages_locked": 0,
+      "properties_managed": 30,
+      "properties_user_modified": 0,
+      "properties_locked": 0
+    }
+  },
+  "current_runtime_snapshot": {
+    "pages": 6,
+    "properties": 30,
+    "attachments": 22,
+    "active_theme": "Kava (kava)",
+    "plugins": [
+      {
+        "name": "Site Factory plugin",
+        "active": true
+      },
+      {
+        "name": "JetEngine",
+        "active": true
+      },
+      {
+        "name": "JetSmartFilters",
+        "active": true
+      },
+      {
+        "name": "JetFormBuilder",
+        "active": true
+      }
+    ]
+  },
+  "dry_run_proof_preview": {
+    "target_preset": "real-estate",
+    "target_vertical": "real_estate",
+    "planned_pages": [
+      "Kyiv Realty",
+      "Properties",
+      "Contact Kyiv Realty"
+    ],
+    "planned_entity_types": [
+      "page",
+      "cpt",
+      "taxonomy",
+      "listing",
+      "template",
+      "form"
+    ],
+    "planned_summary": {
+      "creates": 8,
+      "updates": 3,
+      "skips": 2
+    },
+    "dependency_checks": {
+      "required_ready": true,
+      "blocking_count": 0
+    },
+    "ownership_checks": {
+      "status": "ok",
+      "blocking_conflicts": 0
+    },
+    "runtime_diff_required_before_apply": true,
+    "final_confirmation_required": true,
+    "note": "This preflight summarizes what must be shown before controlled generate. A final runtime diff is still required immediately before apply."
+  },
+  "blocking_reasons": [],
+  "warnings": [
+    "Preflight only. No site changes were made.",
+    "Actual controlled generation requires final confirmation and runtime apply."
+  ],
+  "risks": [
+    "Dependency and ownership status must be checked again immediately before real apply.",
+    "This preflight report is read-only and does not compute a final runtime diff or execute doctor/validation."
+  ],
+  "post_generate_checks": [
+    "run validation",
+    "run doctor",
+    "refresh latest run proof",
+    "open generated Home, Properties, and Contact pages"
+  ],
+  "next_step": "confirm_controlled_generate_after_preflight",
+  "usage": null
+}
