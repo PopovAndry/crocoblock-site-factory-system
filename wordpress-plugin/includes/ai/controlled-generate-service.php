@@ -149,6 +149,63 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 		);
 	}
 
+	$server_confirmation = factory_ai_build_generate_confirmation(
+		[
+			'prompt'    => $prompt,
+			'site_type' => $requested_site_type,
+			'context'   => $context,
+		]
+	);
+	$vertical = factory_ai_controlled_generate_normalize_site_type(
+		(string) (
+			$server_confirmation['vertical']
+			?? $requested_site_type
+			?? 'unknown'
+		)
+	);
+	$recommended_preset = sanitize_text_field( (string) ( $server_confirmation['recommended_preset'] ?? '' ) );
+	$server_confirmation_ready = ! empty( $server_confirmation['confirmation_ready'] );
+	$source_generate_preflight = is_array( $server_confirmation['source_generate_preflight'] ?? null ) ? $server_confirmation['source_generate_preflight'] : [];
+	$server_preflight_ready = ! empty( $source_generate_preflight['preflight_ready'] );
+	$runtime_snapshot_before = factory_ai_controlled_generate_normalize_runtime_snapshot(
+		$server_confirmation['runtime_evidence'] ?? []
+	);
+	$dependency_recheck = factory_ai_controlled_generate_normalize_dependency_evidence(
+		$server_confirmation['dependency_evidence'] ?? []
+	);
+	$ownership_recheck = factory_ai_controlled_generate_normalize_ownership_evidence(
+		$server_confirmation['ownership_evidence'] ?? []
+	);
+	$runtime_diff_recheck = factory_ai_controlled_generate_normalize_runtime_diff_evidence(
+		$server_confirmation['runtime_diff_evidence'] ?? []
+	);
+	$confirmation_required_phrase = factory_ai_controlled_generate_clamp_text(
+		$server_confirmation['confirmation_required_phrase'] ?? 'GENERATE REAL ESTATE DEMO',
+		80
+	);
+	$exact_confirmation_matched = $confirmation_phrase === $confirmation_required_phrase;
+	$common_warnings = array_values(
+		array_unique(
+			array_merge(
+				[
+					'Client-supplied readiness flags are ignored; controlled generate readiness is recomputed on the server.',
+					'Authoritative execution readiness is rebuilt from prompt, safe context, and site type only.',
+				],
+				factory_ai_normalize_string_list( $server_confirmation['warnings'] ?? [], 220 )
+			)
+		)
+	);
+	$common_risks = array_values(
+		array_unique(
+			array_merge(
+				[
+					'This endpoint is the first mutation boundary and therefore fails closed by default.',
+				],
+				factory_ai_controlled_generate_text_list( $server_confirmation['risks'] ?? [], 220 )
+			)
+		)
+	);
+
 	if ( 'real_estate' !== $vertical || 'real-estate' !== $recommended_preset ) {
 		return factory_ai_controlled_generate_response(
 			[
@@ -301,56 +358,317 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 		);
 	}
 
+	$dependency_status_now = function_exists( 'factory_ai_generate_preflight_dependency_status' )
+		? factory_ai_generate_preflight_dependency_status()
+		: [];
+	$dependency_recheck = factory_ai_controlled_generate_normalize_dependency_evidence(
+		function_exists( 'factory_ai_generate_confirmation_dependency_evidence' )
+			? factory_ai_generate_confirmation_dependency_evidence( $dependency_status_now )
+			: $dependency_status_now
+	);
+	$ownership_status_now = function_exists( 'factory_ai_generate_preflight_ownership_status' )
+		? factory_ai_generate_preflight_ownership_status( $vertical, $recommended_preset )
+		: [];
+	$ownership_recheck = factory_ai_controlled_generate_normalize_ownership_evidence(
+		function_exists( 'factory_ai_generate_confirmation_ownership_evidence' )
+			? factory_ai_generate_confirmation_ownership_evidence( $ownership_status_now )
+			: $ownership_status_now
+	);
+	$runtime_snapshot_before = factory_ai_controlled_generate_capture_runtime_snapshot( $dependency_status_now );
+	$final_blocking_reasons = [];
+
+	if ( empty( $dependency_recheck['ready'] ) ) {
+		$final_blocking_reasons[] = 'Required runtime dependencies are not ready for controlled generate.';
+	}
+
+	foreach ( factory_ai_controlled_generate_text_list( $dependency_recheck['blocking'] ?? [], 220 ) as $reason ) {
+		$final_blocking_reasons[] = $reason;
+	}
+
+	foreach ( factory_ai_controlled_generate_text_list( $ownership_recheck['blocking_conflicts'] ?? [], 220 ) as $reason ) {
+		$final_blocking_reasons[] = $reason;
+	}
+
+	$final_blocking_reasons = array_values( array_unique( $final_blocking_reasons ) );
+
+	if ( ! function_exists( 'factory_apply_real_estate_preset_internal' ) ) {
+		return factory_ai_controlled_generate_response(
+			[
+				'status'                               => 'error',
+				'code'                                 => 'internal_apply_service_unavailable',
+				'message'                              => 'The internal Real Estate apply service is unavailable in the current runtime.',
+				'vertical'                             => $vertical,
+				'recommended_preset'                   => $recommended_preset,
+				'execute_requested'                    => true,
+				'exact_confirmation_matched'           => true,
+				'confirmation_required_phrase'         => $confirmation_required_phrase,
+				'server_recomputed_confirmation_ready' => true,
+				'server_recomputed_preflight_ready'    => true,
+				'runtime_snapshot_before'              => $runtime_snapshot_before,
+				'dependency_recheck'                   => $dependency_recheck,
+				'ownership_recheck'                    => $ownership_recheck,
+				'runtime_diff_recheck'                 => $runtime_diff_recheck,
+				'generated'                            => false,
+				'blocking_reasons'                     => [
+					'The internal deterministic Real Estate apply service is not available.',
+				],
+				'warnings'                             => array_values(
+					array_unique(
+						array_merge(
+							[
+								'Controlled generate did not run. No site changes were made.',
+							],
+							$common_warnings
+						)
+					)
+				),
+				'risks'                                => $common_risks,
+				'post_generate_checks'                 => factory_ai_controlled_generate_text_list( $server_confirmation['post_generate_checks'] ?? [], 220 ),
+				'next_step'                            => 'restore_internal_apply_service',
+			]
+		);
+	}
+
+	if ( ! empty( $final_blocking_reasons ) ) {
+		return factory_ai_controlled_generate_response(
+			[
+				'status'                               => 'warning',
+				'code'                                 => 'controlled_generate_recheck_blocked',
+				'message'                              => 'Controlled generate is blocked by the final server-side dependency or ownership recheck.',
+				'vertical'                             => $vertical,
+				'recommended_preset'                   => $recommended_preset,
+				'execute_requested'                    => true,
+				'exact_confirmation_matched'           => true,
+				'confirmation_required_phrase'         => $confirmation_required_phrase,
+				'server_recomputed_confirmation_ready' => true,
+				'server_recomputed_preflight_ready'    => true,
+				'runtime_snapshot_before'              => $runtime_snapshot_before,
+				'dependency_recheck'                   => $dependency_recheck,
+				'ownership_recheck'                    => $ownership_recheck,
+				'runtime_diff_recheck'                 => $runtime_diff_recheck,
+				'generated'                            => false,
+				'blocking_reasons'                     => $final_blocking_reasons,
+				'warnings'                             => array_values(
+					array_unique(
+						array_merge(
+							[
+								'Controlled generate did not run. No site changes were made.',
+								'Final dependency and ownership checks are recomputed immediately before execution.',
+							],
+							$common_warnings
+						)
+					)
+				),
+				'risks'                                => $common_risks,
+				'post_generate_checks'                 => factory_ai_controlled_generate_text_list( $server_confirmation['post_generate_checks'] ?? [], 220 ),
+				'next_step'                            => 'resolve_controlled_generate_blockers',
+			]
+		);
+	}
+
+	$apply_context = factory_ai_controlled_generate_sanitize_apply_context( $context );
+
+	try {
+		$apply_result = factory_apply_real_estate_preset_internal(
+			[
+				'source'          => 'controlled_generate',
+				'fallback_prompt' => '' !== trim( $prompt ) ? $prompt : 'Controlled generate: real-estate',
+				'prompt_context'  => [
+					'prompt'            => '' !== trim( $prompt ) ? $prompt : 'Controlled generate: real-estate',
+					'preset_variables'  => $apply_context['preset_variables'],
+					'applied_variables' => $apply_context['preset_variables'],
+					'notes'             => [
+						'Controlled generate execution reused the safe variable overlay context.',
+						'Client-provided readiness flags were ignored in favor of server recomputation.',
+					],
+				],
+				'style_context'   => [
+					'context' => $apply_context['style_context'],
+					'notes'   => [
+						'Controlled generate reused the safe style context after server-side gating.',
+					],
+				],
+				'image_context'   => [
+					'context' => $apply_context['image_context'],
+					'notes'   => [
+						'Controlled generate reused the safe image context after server-side gating.',
+					],
+				],
+				'manifest_metadata' => [
+					'apply_source'                         => 'controlled_generate',
+					'ai_flow'                              => 'controlled_generate_v1',
+					'confirmation_phrase_matched'          => true,
+					'server_recomputed_preflight_ready'    => true,
+					'server_recomputed_confirmation_ready' => true,
+				],
+			]
+		);
+	} catch ( Throwable $e ) {
+		return factory_ai_controlled_generate_response(
+			[
+				'status'                               => 'error',
+				'code'                                 => 'controlled_generate_apply_failed',
+				'message'                              => 'Controlled generate failed while calling the internal Real Estate apply service.',
+				'vertical'                             => $vertical,
+				'recommended_preset'                   => $recommended_preset,
+				'execute_requested'                    => true,
+				'exact_confirmation_matched'           => true,
+				'confirmation_required_phrase'         => $confirmation_required_phrase,
+				'server_recomputed_confirmation_ready' => true,
+				'server_recomputed_preflight_ready'    => true,
+				'runtime_snapshot_before'              => $runtime_snapshot_before,
+				'dependency_recheck'                   => $dependency_recheck,
+				'ownership_recheck'                    => $ownership_recheck,
+				'runtime_diff_recheck'                 => $runtime_diff_recheck,
+				'mutation_status'                      => 'unknown_after_apply_started',
+				'applies_changes'                      => true,
+				'generated'                            => false,
+				'blocking_reasons'                     => [
+					'The internal apply service raised an exception before controlled generate could complete.',
+				],
+				'warnings'                             => array_values(
+					array_unique(
+						array_merge(
+							[
+								'Controlled generate entered the internal apply boundary but did not report a successful completion.',
+								'Partial mutation may have occurred. Run doctor and review latest proof before retrying.',
+							],
+							$common_warnings
+						)
+					)
+				),
+				'risks'                                => array_values(
+					array_unique(
+						array_merge(
+							$common_risks,
+							[
+								factory_ai_controlled_generate_clamp_text( $e->getMessage(), 220 ),
+								'Partial mutation may have occurred because the failure happened after the internal apply boundary was entered.',
+							]
+						)
+					)
+				),
+				'post_generate_checks'                 => factory_ai_controlled_generate_text_list( $server_confirmation['post_generate_checks'] ?? [], 220 ),
+				'next_step'                            => 'run_doctor_and_review_proof',
+			]
+		);
+	}
+
+	if ( empty( $apply_result['ok'] ) ) {
+		$apply_error_code = sanitize_key( (string) ( $apply_result['error_code'] ?? 'controlled_generate_apply_failed' ) );
+		$apply_error_message = sanitize_text_field( (string) ( $apply_result['error_message'] ?? 'Controlled generate could not complete.' ) );
+
+		return factory_ai_controlled_generate_response(
+			[
+				'status'                               => 'warning',
+				'code'                                 => '' !== $apply_error_code ? $apply_error_code : 'controlled_generate_apply_failed',
+				'message'                              => $apply_error_message,
+				'vertical'                             => $vertical,
+				'recommended_preset'                   => $recommended_preset,
+				'execute_requested'                    => true,
+				'exact_confirmation_matched'           => true,
+				'confirmation_required_phrase'         => $confirmation_required_phrase,
+				'server_recomputed_confirmation_ready' => true,
+				'server_recomputed_preflight_ready'    => true,
+				'runtime_snapshot_before'              => $runtime_snapshot_before,
+				'dependency_recheck'                   => $dependency_recheck,
+				'ownership_recheck'                    => $ownership_recheck,
+				'runtime_diff_recheck'                 => $runtime_diff_recheck,
+				'mutation_status'                      => 'unknown_after_apply_started',
+				'applies_changes'                      => true,
+				'generated'                            => false,
+				'blocking_reasons'                     => [
+					$apply_error_message,
+				],
+				'warnings'                             => array_values(
+					array_unique(
+						array_merge(
+							[
+								'Controlled generate did not finish successfully. Review the returned error before retrying.',
+								'Partial mutation may have occurred because the internal apply boundary was already entered.',
+							],
+							$common_warnings
+						)
+					)
+				),
+				'risks'                                => array_values(
+					array_unique(
+						array_merge(
+							$common_risks,
+							[
+								'Run doctor and review latest proof before retrying because the failure happened after entering the internal apply boundary.',
+							]
+						)
+					)
+				),
+				'post_generate_checks'                 => factory_ai_controlled_generate_text_list( $server_confirmation['post_generate_checks'] ?? [], 220 ),
+				'next_step'                            => 'run_doctor_and_review_proof',
+			]
+		);
+	}
+
+	$dependency_status_after = function_exists( 'factory_ai_generate_preflight_dependency_status' )
+		? factory_ai_generate_preflight_dependency_status()
+		: $dependency_status_now;
+	$runtime_snapshot_after = factory_ai_controlled_generate_capture_runtime_snapshot( $dependency_status_after );
+	$generation_status = sanitize_key( (string) ( $apply_result['response']['status'] ?? $apply_result['report']['status'] ?? 'ok' ) );
+
+	if ( ! in_array( $generation_status, [ 'ok', 'warning', 'error', 'disabled' ], true ) ) {
+		$generation_status = 'ok';
+	}
+
 	return factory_ai_controlled_generate_response(
 		[
-			'status'                             => 'warning',
-			'code'                               => 'implementation_blocked',
-			'message'                            => 'Exact confirmation was accepted, but controlled generate execution remains disabled until the internal Real Estate apply service is wired in a later phase.',
-			'vertical'                           => $vertical,
-			'recommended_preset'                 => $recommended_preset,
-			'execute_requested'                  => true,
-			'exact_confirmation_matched'         => true,
-			'confirmation_required_phrase'       => $confirmation_required_phrase,
+			'status'                               => $generation_status,
+			'code'                                 => 'controlled_generate_completed',
+			'message'                              => sanitize_text_field( (string) ( $apply_result['response']['message'] ?? 'Controlled generate completed through the internal deterministic Real Estate apply service.' ) ),
+			'applies_changes'                      => true,
+			'vertical'                             => $vertical,
+			'recommended_preset'                   => $recommended_preset,
+			'execute_requested'                    => true,
+			'exact_confirmation_matched'           => true,
+			'confirmation_required_phrase'         => $confirmation_required_phrase,
 			'server_recomputed_confirmation_ready' => true,
-			'server_recomputed_preflight_ready'  => true,
-			'runtime_snapshot_before'            => $runtime_snapshot_before,
-			'dependency_recheck'                 => $dependency_recheck,
-			'ownership_recheck'                  => $ownership_recheck,
-			'runtime_diff_recheck'               => $runtime_diff_recheck,
-			'generated'                          => false,
-			'blocking_reasons'                   => [
-				'The internal Real Estate apply service exists, but controlled generate is intentionally not wired to execute it in this phase.',
-				'Exact-confirmation execution remains disabled until the controlled generate boundary is reviewed and explicitly enabled.',
-			],
-			'warnings'                           => array_values(
+			'server_recomputed_preflight_ready'    => true,
+			'runtime_snapshot_before'              => $runtime_snapshot_before,
+			'runtime_snapshot_after'               => $runtime_snapshot_after,
+			'dependency_recheck'                   => $dependency_recheck,
+			'ownership_recheck'                    => $ownership_recheck,
+			'runtime_diff_recheck'                 => $runtime_diff_recheck,
+			'mutation_status'                      => 'completed',
+			'generated'                            => true,
+			'blocking_reasons'                     => [],
+			'warnings'                             => array_values(
 				array_unique(
 					array_merge(
-						[
-							'Controlled generate did not run. No site changes were made.',
-							'This endpoint intentionally stops at the final boundary until a safe internal apply adapter exists.',
-						],
-						$common_warnings
+						$common_warnings,
+						factory_ai_controlled_generate_text_list( $apply_result['report']['warnings'] ?? [], 220 )
 					)
 				)
 			),
-			'risks'                              => array_values(
+			'risks'                                => array_values(
 				array_unique(
 					array_merge(
 						$common_risks,
 						[
-							'Invoking the existing beta apply REST callback from this service would couple mutation to a request wrapper instead of a dedicated controlled apply adapter.',
+							'Review validation, doctor, and latest run proof before treating the generated site as final.',
 						]
 					)
 				)
 			),
-			'generation_result'                  => [
-				'status'            => 'blocked',
-				'code'              => 'wiring_pending',
-				'callable_available' => true,
-				'message'           => 'A safe internal deterministic Real Estate apply service is available, but controlled-generate execution is intentionally deferred to the next phase.',
+			'generation_result'                    => [
+				'status'          => $generation_status,
+				'code'            => 'controlled_generate_completed',
+				'message'         => sanitize_text_field( (string) ( $apply_result['response']['message'] ?? 'Controlled generate completed.' ) ),
+				'file'            => sanitize_text_field( (string) ( $apply_result['response']['file'] ?? basename( (string) ( $apply_result['manifest_path'] ?? '' ) ) ) ),
+				'plan_summary'    => is_array( $apply_result['response']['plan_summary'] ?? null ) ? $apply_result['response']['plan_summary'] : [],
+				'results_summary' => is_array( $apply_result['response']['results_summary'] ?? null ) ? $apply_result['response']['results_summary'] : [],
 			],
-			'post_generate_checks'               => factory_ai_controlled_generate_text_list( $server_confirmation['post_generate_checks'] ?? [], 220 ),
-			'next_step'                          => 'wire_controlled_generate_to_internal_apply_service',
+			'manifest_path'                        => $apply_result['manifest_path'] ?? null,
+			'validation_count'                     => count( $apply_result['report']['checks'] ?? [] ),
+			'execution_count'                      => count( $apply_result['execution'] ?? [] ),
+			'post_generate_checks'                 => factory_ai_controlled_generate_text_list( $server_confirmation['post_generate_checks'] ?? [], 220 ),
+			'next_step'                            => 'doctor_proof_review',
 		]
 	);
 }
@@ -373,6 +691,7 @@ function factory_ai_controlled_generate_response( array $overrides = [] ): array
 		'provider'                           => 'local',
 		'mode'                               => 'controlled_generate_v1',
 		'applies_changes'                    => ! empty( $overrides['applies_changes'] ),
+		'mutation_status'                    => factory_ai_controlled_generate_normalize_mutation_status( $overrides['mutation_status'] ?? ( ! empty( $overrides['applies_changes'] ) ? 'completed' : 'not_started' ) ),
 		'provider_called'                    => false,
 		'generated'                          => ! empty( $overrides['generated'] ),
 		'vertical'                           => $vertical,
@@ -391,6 +710,9 @@ function factory_ai_controlled_generate_response( array $overrides = [] ): array
 		'warnings'                           => factory_ai_normalize_string_list( $overrides['warnings'] ?? [], 220 ),
 		'risks'                              => factory_ai_controlled_generate_text_list( $overrides['risks'] ?? [], 220 ),
 		'generation_result'                  => is_array( $overrides['generation_result'] ?? null ) ? $overrides['generation_result'] : null,
+		'manifest_path'                      => is_scalar( $overrides['manifest_path'] ?? null ) ? sanitize_text_field( (string) $overrides['manifest_path'] ) : null,
+		'validation_count'                   => isset( $overrides['validation_count'] ) ? max( 0, (int) $overrides['validation_count'] ) : null,
+		'execution_count'                    => isset( $overrides['execution_count'] ) ? max( 0, (int) $overrides['execution_count'] ) : null,
 		'post_generate_checks'               => factory_ai_controlled_generate_text_list( $overrides['post_generate_checks'] ?? [], 220 ),
 		'next_step'                          => sanitize_key( (string) ( $overrides['next_step'] ?? 'submit_exact_confirmation_with_execute' ) ),
 		'usage'                              => null,
@@ -473,6 +795,55 @@ function factory_ai_controlled_generate_normalize_context( array $context ): arr
 	}
 
 	return $context;
+}
+
+function factory_ai_controlled_generate_sanitize_apply_context( array $context ): array {
+	if ( function_exists( 'factory_rest_ai_sanitize_interpret_context' ) ) {
+		return factory_rest_ai_sanitize_interpret_context( $context );
+	}
+
+	$preset_variables = is_array( $context['preset_variables'] ?? null ) ? $context['preset_variables'] : [];
+	$style_context = is_array( $context['style_context'] ?? null ) ? $context['style_context'] : [];
+	$image_context = is_array( $context['image_context'] ?? null ) ? $context['image_context'] : [];
+
+	return [
+		'preset'           => 'real-estate',
+		'preset_variables' => [
+			'agency_name'   => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['agency_name'] ?? '', 'text', 80 ) : sanitize_text_field( (string) ( $preset_variables['agency_name'] ?? '' ) ),
+			'hero_title'    => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['hero_title'] ?? '', 'text', 120 ) : sanitize_text_field( (string) ( $preset_variables['hero_title'] ?? '' ) ),
+			'hero_subtitle' => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['hero_subtitle'] ?? '', 'textarea', 240 ) : sanitize_textarea_field( (string) ( $preset_variables['hero_subtitle'] ?? '' ) ),
+			'hero_cta_text' => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['hero_cta_text'] ?? '', 'text', 60 ) : sanitize_text_field( (string) ( $preset_variables['hero_cta_text'] ?? '' ) ),
+			'contact_title' => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['contact_title'] ?? '', 'text', 120 ) : sanitize_text_field( (string) ( $preset_variables['contact_title'] ?? '' ) ),
+			'contact_intro' => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['contact_intro'] ?? '', 'textarea', 400 ) : sanitize_textarea_field( (string) ( $preset_variables['contact_intro'] ?? '' ) ),
+			'phone'         => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['phone'] ?? '', 'phone', 60 ) : sanitize_text_field( (string) ( $preset_variables['phone'] ?? '' ) ),
+			'email'         => function_exists( 'factory_ai_sanitize_safe_variable' ) ? factory_ai_sanitize_safe_variable( $preset_variables['email'] ?? '', 'email', 120 ) : sanitize_email( (string) ( $preset_variables['email'] ?? '' ) ),
+		],
+		'style_context'    => [
+			'tone'           => function_exists( 'factory_ai_normalize_enum' ) ? factory_ai_normalize_enum( $style_context['tone'] ?? 'premium', [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ], 'premium' ) : 'premium',
+			'primary_preset' => function_exists( 'factory_ai_normalize_enum' ) ? factory_ai_normalize_enum( $style_context['primary_preset'] ?? 'turquoise', [ 'turquoise', 'blue', 'green', 'beige' ], 'turquoise' ) : 'turquoise',
+		],
+		'image_context'    => [
+			'source' => 'demo_pool',
+			'mode'   => 'round_robin',
+		],
+	];
+}
+
+function factory_ai_controlled_generate_capture_runtime_snapshot( array $dependency_status = [] ): array {
+	if ( function_exists( 'factory_ai_generate_preflight_runtime_snapshot' ) ) {
+		return factory_ai_controlled_generate_normalize_runtime_snapshot(
+			factory_ai_generate_preflight_runtime_snapshot( $dependency_status )
+		);
+	}
+
+	return factory_ai_controlled_generate_normalize_runtime_snapshot( [] );
+}
+
+function factory_ai_controlled_generate_normalize_mutation_status( $status ): string {
+	$status = sanitize_key( (string) $status );
+	$allowed = [ 'not_started', 'unknown_after_apply_started', 'completed' ];
+
+	return in_array( $status, $allowed, true ) ? $status : 'not_started';
 }
 
 function factory_ai_controlled_generate_normalize_site_type( string $site_type ): string {
