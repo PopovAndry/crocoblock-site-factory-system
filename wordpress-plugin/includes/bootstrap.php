@@ -26,6 +26,7 @@ require_once __DIR__ . '/utils/run-storage.php';
 require_once __DIR__ . '/blueprint/blueprint-normalizer.php';
 require_once __DIR__ . '/blueprint/blueprint-validator.php';
 require_once __DIR__ . '/blueprint/blueprint-preset-manager.php';
+require_once __DIR__ . '/apply/real-estate-apply-service.php';
 require_once __DIR__ . '/bridge/plugin-dry-run-evidence-collector.php';
 require_once __DIR__ . '/bridge/ownership-evidence-collector.php';
 require_once __DIR__ . '/bridge/plugin-preview-bridge-service.php';

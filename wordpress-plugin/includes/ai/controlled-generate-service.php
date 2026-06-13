@@ -305,7 +305,7 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 		[
 			'status'                             => 'warning',
 			'code'                               => 'implementation_blocked',
-			'message'                            => 'Exact confirmation was accepted, but controlled generate does not yet have a dedicated internal apply adapter.',
+			'message'                            => 'Exact confirmation was accepted, but controlled generate execution remains disabled until the internal Real Estate apply service is wired in a later phase.',
 			'vertical'                           => $vertical,
 			'recommended_preset'                 => $recommended_preset,
 			'execute_requested'                  => true,
@@ -319,8 +319,8 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 			'runtime_diff_recheck'               => $runtime_diff_recheck,
 			'generated'                          => false,
 			'blocking_reasons'                   => [
-				'No dedicated internal controlled-generate callable exists yet.',
-				'The current deterministic mutation path is exposed through the existing beta Real Estate REST apply callback and is intentionally not invoked from this service.',
+				'The internal Real Estate apply service exists, but controlled generate is intentionally not wired to execute it in this phase.',
+				'Exact-confirmation execution remains disabled until the controlled generate boundary is reviewed and explicitly enabled.',
 			],
 			'warnings'                           => array_values(
 				array_unique(
@@ -345,12 +345,12 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 			),
 			'generation_result'                  => [
 				'status'            => 'blocked',
-				'code'              => 'needs_apply_adapter',
-				'callable_available' => false,
-				'message'           => 'A safe internal controlled apply adapter must be introduced before exact-confirmation execution can mutate runtime.',
+				'code'              => 'wiring_pending',
+				'callable_available' => true,
+				'message'           => 'A safe internal deterministic Real Estate apply service is available, but controlled-generate execution is intentionally deferred to the next phase.',
 			],
 			'post_generate_checks'               => factory_ai_controlled_generate_text_list( $server_confirmation['post_generate_checks'] ?? [], 220 ),
-			'next_step'                          => 'implement_safe_apply_adapter',
+			'next_step'                          => 'wire_controlled_generate_to_internal_apply_service',
 		]
 	);
 }
