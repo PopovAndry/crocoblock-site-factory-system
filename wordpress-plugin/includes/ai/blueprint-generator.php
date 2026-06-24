@@ -4,6 +4,19 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+if ( ! function_exists( 'factory_legacy_ai_blueprint_generator_enabled' ) ) {
+	/**
+	 * Keep the legacy prompt-to-blueprint generator behind an explicit developer opt-in.
+	 *
+	 * This path performs direct provider calls and writes legacy artifacts, so it stays
+	 * disabled by default while the safe provider and contract-first flow are active.
+	 */
+	function factory_legacy_ai_blueprint_generator_enabled(): bool {
+		return defined( 'FACTORY_ENABLE_LEGACY_AI_BLUEPRINT_GENERATOR' )
+			&& true === FACTORY_ENABLE_LEGACY_AI_BLUEPRINT_GENERATOR;
+	}
+}
+
 class Factory_AI_Blueprint_Generator {
 
 	private string $source_path;
@@ -40,6 +53,12 @@ class Factory_AI_Blueprint_Generator {
 	}
 
 public function generate_from_prompt( string $user_prompt ): array {
+	if ( ! factory_legacy_ai_blueprint_generator_enabled() ) {
+		throw new RuntimeException(
+			'Legacy AI blueprint generation is disabled. Define FACTORY_ENABLE_LEGACY_AI_BLUEPRINT_GENERATOR as true to opt in explicitly.'
+		);
+	}
+
 	$cached = $this->get_cached_blueprint( $user_prompt );
 
 	if ( is_array( $cached ) ) {
