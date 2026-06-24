@@ -157,6 +157,15 @@
 		{ title: 'Preview Plan', subtitle: 'Review changes' },
 		{ title: 'Generate / Proof', subtitle: 'Create and open' },
 	];
+	const aiBetaStages = [
+		{ key: 'sitePlan', label: 'Site Plan', action: 'Build Site Plan' },
+		{ key: 'blueprintCandidate', label: 'Candidate', action: 'Build Candidate' },
+		{ key: 'previewDiff', label: 'Preview / Diff', action: 'Build Preview / Diff' },
+		{ key: 'generateGate', label: 'Generate Gate', action: 'Check Generate Gate' },
+		{ key: 'generatePreflight', label: 'Preflight', action: 'Run Preflight' },
+		{ key: 'generateConfirmation', label: 'Confirmation', action: 'Build Confirmation' },
+		{ key: 'controlledGenerate', label: 'Controlled Generate', action: 'Controlled Generate' },
+	];
 
 	if ( ! root ) {
 		return;
@@ -204,6 +213,22 @@
 		lastActionAt: '',
 		advancedOpen: false,
 		noRunsYet: false,
+		aiBetaFlow: {
+			sitePlan: null,
+			blueprintCandidate: null,
+			previewDiff: null,
+			generateGate: null,
+			generatePreflight: null,
+			generateConfirmation: null,
+			controlledGenerate: null,
+			currentStep: 'sitePlan',
+			isLoading: false,
+			loadingKey: '',
+			error: '',
+			notice: null,
+			exactPhraseInput: '',
+			lastActionAt: '',
+		},
 	};
 	let aiEstimateTimer = null;
 	let aiEstimateRequestId = 0;
@@ -1415,6 +1440,194 @@
 		].join( '' );
 	}
 
+	function renderAIBetaFlowStageRail() {
+		const flow = aiBetaFlowState();
+		const nextStageKey = aiBetaNextStageKey();
+
+		return [
+			'<div class="factory-ai-beta-rail" aria-label="AI beta flow stages">',
+				aiBetaStages.map( function ( stage ) {
+					const isCurrent = flow.currentStep === stage.key;
+					const isLoading = flow.loadingKey === stage.key;
+					const classes = [
+						'factory-ai-beta-stage',
+						isCurrent ? 'factory-ai-beta-stage-current' : '',
+						isLoading ? 'factory-ai-beta-stage-loading' : '',
+					].filter( Boolean ).join( ' ' );
+					const hint = isLoading
+						? 'Running now'
+						: ( nextStageKey === stage.key ? 'Next action' : 'Ready when needed' );
+
+					return [
+						'<article class="' + escapeHtml( classes ) + '">',
+							'<div class="factory-ai-beta-stage-meta">',
+								'<strong>' + escapeHtml( stage.label ) + '</strong>',
+								badge( aiBetaStatusBadgeValue( stage.key ) ),
+							'</div>',
+							'<p>' + escapeHtml( hint ) + '</p>',
+						'</article>',
+					].join( '' );
+				} ).join( '' ),
+			'</div>',
+		].join( '' );
+	}
+
+	function renderAIBetaFlowNotice() {
+		const flow = aiBetaFlowState();
+
+		if ( ! flow.notice ) {
+			return '';
+		}
+
+		return [
+			'<div class="factory-demo-message factory-demo-message-' + escapeHtml( statusValue( flow.notice.status ) ) + '">',
+				'<span>' + escapeHtml( flow.notice.message || '' ) + '</span>',
+				flow.lastActionAt ? '<small>Last AI action: ' + escapeHtml( flow.lastActionAt ) + '</small>' : '',
+			'</div>',
+		].join( '' );
+	}
+
+	function renderAIBetaFlowSummary() {
+		const response = aiBetaPrimaryResponse();
+		const latestStage = aiBetaStageConfig( aiBetaLatestStageKey() );
+		const summaryItems = aiBetaSummaryItems( response );
+		const warningMessages = aiBetaTextList( response && response.warnings, 2 );
+		const riskMessages = aiBetaTextList( response && response.risks, 2 );
+		const blockingMessages = aiBetaTextList( response && response.blocking_reasons, 2 );
+		const title = response ? latestStage.label + ' summary' : 'AI beta flow not started';
+		const summary = response
+			? ( response.message || 'Review the current AI beta stage.' )
+			: 'Use the current prompt and setup fields to walk through the Site Plan, Candidate, Preview/Diff, Gate, Preflight, and Confirmation chain before controlled generate.';
+
+		return [
+			'<section class="factory-ai-beta-summary">',
+				'<div class="factory-ai-beta-summary-heading">',
+					'<div>',
+						'<span>Current step</span>',
+						'<h4>' + escapeHtml( title ) + '</h4>',
+						'<p>' + escapeHtml( summary ) + '</p>',
+					'</div>',
+					badge( response ? response.status : 'unknown' ),
+				'</div>',
+				summaryItems.length
+					? '<ul class="factory-ai-beta-summary-list">' + summaryItems.map( function ( item ) {
+						return '<li>' + escapeHtml( item ) + '</li>';
+					} ).join( '' ) + '</ul>'
+					: '<p class="factory-empty">No AI beta summary yet.</p>',
+				'<div class="factory-ai-beta-counts">',
+					renderMetric( 'Warnings', aiBetaWarningsCount( response ) ),
+					renderMetric( 'Risks', aiBetaRisksCount( response ) ),
+					renderMetric( 'Blocking', aiBetaBlockingCount( response ) ),
+					renderMetric( 'Next', response && response.next_step ? response.next_step : aiBetaStageConfig( aiBetaNextStageKey() ).label ),
+				'</div>',
+				blockingMessages.length ? '<div class="factory-wizard-notice factory-wizard-notice-warning"><strong>Blocking summary:</strong> ' + escapeHtml( blockingMessages.join( ' ' ) ) + '</div>' : '',
+				warningMessages.length ? '<div class="factory-wizard-notice"><strong>Warnings:</strong> ' + escapeHtml( warningMessages.join( ' ' ) ) + '</div>' : '',
+				riskMessages.length ? '<div class="factory-wizard-notice"><strong>Risks:</strong> ' + escapeHtml( riskMessages.join( ' ' ) ) + '</div>' : '',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderAIBetaFlowActions() {
+		const flow = aiBetaFlowState();
+		const nextStageKey = aiBetaNextStageKey();
+
+		return [
+			'<div class="factory-ai-beta-actions">',
+				aiBetaStages.filter( function ( stage ) {
+					return stage.key !== 'controlledGenerate';
+				} ).map( function ( stage ) {
+					const isPrimary = nextStageKey === stage.key;
+					const isLoading = flow.loadingKey === stage.key;
+					return [
+						'<button type="button" class="button' + ( isPrimary ? ' button-primary' : '' ) + '" data-factory-ai-beta-action="' + escapeHtml( stage.key ) + '"' + ( aiBetaStageButtonDisabled( stage.key ) ? ' disabled' : '' ) + '>',
+							escapeHtml( isLoading ? 'Working...' : stage.action ),
+						'</button>',
+					].join( '' );
+				} ).join( '' ),
+			'</div>',
+		].join( '' );
+	}
+
+	function renderAIBetaConfirmationBox() {
+		const flow = aiBetaFlowState();
+		const confirmation = flow.generateConfirmation || {};
+		const requiredPhrase = String( confirmation.confirmation_required_phrase || '' );
+		const isReady = Boolean( confirmation.confirmation_ready );
+		const currentValue = String( flow.exactPhraseInput || '' );
+		const exactMatch = requiredPhrase && currentValue === requiredPhrase;
+		const disabled = aiBetaStageButtonDisabled( 'controlledGenerate' );
+		const helperText = isReady
+			? 'Generation may change this WordPress site. Backend will recompute all checks before applying.'
+			: 'Build Confirmation first. The backend must produce the exact phrase requirement before controlled generate is available.';
+
+		return [
+			'<section class="factory-ai-beta-confirm">',
+				'<div class="factory-ai-beta-confirm-copy">',
+					'<span>Exact confirmation</span>',
+					'<h4>Controlled Generate</h4>',
+					'<p>' + escapeHtml( helperText ) + '</p>',
+				'</div>',
+				'<div class="factory-ai-beta-confirm-grid">',
+					'<label class="factory-ai-beta-confirm-field">',
+						'<span>Required phrase</span>',
+						'<code>' + escapeHtml( requiredPhrase || 'Build Confirmation first' ) + '</code>',
+					'</label>',
+					'<label class="factory-ai-beta-confirm-field">',
+						'<span>Type the exact phrase manually</span>',
+						'<input type="text" value="' + escapeHtml( currentValue ) + '" data-factory-ai-beta-confirmation placeholder="' + escapeHtml( requiredPhrase || 'Confirmation phrase will appear here' ) + '"' + ( requiredPhrase ? '' : ' disabled' ) + '>',
+					'</label>',
+				'</div>',
+				'<div class="factory-ai-beta-confirm-actions">',
+					'<span class="factory-ai-beta-confirm-status">' + escapeHtml( exactMatch ? 'Exact phrase matched.' : 'Exact phrase not matched yet.' ) + '</span>',
+					'<button type="button" class="button button-primary" data-factory-ai-beta-action="controlledGenerate"' + ( disabled ? ' disabled' : '' ) + '>' +
+						escapeHtml( flow.loadingKey === 'controlledGenerate' ? 'Generating...' : 'Controlled Generate' ) +
+					'</button>',
+				'</div>',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderAIBetaProofSummary() {
+		const response = aiBetaFlowState().controlledGenerate;
+
+		if ( ! response ) {
+			return '';
+		}
+
+		return [
+			'<section class="factory-ai-beta-proof-summary">',
+				'<div class="factory-ai-beta-proof-grid">',
+					renderMetric( 'Generated', response.generated ? 'Yes' : 'No' ),
+					renderMetric( 'Mutation', response.mutation_status || 'not_started' ),
+					renderMetric( 'Validation', response.validation_count || 0 ),
+					renderMetric( 'Execution', response.execution_count || 0 ),
+				'</div>',
+				response.manifest_path ? '<p class="factory-empty">Latest manifest: ' + escapeHtml( aiBetaManifestFile( response.manifest_path ) ) + '</p>' : '',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderAIBetaFlowPanel() {
+		return [
+			'<section class="factory-ai-beta-panel">',
+				'<div class="factory-ai-beta-header">',
+					'<div>',
+						'<span>AI beta flow</span>',
+						'<h4>Prompt to controlled generate</h4>',
+						'<p>Use the current prompt and safe setup fields to build the read-only planning chain, then enter the exact phrase manually before controlled generate.</p>',
+					'</div>',
+					badge( aiBetaPrimaryResponse() ? aiBetaPrimaryResponse().status : 'unknown' ),
+				'</div>',
+				renderAIBetaFlowNotice(),
+				renderAIBetaFlowStageRail(),
+				renderAIBetaFlowSummary(),
+				renderAIBetaFlowActions(),
+				renderAIBetaConfirmationBox(),
+				renderAIBetaProofSummary(),
+			'</section>',
+		].join( '' );
+	}
+
 	function renderFrontendLinks() {
 		return [
 			'<section class="factory-open-edit-block">',
@@ -1973,8 +2186,9 @@
 
 		return [
 			'<section class="factory-wizard-step-panel">',
+				renderAIBetaFlowPanel(),
 				'<div class="factory-wizard-step-heading">',
-					'<div><h3>Generate / Proof</h3><p>Create the deterministic Real Estate demo, refresh validation proof, and open the generated frontend.</p></div>',
+					'<div><h3>Generate / Proof</h3><p>Create the deterministic Real Estate demo, refresh validation proof, and open the generated frontend. The AI beta rail above keeps the planning chain and exact phrase gate explicit.</p></div>',
 					'<div class="factory-demo-actions">',
 						'<button type="button" class="button button-primary" data-factory-beta-action="apply"' + ( isBusy || ! isPreviewCurrent() || ! isRequirementsReady() ? ' disabled' : '' ) + '>',
 							state.betaAction === 'apply' ? 'Generating...' : 'Generate Real Estate Demo',
@@ -2169,6 +2383,32 @@
 		].join( '' );
 	}
 
+	function renderAIBetaDeveloperProof() {
+		const flow = aiBetaFlowState();
+		const availableStages = aiBetaStages.filter( function ( stage ) {
+			return Boolean( flow[ stage.key ] );
+		} );
+
+		if ( ! availableStages.length ) {
+			return '';
+		}
+
+		return [
+			'<section class="factory-card factory-card-wide">',
+				'<h2>AI Beta Raw Responses</h2>',
+				'<p class="factory-empty">Collapsed raw API responses for developer review. The normal AI beta panel only shows summarized evidence.</p>',
+				availableStages.map( function ( stage ) {
+					return [
+						'<details class="factory-ai-beta-raw-details">',
+							'<summary>' + escapeHtml( stage.label ) + ' response</summary>',
+							'<pre data-factory-ai-beta-raw="' + escapeHtml( stage.key ) + '"></pre>',
+						'</details>',
+					].join( '' );
+				} ).join( '' ),
+			'</section>',
+		].join( '' );
+	}
+
 	function renderAdvancedProof() {
 		const expanded = Boolean( state.advancedOpen );
 
@@ -2186,6 +2426,7 @@
 				'</div>',
 				expanded
 					? '<div class="factory-advanced-body">' +
+						renderAIBetaDeveloperProof() +
 						renderDeveloperPageInspectLinks() +
 						renderRawPlanDetails() +
 						renderRunsTable() +
@@ -2223,6 +2464,15 @@
 			bridgePre.textContent = JSON.stringify( state.bridgePreviewData, null, 2 );
 		}
 
+		root.querySelectorAll( '[data-factory-ai-beta-raw]' ).forEach( function ( pre ) {
+			const key = pre.getAttribute( 'data-factory-ai-beta-raw' );
+			const response = key ? aiBetaStageResponse( key ) : null;
+
+			if ( response ) {
+				pre.textContent = JSON.stringify( response, null, 2 );
+			}
+		} );
+
 		root.querySelectorAll( '.factory-run-row' ).forEach( function ( row ) {
 			row.addEventListener( 'click', function () {
 				const file = row.getAttribute( 'data-file' );
@@ -2255,6 +2505,7 @@
 
 				state.selectedVertical = vertical.id;
 				state.verticalNotice = '';
+				invalidateAIBetaFlow( 'AI beta flow needs rebuild after site type changes.' );
 				render();
 			} );
 		} );
@@ -2282,6 +2533,7 @@
 			textarea.addEventListener( 'input', function () {
 				state.prompt = textarea.value;
 				updatePreviewFreshness();
+				invalidateAIBetaFlow( 'AI beta flow needs rebuild after prompt changes.' );
 				schedulePromptEstimate();
 			} );
 		} );
@@ -2293,6 +2545,7 @@
 				if ( key ) {
 					state.presetVariables[ key ] = field.value;
 					updatePreviewFreshness();
+					invalidateAIBetaFlow( 'AI beta flow needs rebuild after business info changes.' );
 				}
 			} );
 		} );
@@ -2304,6 +2557,7 @@
 				if ( key ) {
 					state.styleContext[ key ] = field.value;
 					updatePreviewFreshness();
+					invalidateAIBetaFlow( 'AI beta flow needs rebuild after style changes.' );
 					render();
 				}
 			} );
@@ -2356,6 +2610,23 @@
 				} else if ( action === 'refresh' ) {
 					refreshValidationProof();
 				}
+			} );
+		} );
+
+		root.querySelectorAll( '[data-factory-ai-beta-action]' ).forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				const action = button.getAttribute( 'data-factory-ai-beta-action' );
+
+				if ( action ) {
+					runAIBetaStage( action );
+				}
+			} );
+		} );
+
+		root.querySelectorAll( '[data-factory-ai-beta-confirmation]' ).forEach( function ( field ) {
+			field.addEventListener( 'input', function () {
+				state.aiBetaFlow.exactPhraseInput = field.value;
+				render();
 			} );
 		} );
 	}
@@ -2503,6 +2774,472 @@
 		return state.imageContext;
 	}
 
+	function aiBetaFlowState() {
+		return state.aiBetaFlow;
+	}
+
+	function selectedAISiteType() {
+		return state.selectedVertical === 'real-estate' ? 'real_estate' : 'unknown';
+	}
+
+	function currentAIBetaContext() {
+		return {
+			preset: 'real-estate',
+			preset_variables: currentPresetVariables(),
+			style_context: currentStyleContext(),
+			image_context: currentImageContext(),
+		};
+	}
+
+	function aiBetaStageConfig( key ) {
+		return aiBetaStages.find( function ( stage ) {
+			return stage.key === key;
+		} ) || aiBetaStages[0];
+	}
+
+	function aiBetaStageIndex( key ) {
+		return aiBetaStages.findIndex( function ( stage ) {
+			return stage.key === key;
+		} );
+	}
+
+	function aiBetaStageResponse( key ) {
+		return aiBetaFlowState()[ key ] || null;
+	}
+
+	function resetAIBetaFlowFrom( key ) {
+		const flow = aiBetaFlowState();
+		const index = aiBetaStageIndex( key );
+
+		aiBetaStages.forEach( function ( stage, stageIndex ) {
+			if ( stageIndex >= index ) {
+				flow[ stage.key ] = null;
+			}
+		} );
+	}
+
+	function setAIBetaNotice( status, message ) {
+		const flow = aiBetaFlowState();
+		const text = String( message || '' ).trim();
+
+		flow.notice = text
+			? {
+				status: statusValue( status ),
+				message: text,
+			}
+			: null;
+	}
+
+	function invalidateAIBetaFlow( message ) {
+		const flow = aiBetaFlowState();
+
+		resetAIBetaFlowFrom( 'sitePlan' );
+		flow.currentStep = 'sitePlan';
+		flow.isLoading = false;
+		flow.loadingKey = '';
+		flow.error = '';
+		flow.exactPhraseInput = '';
+		setAIBetaNotice( message ? 'warning' : 'unknown', message || '' );
+	}
+
+	function aiBetaLatestStageKey() {
+		let latest = 'sitePlan';
+
+		aiBetaStages.forEach( function ( stage ) {
+			if ( aiBetaStageResponse( stage.key ) ) {
+				latest = stage.key;
+			}
+		} );
+
+		return latest;
+	}
+
+	function aiBetaNextStageKey() {
+		const flow = aiBetaFlowState();
+
+		if ( ! flow.sitePlan ) {
+			return 'sitePlan';
+		}
+
+		if ( ! flow.blueprintCandidate ) {
+			return 'blueprintCandidate';
+		}
+
+		if ( ! flow.previewDiff ) {
+			return 'previewDiff';
+		}
+
+		if ( ! flow.generateGate ) {
+			return 'generateGate';
+		}
+
+		if ( ! flow.generatePreflight ) {
+			return 'generatePreflight';
+		}
+
+		if ( ! flow.generateConfirmation ) {
+			return 'generateConfirmation';
+		}
+
+		return 'controlledGenerate';
+	}
+
+	function aiBetaPrimaryResponse() {
+		const flow = aiBetaFlowState();
+
+		return flow.controlledGenerate
+			|| flow.generateConfirmation
+			|| flow.generatePreflight
+			|| flow.generateGate
+			|| flow.previewDiff
+			|| flow.blueprintCandidate
+			|| flow.sitePlan
+			|| null;
+	}
+
+	function aiBetaStatusBadgeValue( key ) {
+		const flow = aiBetaFlowState();
+
+		if ( flow.loadingKey === key ) {
+			return 'unknown';
+		}
+
+		return statusValue( aiBetaStageResponse( key ) && aiBetaStageResponse( key ).status );
+	}
+
+	function aiBetaTextList( items, limit ) {
+		if ( ! Array.isArray( items ) ) {
+			return [];
+		}
+
+		return items
+			.map( function ( item ) {
+				if ( typeof item === 'string' || typeof item === 'number' ) {
+					return String( item );
+				}
+
+				if ( item && typeof item === 'object' ) {
+					if ( item.message ) {
+						return String( item.message );
+					}
+
+					if ( item.reason ) {
+						return String( item.reason );
+					}
+				}
+
+				return '';
+			} )
+			.filter( Boolean )
+			.slice( 0, limit || items.length );
+	}
+
+	function aiBetaCount( items ) {
+		return Array.isArray( items ) ? items.length : 0;
+	}
+
+	function aiBetaWarningsCount( response ) {
+		return aiBetaCount( response && response.warnings );
+	}
+
+	function aiBetaRisksCount( response ) {
+		return aiBetaCount( response && response.risks );
+	}
+
+	function aiBetaBlockingCount( response ) {
+		return aiBetaCount( response && response.blocking_reasons );
+	}
+
+	function aiBetaManifestFile( value ) {
+		return String( value || '' ).split( /[\\/]/ ).pop() || '';
+	}
+
+	function aiBetaSummaryItems( response ) {
+		const items = [];
+		const latestStage = aiBetaLatestStageKey();
+
+		if ( ! response ) {
+			return items;
+		}
+
+		if ( latestStage === 'sitePlan' ) {
+			items.push( 'Vertical: ' + ( response.vertical || 'unknown' ) );
+			items.push( 'Preset: ' + ( response.recommended_preset || '-' ) );
+			items.push( 'Confidence: ' + confidencePercent( response.confidence || 0 ) );
+
+			if ( response.business_summary ) {
+				items.push( response.business_summary );
+			}
+		}
+
+		if ( latestStage === 'blueprintCandidate' ) {
+			items.push( 'Vertical: ' + ( response.vertical || 'unknown' ) );
+			items.push( 'Preset: ' + ( response.recommended_preset || '-' ) );
+
+			if ( response.candidate && response.candidate.site && response.candidate.site.name ) {
+				items.push( 'Candidate site: ' + response.candidate.site.name );
+			}
+		}
+
+		if ( latestStage === 'previewDiff' ) {
+			if ( response.preview && response.preview.summary ) {
+				items.push( response.preview.summary );
+			}
+
+			if ( response.diff_summary ) {
+				items.push(
+					'Creates ' + summaryValue( response.diff_summary, 'creates' ) +
+					' / Updates ' + summaryValue( response.diff_summary, 'updates' ) +
+					' / Skips ' + summaryValue( response.diff_summary, 'skips' )
+				);
+			}
+		}
+
+		if ( latestStage === 'generateGate' ) {
+			items.push( 'Can generate: ' + ( response.can_generate ? 'Yes' : 'No' ) );
+			items.push( 'Required dependencies: ' + aiBetaCount( response.required_dependencies ) );
+
+			if ( response.confirmation_required_phrase ) {
+				items.push( 'Exact phrase required later.' );
+			}
+		}
+
+		if ( latestStage === 'generatePreflight' ) {
+			items.push( 'Preflight ready: ' + ( response.preflight_ready ? 'Yes' : 'No' ) );
+
+			if ( response.current_runtime_snapshot ) {
+				items.push(
+					'Runtime snapshot: ' +
+					summaryValue( response.current_runtime_snapshot, 'pages' ) + ' pages / ' +
+					summaryValue( response.current_runtime_snapshot, 'properties' ) + ' properties / ' +
+					summaryValue( response.current_runtime_snapshot, 'attachments' ) + ' attachments'
+				);
+			}
+
+			if ( response.ownership_status && response.ownership_status.status ) {
+				items.push( 'Ownership: ' + response.ownership_status.status );
+			}
+		}
+
+		if ( latestStage === 'generateConfirmation' ) {
+			items.push( 'Confirmation ready: ' + ( response.confirmation_ready ? 'Yes' : 'No' ) );
+			items.push( 'Final recheck required: ' + ( response.final_recheck_required ? 'Yes' : 'No' ) );
+
+			if ( response.confirmation_required_phrase ) {
+				items.push( 'Type the exact phrase manually to continue.' );
+			}
+		}
+
+		if ( latestStage === 'controlledGenerate' ) {
+			items.push( 'Mutation status: ' + ( response.mutation_status || 'unknown' ) );
+			items.push( 'Generated: ' + ( response.generated ? 'Yes' : 'No' ) );
+
+			if ( response.manifest_path ) {
+				items.push( 'Manifest: ' + aiBetaManifestFile( response.manifest_path ) );
+			}
+
+			if ( response.runtime_snapshot_after ) {
+				items.push(
+					'After generate: ' +
+					summaryValue( response.runtime_snapshot_after, 'pages' ) + ' pages / ' +
+					summaryValue( response.runtime_snapshot_after, 'properties' ) + ' properties / ' +
+					summaryValue( response.runtime_snapshot_after, 'attachments' ) + ' attachments'
+				);
+			}
+		}
+
+		if ( response.next_step ) {
+			items.push( 'Next step: ' + response.next_step );
+		}
+
+		return items.slice( 0, 4 );
+	}
+
+	function aiBetaStageButtonDisabled( key ) {
+		const flow = aiBetaFlowState();
+
+		if ( flow.isLoading ) {
+			return true;
+		}
+
+		if ( key === 'sitePlan' ) {
+			return ! String( currentPrompt() || '' ).trim();
+		}
+
+		if ( key === 'blueprintCandidate' ) {
+			return ! flow.sitePlan;
+		}
+
+		if ( key === 'previewDiff' ) {
+			return ! flow.blueprintCandidate;
+		}
+
+		if ( key === 'generateGate' ) {
+			return ! flow.previewDiff;
+		}
+
+		if ( key === 'generatePreflight' ) {
+			return ! flow.generateGate;
+		}
+
+		if ( key === 'generateConfirmation' ) {
+			return ! flow.generatePreflight;
+		}
+
+		if ( key === 'controlledGenerate' ) {
+			const confirmation = flow.generateConfirmation || {};
+			const requiredPhrase = String( confirmation.confirmation_required_phrase || '' );
+
+			return (
+				! flow.generateConfirmation ||
+				! requiredPhrase ||
+				! confirmation.confirmation_ready ||
+				! isRequirementsReady() ||
+				String( flow.exactPhraseInput || '' ) !== requiredPhrase
+			);
+		}
+
+		return false;
+	}
+
+	function aiBetaRequestPayload() {
+		const flow = aiBetaFlowState();
+
+		return {
+			prompt: currentPrompt(),
+			site_type: selectedAISiteType(),
+			vertical: selectedAISiteType(),
+			context: currentAIBetaContext(),
+			site_plan: flow.sitePlan || {},
+			blueprint_candidate: flow.blueprintCandidate || {},
+			preview_diff: flow.previewDiff || {},
+			generate_gate: flow.generateGate || {},
+			generate_preflight: flow.generatePreflight || {},
+			generate_confirmation: flow.generateConfirmation || {},
+		};
+	}
+
+	function runAIBetaStage( key ) {
+		const flow = aiBetaFlowState();
+		const payload = aiBetaRequestPayload();
+		const stage = aiBetaStageConfig( key );
+		let path = '';
+		let body = {};
+
+		resetAIBetaFlowFrom( key );
+		flow.currentStep = key;
+		flow.isLoading = true;
+		flow.loadingKey = key;
+		flow.error = '';
+		setAIBetaNotice( '', '' );
+		render();
+
+		if ( key === 'sitePlan' ) {
+			path = config.endpoints?.aiSitePlan || '/ai/site-plan';
+			body = {
+				prompt: payload.prompt,
+				site_type: payload.site_type,
+				context: payload.context,
+			};
+		} else if ( key === 'blueprintCandidate' ) {
+			path = config.endpoints?.aiBlueprintCandidate || '/ai/blueprint-candidate';
+			body = {
+				prompt: payload.prompt,
+				site_plan: payload.site_plan,
+				site_type: payload.site_type,
+				context: payload.context,
+			};
+		} else if ( key === 'previewDiff' ) {
+			path = config.endpoints?.aiPreviewDiff || '/ai/preview-diff';
+			body = {
+				prompt: payload.prompt,
+				site_plan: payload.site_plan,
+				blueprint_candidate: payload.blueprint_candidate,
+				site_type: payload.site_type,
+				context: payload.context,
+			};
+		} else if ( key === 'generateGate' ) {
+			path = config.endpoints?.aiGenerateGate || '/ai/generate-gate';
+			body = {
+				prompt: payload.prompt,
+				site_plan: payload.site_plan,
+				blueprint_candidate: payload.blueprint_candidate,
+				preview_diff: payload.preview_diff,
+				site_type: payload.site_type,
+				context: payload.context,
+			};
+		} else if ( key === 'generatePreflight' ) {
+			path = config.endpoints?.aiGeneratePreflight || '/ai/generate-preflight';
+			body = {
+				prompt: payload.prompt,
+				site_plan: payload.site_plan,
+				blueprint_candidate: payload.blueprint_candidate,
+				preview_diff: payload.preview_diff,
+				generate_gate: payload.generate_gate,
+				site_type: payload.site_type,
+				context: payload.context,
+			};
+		} else if ( key === 'generateConfirmation' ) {
+			path = config.endpoints?.aiGenerateConfirmation || '/ai/generate-confirmation';
+			body = {
+				prompt: payload.prompt,
+				site_plan: payload.site_plan,
+				blueprint_candidate: payload.blueprint_candidate,
+				preview_diff: payload.preview_diff,
+				generate_gate: payload.generate_gate,
+				generate_preflight: payload.generate_preflight,
+				site_type: payload.site_type,
+				context: payload.context,
+			};
+		} else if ( key === 'controlledGenerate' ) {
+			path = config.endpoints?.aiControlledGenerate || '/ai/controlled-generate';
+			body = {
+				prompt: payload.prompt,
+				site_plan: payload.site_plan,
+				blueprint_candidate: payload.blueprint_candidate,
+				preview_diff: payload.preview_diff,
+				generate_gate: payload.generate_gate,
+				generate_preflight: payload.generate_preflight,
+				generate_confirmation: payload.generate_confirmation,
+				confirmation_phrase: String( flow.exactPhraseInput || '' ),
+				execute: true,
+				site_type: payload.site_type,
+				context: payload.context,
+			};
+		}
+
+		return request(
+			path,
+			{
+				method: 'POST',
+				body: body,
+			}
+		).then( function ( data ) {
+			flow[ key ] = data || null;
+			flow.currentStep = key;
+			flow.lastActionAt = new Date().toLocaleString();
+			setAIBetaNotice(
+				statusValue( data && data.status ),
+				( data && data.message ) || ( stage.label + ' ready.' )
+			);
+
+			if ( key === 'controlledGenerate' && data && data.generated ) {
+				return refreshDashboardData().then( function () {
+					setAIBetaNotice( statusValue( data.status ), 'Controlled generate completed and proof was refreshed.' );
+				} ).catch( function ( error ) {
+					setAIBetaNotice( 'warning', 'Controlled generate completed, but proof refresh failed: ' + error.message );
+				} );
+			}
+		} ).catch( function ( error ) {
+			flow.error = error.message || ( stage.label + ' failed.' );
+			setAIBetaNotice( 'error', stage.label + ' failed: ' + flow.error );
+		} ).finally( function () {
+			flow.isLoading = false;
+			flow.loadingKey = '';
+			render();
+		} );
+	}
+
 	function interpretPrompt() {
 		const prompt = currentPrompt();
 		const presetVariables = currentPresetVariables();
@@ -2583,6 +3320,7 @@
 		}
 
 		updatePreviewFreshness();
+		invalidateAIBetaFlow( 'AI beta flow needs rebuild after setup changes.' );
 		state.promptInterpretationNotices = [ 'Suggestions applied to dashboard fields. Run Preview before Generate.' ];
 		render();
 	}
