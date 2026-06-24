@@ -137,6 +137,9 @@ function factory_ai_site_plan_response( array $overrides = [] ): array {
 			'locale'         => [ 'language' => 'en' ],
 			'design_profile' => [],
 		];
+	$design_capabilities = function_exists( 'factory_ai_design_profile_capability_matrix' )
+		? factory_ai_design_profile_capability_matrix( $design_contract )
+		: [ 'summary' => [], 'items' => [] ];
 
 	return [
 		'status'                => $status,
@@ -157,6 +160,7 @@ function factory_ai_site_plan_response( array $overrides = [] ): array {
 			'city'             => factory_ai_site_plan_clamp_text( $raw_business['city'] ?? $raw_locale['city'] ?? '', 80 ),
 		],
 		'design_profile'        => is_array( $design_contract['design_profile'] ?? null ) ? $design_contract['design_profile'] : [],
+		'design_profile_capabilities' => $design_capabilities,
 		'confidence'            => factory_ai_normalize_confidence( $overrides['confidence'] ?? 0 ),
 		'recommended_preset'    => sanitize_text_field( (string) ( $overrides['recommended_preset'] ?? '' ) ),
 		'site_type'             => $site_type,

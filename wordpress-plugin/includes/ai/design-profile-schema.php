@@ -181,7 +181,7 @@ function factory_ai_build_design_profile_context( string $prompt, array $context
 	}
 
 	if ( 'slate' === $normalized['design_profile']['palette']['preset'] ) {
-		$warnings[] = 'Slate palette is normalized for planning only in Phase 8a. Current deterministic apply and render behavior remains unchanged.';
+		$warnings[] = 'Slate palette is planning-only in the current Design/Profile contract. Current deterministic apply and render behavior remains unchanged.';
 	}
 
 	return [
@@ -321,4 +321,236 @@ function factory_ai_design_profile_unique_unsupported( array $items ): array {
 	}
 
 	return $unique;
+}
+
+function factory_ai_design_profile_capability_matrix( array $input ): array {
+	$contract = factory_ai_normalize_design_profile_contract( $input );
+	$locale = is_array( $contract['locale'] ?? null ) ? $contract['locale'] : [];
+	$profile = is_array( $contract['design_profile'] ?? null ) ? $contract['design_profile'] : [];
+	$palette = is_array( $profile['palette'] ?? null ) ? $profile['palette'] : [];
+	$image_strategy = is_array( $profile['image_strategy'] ?? null ) ? $profile['image_strategy'] : [];
+	$items = [
+		factory_ai_design_profile_capability_entry(
+			'locale.language',
+			(string) ( $locale['language'] ?? 'en' ),
+			true,
+			true,
+			true,
+			true,
+			'English is the current supported language for planning, preview, and deterministic runtime output.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.tone',
+			(string) ( $profile['tone'] ?? 'premium' ),
+			true,
+			true,
+			true,
+			true,
+			'Tone maps to the current deterministic style-context handling.'
+		),
+		factory_ai_design_profile_palette_capability_entry( (string) ( $palette['preset'] ?? 'turquoise' ) ),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.typography_profile',
+			(string) ( $profile['typography_profile'] ?? 'factory_default' ),
+			true,
+			true,
+			true,
+			true,
+			'The deterministic runtime already uses the factory default typography profile.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.hero_variant',
+			(string) ( $profile['hero_variant'] ?? 'image_left_scrim' ),
+			true,
+			true,
+			true,
+			true,
+			'The current Real Estate hero already matches this default variant.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.property_card_variant',
+			(string) ( $profile['property_card_variant'] ?? 'factory_default' ),
+			true,
+			true,
+			true,
+			true,
+			'The current deterministic property card layout uses this default variant.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.catalog_variant',
+			(string) ( $profile['catalog_variant'] ?? 'stable_catalog_get_filters' ),
+			true,
+			true,
+			true,
+			true,
+			'The current deterministic catalog flow uses the stable GET-filter layout.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.single_property_variant',
+			(string) ( $profile['single_property_variant'] ?? 'factory_default' ),
+			true,
+			true,
+			true,
+			true,
+			'The current single-property page already uses this default variant.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.section_order',
+			(string) ( $profile['section_order'] ?? 'home_default_v1' ),
+			true,
+			true,
+			true,
+			true,
+			'The current Real Estate home page follows this default section order.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.image_strategy.source',
+			(string) ( $image_strategy['source'] ?? 'demo_pool' ),
+			true,
+			true,
+			true,
+			true,
+			'The deterministic runtime uses the bundled demo image pool.'
+		),
+		factory_ai_design_profile_capability_entry(
+			'design_profile.image_strategy.mode',
+			(string) ( $image_strategy['mode'] ?? 'round_robin' ),
+			true,
+			true,
+			true,
+			true,
+			'The deterministic runtime uses round-robin image assignment.'
+		),
+	];
+	$summary = [
+		'supported'       => 0,
+		'planning_only'   => 0,
+		'unsupported'     => 0,
+		'runtime_backed'  => 0,
+		'apply_backed'    => 0,
+	];
+
+	foreach ( $items as $item ) {
+		$status = sanitize_key( (string) ( $item['status'] ?? 'unsupported' ) );
+
+		if ( isset( $summary[ $status ] ) ) {
+			++$summary[ $status ];
+		}
+
+		if ( ! empty( $item['runtime_supported'] ) ) {
+			++$summary['runtime_backed'];
+		}
+
+		if ( ! empty( $item['apply_supported'] ) ) {
+			++$summary['apply_backed'];
+		}
+	}
+
+	return [
+		'summary' => $summary,
+		'items'   => $items,
+	];
+}
+
+function factory_ai_design_profile_capability_entry(
+	string $field,
+	string $value,
+	bool $planning_supported,
+	bool $preview_supported,
+	bool $runtime_supported,
+	bool $apply_supported,
+	string $note
+): array {
+	$status = 'unsupported';
+
+	if ( $runtime_supported && $apply_supported ) {
+		$status = 'supported';
+	} elseif ( $planning_supported || $preview_supported ) {
+		$status = 'planning_only';
+	}
+
+	return [
+		'field'               => sanitize_key( str_replace( '.', '_', $field ) ),
+		'path'                => $field,
+		'value'               => sanitize_key( $value ),
+		'planning_supported'  => $planning_supported,
+		'preview_supported'   => $preview_supported,
+		'runtime_supported'   => $runtime_supported,
+		'apply_supported'     => $apply_supported,
+		'status'              => $status,
+		'note'                => sanitize_text_field( $note ),
+	];
+}
+
+function factory_ai_design_profile_palette_capability_entry( string $value ): array {
+	$value = sanitize_key( $value );
+
+	if ( in_array( $value, [ 'turquoise', 'blue', 'green' ], true ) ) {
+		return factory_ai_design_profile_capability_entry(
+			'design_profile.palette.preset',
+			$value,
+			true,
+			true,
+			true,
+			true,
+			'This palette preset is already consumed by the current deterministic runtime.'
+		);
+	}
+
+	if ( 'slate' === $value ) {
+		return factory_ai_design_profile_capability_entry(
+			'design_profile.palette.preset',
+			$value,
+			true,
+			true,
+			false,
+			false,
+			'Slate is available for planning and preview, but current deterministic apply and render behavior do not consume it yet.'
+		);
+	}
+
+	return factory_ai_design_profile_capability_entry(
+		'design_profile.palette.preset',
+		$value,
+		false,
+		false,
+		false,
+		false,
+		'This palette preset is not supported by the current Design/Profile Schema v1 contract.'
+	);
+}
+
+function factory_ai_design_profile_capability_summary( array $matrix ): array {
+	$matrix = is_array( $matrix ) ? $matrix : [];
+	$summary = is_array( $matrix['summary'] ?? null ) ? $matrix['summary'] : [];
+	$items = is_array( $matrix['items'] ?? null ) ? $matrix['items'] : [];
+	$planning_only = [];
+	$unsupported = [];
+
+	foreach ( $items as $item ) {
+		if ( ! is_array( $item ) ) {
+			continue;
+		}
+
+		$path = sanitize_text_field( (string) ( $item['path'] ?? '' ) );
+		$value = sanitize_text_field( (string) ( $item['value'] ?? '' ) );
+		$status = sanitize_key( (string) ( $item['status'] ?? '' ) );
+		$label = '' !== $path && '' !== $value ? sprintf( '%s=%s', $path, $value ) : $path;
+
+		if ( 'planning_only' === $status && '' !== $label ) {
+			$planning_only[] = $label;
+		}
+
+		if ( 'unsupported' === $status && '' !== $label ) {
+			$unsupported[] = $label;
+		}
+	}
+
+	return [
+		'supported'     => max( 0, (int) ( $summary['supported'] ?? 0 ) ),
+		'planning_only' => max( 0, (int) ( $summary['planning_only'] ?? 0 ) ),
+		'unsupported'   => max( 0, (int) ( $summary['unsupported'] ?? 0 ) ),
+		'planning_only_fields' => array_values( array_unique( $planning_only ) ),
+		'unsupported_fields'   => array_values( array_unique( $unsupported ) ),
+	];
 }

@@ -144,6 +144,17 @@ function factory_ai_build_preview_diff( array $input = [] ): array {
 	$update_preview = factory_ai_preview_diff_build_update_preview( $candidate_body, $source_site_plan );
 	$skip_preview = factory_ai_preview_diff_build_skip_preview( $source_blueprint_candidate, $source_site_plan );
 	$optional_features = factory_ai_preview_diff_optional_features( $source_site_plan, $candidate_body );
+	$design_capabilities = function_exists( 'factory_ai_design_profile_capability_matrix' )
+		? factory_ai_design_profile_capability_matrix(
+			[
+				'locale'         => is_array( $source_site_plan['locale'] ?? null ) ? $source_site_plan['locale'] : [],
+				'design_profile' => is_array( $candidate_body['design_profile'] ?? null ) ? $candidate_body['design_profile'] : [],
+			]
+		)
+		: [ 'summary' => [], 'items' => [] ];
+	$design_capability_summary = function_exists( 'factory_ai_design_profile_capability_summary' )
+		? factory_ai_design_profile_capability_summary( $design_capabilities )
+		: [ 'planning_only' => 0, 'planning_only_fields' => [], 'unsupported' => 0, 'unsupported_fields' => [] ];
 	$unsupported_requests = factory_ai_preview_diff_merge_unsupported(
 		$source_site_plan['unsupported_requests'] ?? [],
 		$source_blueprint_candidate['unsupported_requests'] ?? []
@@ -157,6 +168,10 @@ function factory_ai_build_preview_diff( array $input = [] ): array {
 
 	if ( ! empty( $unsupported_requests ) ) {
 		$warnings[] = 'Some requested capabilities remain outside the supported Real Estate beta flow.';
+	}
+
+	if ( ! empty( $design_capability_summary['planning_only'] ) ) {
+		$warnings[] = 'Some design choices are planning-only and will not affect current deterministic generation output yet.';
 	}
 
 	return factory_ai_preview_diff_response(
@@ -181,8 +196,10 @@ function factory_ai_build_preview_diff( array $input = [] ): array {
 			],
 			'design_profile_summary'     => factory_ai_preview_diff_design_profile_summary(
 				is_array( $candidate_body['design_profile'] ?? null ) ? $candidate_body['design_profile'] : [],
-				is_array( $source_site_plan['locale'] ?? null ) ? $source_site_plan['locale'] : []
+				is_array( $source_site_plan['locale'] ?? null ) ? $source_site_plan['locale'] : [],
+				$design_capabilities
 			),
+			'design_profile_capabilities' => $design_capabilities,
 			'create_preview'             => $create_preview,
 			'update_preview'             => $update_preview,
 			'skip_preview'               => $skip_preview,
@@ -229,6 +246,7 @@ function factory_ai_preview_diff_response( array $overrides = [] ): array {
 		'preview'                    => factory_ai_preview_diff_normalize_preview( $overrides['preview'] ?? [] ),
 		'diff_summary'               => factory_ai_preview_diff_normalize_diff_summary( $overrides['diff_summary'] ?? [] ),
 		'design_profile_summary'     => factory_ai_preview_diff_design_choice_items( $overrides['design_profile_summary'] ?? [] ),
+		'design_profile_capabilities' => factory_ai_preview_diff_normalize_design_capabilities( $overrides['design_profile_capabilities'] ?? [] ),
 		'create_preview'             => factory_ai_preview_diff_preview_items( $overrides['create_preview'] ?? [] ),
 		'update_preview'             => factory_ai_preview_diff_preview_items( $overrides['update_preview'] ?? [] ),
 		'skip_preview'               => factory_ai_preview_diff_preview_items( $overrides['skip_preview'] ?? [] ),
@@ -430,6 +448,17 @@ function factory_ai_preview_diff_build_update_preview( array $candidate_body, ar
 		is_array( $candidate_body['design_profile'] ?? null ) ? $candidate_body['design_profile'] : [],
 		is_array( $source_site_plan['locale'] ?? null ) ? $source_site_plan['locale'] : []
 	);
+	$design_capabilities = function_exists( 'factory_ai_design_profile_capability_matrix' )
+		? factory_ai_design_profile_capability_matrix(
+			[
+				'locale'         => is_array( $source_site_plan['locale'] ?? null ) ? $source_site_plan['locale'] : [],
+				'design_profile' => is_array( $candidate_body['design_profile'] ?? null ) ? $candidate_body['design_profile'] : [],
+			]
+		)
+		: [ 'summary' => [], 'items' => [] ];
+	$design_capability_summary = function_exists( 'factory_ai_design_profile_capability_summary' )
+		? factory_ai_design_profile_capability_summary( $design_capabilities )
+		: [ 'planning_only' => 0, 'planning_only_fields' => [] ];
 
 	if ( ! empty( $design_summary ) ) {
 		$parts = [];
@@ -444,14 +473,17 @@ function factory_ai_preview_diff_build_update_preview( array $candidate_body, ar
 		}
 
 		if ( ! empty( $parts ) ) {
+			$message = 'Plan these controlled design choices: ' . implode( '; ', $parts ) . '.';
+
+			if ( ! empty( $design_capability_summary['planning_only_fields'] ) ) {
+				$message .= ' Planning-only today: ' . implode( ', ', $design_capability_summary['planning_only_fields'] ) . '.';
+			}
+
 			$items[] = [
 				'type'    => 'design',
 				'label'   => 'Design profile',
 				'source'  => 'candidate',
-				'message' => factory_ai_preview_diff_clamp_text(
-					'Plan these controlled design choices: ' . implode( '; ', $parts ) . '.',
-					220
-				),
+				'message' => factory_ai_preview_diff_clamp_text( $message, 220 ),
 			];
 		}
 	}
@@ -562,6 +594,18 @@ function factory_ai_preview_diff_normalize_candidate_source( $candidate_source )
 			? factory_ai_blueprint_candidate_normalize_candidate( $candidate_source['candidate'] ?? null )
 			: ( is_array( $candidate_source['candidate'] ?? null ) ? $candidate_source['candidate'] : null ),
 		'supported_sections'   => factory_ai_preview_diff_text_list( $candidate_source['supported_sections'] ?? [], 80 ),
+		'design_profile_capabilities' => factory_ai_preview_diff_normalize_design_capabilities(
+			$candidate_source['design_profile_capabilities'] ?? (
+				function_exists( 'factory_ai_design_profile_capability_matrix' )
+					? factory_ai_design_profile_capability_matrix(
+						[
+							'locale'         => is_array( $candidate_source['source_site_plan']['locale'] ?? null ) ? $candidate_source['source_site_plan']['locale'] : [],
+							'design_profile' => is_array( $candidate_source['candidate']['design_profile'] ?? null ) ? $candidate_source['candidate']['design_profile'] : [],
+						]
+					)
+					: []
+			)
+		),
 		'unsupported_requests' => factory_ai_normalize_unsupported_items( $candidate_source['unsupported_requests'] ?? [] ),
 		'risks'                => factory_ai_preview_diff_text_list( $candidate_source['risks'] ?? [], 220 ),
 		'warnings'             => factory_ai_normalize_string_list( $candidate_source['warnings'] ?? [], 220 ),
@@ -656,7 +700,7 @@ function factory_ai_preview_diff_design_choice_items( $items ): array {
 	return $normalized;
 }
 
-function factory_ai_preview_diff_design_profile_summary( array $design_profile, array $locale = [] ): array {
+function factory_ai_preview_diff_design_profile_summary( array $design_profile, array $locale = [], array $capability_matrix = [] ): array {
 	$contract = function_exists( 'factory_ai_normalize_design_profile_contract' )
 		? factory_ai_normalize_design_profile_contract(
 			[
@@ -670,40 +714,109 @@ function factory_ai_preview_diff_design_profile_summary( array $design_profile, 
 		];
 	$profile = is_array( $contract['design_profile'] ?? null ) ? $contract['design_profile'] : [];
 	$image = is_array( $profile['image_strategy'] ?? null ) ? $profile['image_strategy'] : [];
+	$capability_items = is_array( $capability_matrix['items'] ?? null )
+		? $capability_matrix['items']
+		: (
+			function_exists( 'factory_ai_design_profile_capability_matrix' )
+				? ( factory_ai_design_profile_capability_matrix( $contract )['items'] ?? [] )
+				: []
+		);
+	$capability_notes = [];
+
+	foreach ( $capability_items as $item ) {
+		if ( ! is_array( $item ) ) {
+			continue;
+		}
+
+		$path = sanitize_text_field( (string) ( $item['path'] ?? '' ) );
+		$note = factory_ai_preview_diff_clamp_text( $item['note'] ?? '', 220 );
+
+		if ( '' !== $path && '' !== $note ) {
+			$capability_notes[ $path ] = $note;
+		}
+	}
 
 	return factory_ai_preview_diff_design_choice_items(
 		[
 			[
 				'label' => 'Language',
 				'value' => strtoupper( (string) ( $contract['locale']['language'] ?? 'en' ) ),
+				'note'  => $capability_notes['locale.language'] ?? '',
 			],
 			[
 				'label' => 'Tone',
 				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['tone'] ?? 'premium' ) ) ),
+				'note'  => $capability_notes['design_profile.tone'] ?? '',
 			],
 			[
 				'label' => 'Palette',
 				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['palette']['preset'] ?? 'turquoise' ) ) ),
-				'note'  => 'Read-only planning value in Phase 8a.',
+				'note'  => $capability_notes['design_profile.palette.preset'] ?? '',
 			],
 			[
 				'label' => 'Hero variant',
 				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['hero_variant'] ?? 'image_left_scrim' ) ) ),
+				'note'  => $capability_notes['design_profile.hero_variant'] ?? '',
 			],
 			[
 				'label' => 'Catalog variant',
 				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['catalog_variant'] ?? 'stable_catalog_get_filters' ) ) ),
+				'note'  => $capability_notes['design_profile.catalog_variant'] ?? '',
 			],
 			[
 				'label' => 'Single property variant',
 				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['single_property_variant'] ?? 'factory_default' ) ) ),
+				'note'  => $capability_notes['design_profile.single_property_variant'] ?? '',
 			],
 			[
 				'label' => 'Image strategy',
 				'value' => ucwords( str_replace( '_', ' ', (string) ( $image['source'] ?? 'demo_pool' ) ) ) . ' / ' . ucwords( str_replace( '_', ' ', (string) ( $image['mode'] ?? 'round_robin' ) ) ),
+				'note'  => $capability_notes['design_profile.image_strategy.source'] ?? '',
 			],
 		]
 	);
+}
+
+function factory_ai_preview_diff_normalize_design_capabilities( $matrix ): array {
+	$matrix = is_array( $matrix ) ? $matrix : [];
+	$summary = is_array( $matrix['summary'] ?? null ) ? $matrix['summary'] : [];
+	$items = is_array( $matrix['items'] ?? null ) ? $matrix['items'] : [];
+	$normalized_items = [];
+
+	foreach ( $items as $item ) {
+		if ( ! is_array( $item ) ) {
+			continue;
+		}
+
+		$status = sanitize_key( (string) ( $item['status'] ?? 'unsupported' ) );
+
+		if ( ! in_array( $status, [ 'supported', 'planning_only', 'unsupported' ], true ) ) {
+			$status = 'unsupported';
+		}
+
+		$normalized_items[] = [
+			'field'              => sanitize_key( (string) ( $item['field'] ?? '' ) ),
+			'path'               => factory_ai_preview_diff_clamp_text( $item['path'] ?? '', 120 ),
+			'value'              => sanitize_key( (string) ( $item['value'] ?? '' ) ),
+			'planning_supported' => ! empty( $item['planning_supported'] ),
+			'preview_supported'  => ! empty( $item['preview_supported'] ),
+			'runtime_supported'  => ! empty( $item['runtime_supported'] ),
+			'apply_supported'    => ! empty( $item['apply_supported'] ),
+			'status'             => $status,
+			'note'               => factory_ai_preview_diff_clamp_text( $item['note'] ?? '', 220 ),
+		];
+	}
+
+	return [
+		'summary' => [
+			'supported'      => max( 0, (int) ( $summary['supported'] ?? 0 ) ),
+			'planning_only'  => max( 0, (int) ( $summary['planning_only'] ?? 0 ) ),
+			'unsupported'    => max( 0, (int) ( $summary['unsupported'] ?? 0 ) ),
+			'runtime_backed' => max( 0, (int) ( $summary['runtime_backed'] ?? 0 ) ),
+			'apply_backed'   => max( 0, (int) ( $summary['apply_backed'] ?? 0 ) ),
+		],
+		'items'   => $normalized_items,
+	];
 }
 
 function factory_ai_preview_diff_optional_feature_items( $items ): array {
