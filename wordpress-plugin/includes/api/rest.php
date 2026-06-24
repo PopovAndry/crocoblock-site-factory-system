@@ -484,7 +484,7 @@ function factory_register_rest_routes(): void {
         }
 
         $tones = [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ];
-        $presets = [ 'turquoise', 'blue', 'green', 'beige' ];
+        $presets = [ 'turquoise', 'blue', 'green', 'beige', 'slate' ];
         $tone = sanitize_key( $received['tone'] ?? 'premium' );
         $primary_preset = sanitize_key( $received['primary_preset'] ?? 'turquoise' );
         $notes = [
@@ -547,6 +547,16 @@ function factory_register_rest_routes(): void {
                 'muted'      => '#53665a',
                 'border'     => '#dcfce7',
                 'link_hover' => '#16a34a',
+            ],
+            'slate' => [
+                'primary'    => '#334155',
+                'accent'     => '#64748b',
+                'background' => '#f8fafc',
+                'surface'    => '#ffffff',
+                'text'       => '#0f172a',
+                'muted'      => '#475569',
+                'border'     => '#e2e8f0',
+                'link_hover' => '#1e293b',
             ],
             'beige' => [
                 'primary'    => '#8a5a2b',

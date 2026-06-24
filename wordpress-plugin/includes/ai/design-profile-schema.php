@@ -180,10 +180,6 @@ function factory_ai_build_design_profile_context( string $prompt, array $context
 		$warnings[] = 'Requested palette preset is not supported in Design/Profile Schema v1. The default palette was used.';
 	}
 
-	if ( 'slate' === $normalized['design_profile']['palette']['preset'] ) {
-		$warnings[] = 'Slate palette is planning-only in the current Design/Profile contract. Current deterministic apply and render behavior remains unchanged.';
-	}
-
 	return [
 		'locale'               => $normalized['locale'],
 		'design_profile'       => $normalized['design_profile'],
@@ -485,7 +481,7 @@ function factory_ai_design_profile_capability_entry(
 function factory_ai_design_profile_palette_capability_entry( string $value ): array {
 	$value = sanitize_key( $value );
 
-	if ( in_array( $value, [ 'turquoise', 'blue', 'green' ], true ) ) {
+	if ( in_array( $value, [ 'turquoise', 'blue', 'green', 'slate' ], true ) ) {
 		return factory_ai_design_profile_capability_entry(
 			'design_profile.palette.preset',
 			$value,
@@ -494,18 +490,6 @@ function factory_ai_design_profile_palette_capability_entry( string $value ): ar
 			true,
 			true,
 			'This palette preset is already consumed by the current deterministic runtime.'
-		);
-	}
-
-	if ( 'slate' === $value ) {
-		return factory_ai_design_profile_capability_entry(
-			'design_profile.palette.preset',
-			$value,
-			true,
-			true,
-			false,
-			false,
-			'Slate is available for planning and preview, but current deterministic apply and render behavior do not consume it yet.'
 		);
 	}
 

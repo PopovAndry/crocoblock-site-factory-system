@@ -175,7 +175,7 @@ function factory_real_estate_apply_service_normalize_style_context( $style_conte
 	$context = is_array( $style_context['context'] ?? null ) ? $style_context['context'] : [];
 	$tokens  = is_array( $style_context['tokens'] ?? null ) ? $style_context['tokens'] : [];
 	$tones   = [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ];
-	$presets = [ 'turquoise', 'blue', 'green', 'beige' ];
+	$presets = [ 'turquoise', 'blue', 'green', 'beige', 'slate' ];
 	$tone    = sanitize_key( (string) ( $context['tone'] ?? $tokens['tone'] ?? 'premium' ) );
 	$primary_preset = sanitize_key( (string) ( $context['primary_preset'] ?? $tokens['primary_preset'] ?? 'turquoise' ) );
 	$notes = factory_real_estate_apply_service_text_list(
