@@ -179,6 +179,10 @@ function factory_ai_build_preview_diff( array $input = [] ): array {
 				'unsupported' => count( $unsupported_requests ),
 				'note'        => 'This is a proposal preview only. Runtime diff will be computed during controlled generate or dry-run later.',
 			],
+			'design_profile_summary'     => factory_ai_preview_diff_design_profile_summary(
+				is_array( $candidate_body['design_profile'] ?? null ) ? $candidate_body['design_profile'] : [],
+				is_array( $source_site_plan['locale'] ?? null ) ? $source_site_plan['locale'] : []
+			),
 			'create_preview'             => $create_preview,
 			'update_preview'             => $update_preview,
 			'skip_preview'               => $skip_preview,
@@ -224,6 +228,7 @@ function factory_ai_preview_diff_response( array $overrides = [] ): array {
 		'source_blueprint_candidate' => factory_ai_preview_diff_normalize_candidate_source( $overrides['source_blueprint_candidate'] ?? [] ),
 		'preview'                    => factory_ai_preview_diff_normalize_preview( $overrides['preview'] ?? [] ),
 		'diff_summary'               => factory_ai_preview_diff_normalize_diff_summary( $overrides['diff_summary'] ?? [] ),
+		'design_profile_summary'     => factory_ai_preview_diff_design_choice_items( $overrides['design_profile_summary'] ?? [] ),
 		'create_preview'             => factory_ai_preview_diff_preview_items( $overrides['create_preview'] ?? [] ),
 		'update_preview'             => factory_ai_preview_diff_preview_items( $overrides['update_preview'] ?? [] ),
 		'skip_preview'               => factory_ai_preview_diff_preview_items( $overrides['skip_preview'] ?? [] ),
@@ -421,6 +426,36 @@ function factory_ai_preview_diff_build_update_preview( array $candidate_body, ar
 		];
 	}
 
+	$design_summary = factory_ai_preview_diff_design_profile_summary(
+		is_array( $candidate_body['design_profile'] ?? null ) ? $candidate_body['design_profile'] : [],
+		is_array( $source_site_plan['locale'] ?? null ) ? $source_site_plan['locale'] : []
+	);
+
+	if ( ! empty( $design_summary ) ) {
+		$parts = [];
+
+		foreach ( $design_summary as $item ) {
+			$label = factory_ai_preview_diff_clamp_text( $item['label'] ?? '', 80 );
+			$value = factory_ai_preview_diff_clamp_text( $item['value'] ?? '', 120 );
+
+			if ( '' !== $label && '' !== $value ) {
+				$parts[] = sprintf( '%s: %s', $label, $value );
+			}
+		}
+
+		if ( ! empty( $parts ) ) {
+			$items[] = [
+				'type'    => 'design',
+				'label'   => 'Design profile',
+				'source'  => 'candidate',
+				'message' => factory_ai_preview_diff_clamp_text(
+					'Plan these controlled design choices: ' . implode( '; ', $parts ) . '.',
+					220
+				),
+			];
+		}
+	}
+
 	return factory_ai_preview_diff_preview_items( $items );
 }
 
@@ -592,6 +627,83 @@ function factory_ai_preview_diff_preview_items( $items ): array {
 	}
 
 	return $normalized;
+}
+
+function factory_ai_preview_diff_design_choice_items( $items ): array {
+	$items = is_array( $items ) ? $items : [];
+	$normalized = [];
+
+	foreach ( $items as $item ) {
+		if ( ! is_array( $item ) ) {
+			continue;
+		}
+
+		$label = factory_ai_preview_diff_clamp_text( $item['label'] ?? '', 120 );
+		$value = factory_ai_preview_diff_clamp_text( $item['value'] ?? '', 160 );
+		$note = factory_ai_preview_diff_clamp_text( $item['note'] ?? '', 220 );
+
+		if ( '' === $label || '' === $value ) {
+			continue;
+		}
+
+		$normalized[] = [
+			'label' => $label,
+			'value' => $value,
+			'note'  => $note,
+		];
+	}
+
+	return $normalized;
+}
+
+function factory_ai_preview_diff_design_profile_summary( array $design_profile, array $locale = [] ): array {
+	$contract = function_exists( 'factory_ai_normalize_design_profile_contract' )
+		? factory_ai_normalize_design_profile_contract(
+			[
+				'locale'         => $locale,
+				'design_profile' => $design_profile,
+			]
+		)
+		: [
+			'locale'         => [ 'language' => 'en' ],
+			'design_profile' => [],
+		];
+	$profile = is_array( $contract['design_profile'] ?? null ) ? $contract['design_profile'] : [];
+	$image = is_array( $profile['image_strategy'] ?? null ) ? $profile['image_strategy'] : [];
+
+	return factory_ai_preview_diff_design_choice_items(
+		[
+			[
+				'label' => 'Language',
+				'value' => strtoupper( (string) ( $contract['locale']['language'] ?? 'en' ) ),
+			],
+			[
+				'label' => 'Tone',
+				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['tone'] ?? 'premium' ) ) ),
+			],
+			[
+				'label' => 'Palette',
+				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['palette']['preset'] ?? 'turquoise' ) ) ),
+				'note'  => 'Read-only planning value in Phase 8a.',
+			],
+			[
+				'label' => 'Hero variant',
+				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['hero_variant'] ?? 'image_left_scrim' ) ) ),
+			],
+			[
+				'label' => 'Catalog variant',
+				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['catalog_variant'] ?? 'stable_catalog_get_filters' ) ) ),
+			],
+			[
+				'label' => 'Single property variant',
+				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['single_property_variant'] ?? 'factory_default' ) ) ),
+			],
+			[
+				'label' => 'Image strategy',
+				'value' => ucwords( str_replace( '_', ' ', (string) ( $image['source'] ?? 'demo_pool' ) ) ) . ' / ' . ucwords( str_replace( '_', ' ', (string) ( $image['mode'] ?? 'round_robin' ) ) ),
+			],
+		]
+	);
 }
 
 function factory_ai_preview_diff_optional_feature_items( $items ): array {

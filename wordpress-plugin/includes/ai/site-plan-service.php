@@ -51,12 +51,26 @@ function factory_ai_build_site_plan( string $prompt, array $context = [], array 
 		: factory_ai_site_plan_context_value( $context, 'preset_variables', 'agency_name', '' );
 	$city = '' !== $city ? $city : factory_ai_site_plan_context_value( $context, 'business', 'city', 'the selected market' );
 	$business_summary = factory_ai_site_plan_business_summary( $agency_name, $city, $prompt );
+	$design_context = function_exists( 'factory_ai_build_design_profile_context' )
+		? factory_ai_build_design_profile_context( $prompt, $context )
+		: [
+			'locale'               => [ 'language' => 'en' ],
+			'design_profile'       => [],
+			'warnings'             => [],
+			'unsupported_requests' => [],
+		];
 	$supported_features = factory_ai_site_plan_supported_features( $lower );
-	$risks = factory_ai_site_plan_risks( $unsupported_requests );
 	$warnings = [
 		'Interpretation only. No blueprint, candidate, or patch was generated.',
 		'No site changes were applied.',
 	];
+	$unsupported_requests = factory_ai_site_plan_dedupe_unsupported_requests(
+		array_merge(
+			$unsupported_requests,
+			is_array( $design_context['unsupported_requests'] ?? null ) ? $design_context['unsupported_requests'] : []
+		)
+	);
+	$risks = factory_ai_site_plan_risks( $unsupported_requests );
 
 	return factory_ai_site_plan_response(
 		[
@@ -68,6 +82,16 @@ function factory_ai_build_site_plan( string $prompt, array $context = [], array 
 			'provider'              => 'local',
 			'site_type'             => 'real_estate',
 			'vertical'              => 'real_estate',
+			'locale'                => array_merge(
+				is_array( $design_context['locale'] ?? null ) ? $design_context['locale'] : [ 'language' => 'en' ],
+				[ 'city' => $city ]
+			),
+			'business'              => [
+				'agency_name'      => $agency_name,
+				'business_summary' => $business_summary,
+				'city'             => $city,
+			],
+			'design_profile'        => $design_context['design_profile'] ?? [],
 			'confidence'            => factory_ai_site_plan_confidence( $agency_name, $city, $unsupported_requests ),
 			'recommended_preset'    => 'real-estate',
 			'business_summary'      => $business_summary,
@@ -81,6 +105,7 @@ function factory_ai_build_site_plan( string $prompt, array $context = [], array 
 			'next_step'             => 'review_site_plan',
 			'warnings'              => array_merge(
 				$warnings,
+				is_array( $design_context['warnings'] ?? null ) ? factory_ai_normalize_string_list( $design_context['warnings'], 200 ) : [],
 				! empty( $unsupported_requests )
 					? [ 'Some requested capabilities are outside the current Real Estate beta flow.' ]
 					: []
@@ -99,6 +124,19 @@ function factory_ai_site_plan_response( array $overrides = [] ): array {
 
 	$site_type = factory_ai_site_plan_normalize_site_type( (string) ( $overrides['site_type'] ?? 'unknown' ) );
 	$vertical = factory_ai_site_plan_normalize_site_type( (string) ( $overrides['vertical'] ?? $site_type ) );
+	$raw_locale = is_array( $overrides['locale'] ?? null ) ? $overrides['locale'] : [];
+	$raw_business = is_array( $overrides['business'] ?? null ) ? $overrides['business'] : [];
+	$design_contract = function_exists( 'factory_ai_normalize_design_profile_contract' )
+		? factory_ai_normalize_design_profile_contract(
+			[
+				'locale'         => $raw_locale,
+				'design_profile' => is_array( $overrides['design_profile'] ?? null ) ? $overrides['design_profile'] : [],
+			]
+		)
+		: [
+			'locale'         => [ 'language' => 'en' ],
+			'design_profile' => [],
+		];
 
 	return [
 		'status'                => $status,
@@ -109,6 +147,16 @@ function factory_ai_site_plan_response( array $overrides = [] ): array {
 		'applies_changes'       => false,
 		'provider_called'       => false,
 		'vertical'              => $vertical,
+		'locale'                => [
+			'language' => sanitize_key( (string) ( $design_contract['locale']['language'] ?? 'en' ) ),
+			'city'     => factory_ai_site_plan_clamp_text( $raw_locale['city'] ?? '', 80 ),
+		],
+		'business'              => [
+			'agency_name'      => factory_ai_site_plan_clamp_text( $raw_business['agency_name'] ?? '', 120 ),
+			'business_summary' => factory_ai_site_plan_clamp_text( $raw_business['business_summary'] ?? $overrides['business_summary'] ?? '', 280 ),
+			'city'             => factory_ai_site_plan_clamp_text( $raw_business['city'] ?? $raw_locale['city'] ?? '', 80 ),
+		],
+		'design_profile'        => is_array( $design_contract['design_profile'] ?? null ) ? $design_contract['design_profile'] : [],
 		'confidence'            => factory_ai_normalize_confidence( $overrides['confidence'] ?? 0 ),
 		'recommended_preset'    => sanitize_text_field( (string) ( $overrides['recommended_preset'] ?? '' ) ),
 		'site_type'             => $site_type,

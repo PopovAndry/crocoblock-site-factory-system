@@ -140,6 +140,9 @@ function factory_ai_build_blueprint_candidate( array $input = [] ): array {
 			'candidate'            => $candidate,
 			'supported_sections'   => [
 				'site',
+				'locale',
+				'business',
+				'design_profile',
 				'theme',
 				'plugins',
 				'pages',
@@ -179,6 +182,7 @@ function factory_ai_blueprint_candidate_response( array $overrides = [] ): array
 	$site_type = factory_ai_blueprint_candidate_normalize_site_type(
 		(string) ( $overrides['site_type'] ?? $vertical )
 	);
+	$normalized_source_site_plan = factory_ai_blueprint_candidate_normalize_site_plan( $overrides['source_site_plan'] ?? [] );
 
 	return [
 		'status'               => $status,
@@ -190,7 +194,7 @@ function factory_ai_blueprint_candidate_response( array $overrides = [] ): array
 		'provider_called'      => false,
 		'vertical'             => $vertical,
 		'recommended_preset'   => sanitize_text_field( (string) ( $overrides['recommended_preset'] ?? '' ) ),
-		'source_site_plan'     => factory_ai_blueprint_candidate_normalize_site_plan( $overrides['source_site_plan'] ?? [] ),
+		'source_site_plan'     => $normalized_source_site_plan,
 		'candidate'            => factory_ai_blueprint_candidate_normalize_candidate( $overrides['candidate'] ?? null ),
 		'supported_sections'   => factory_ai_blueprint_candidate_text_list( $overrides['supported_sections'] ?? [], 80 ),
 		'unsupported_requests' => factory_ai_normalize_unsupported_items( $overrides['unsupported_requests'] ?? [] ),
@@ -231,6 +235,19 @@ function factory_ai_blueprint_candidate_display_name( array $site_plan, array $c
 }
 
 function factory_ai_blueprint_candidate_build_from_baseline( array $baseline, array $site_plan, array $context, string $display_name ): array {
+	$site_locale = is_array( $site_plan['locale'] ?? null ) ? $site_plan['locale'] : [];
+	$site_business = is_array( $site_plan['business'] ?? null ) ? $site_plan['business'] : [];
+	$design_contract = function_exists( 'factory_ai_normalize_design_profile_contract' )
+		? factory_ai_normalize_design_profile_contract(
+			[
+				'locale'         => $site_locale,
+				'design_profile' => is_array( $site_plan['design_profile'] ?? null ) ? $site_plan['design_profile'] : [],
+			]
+		)
+		: [
+			'locale'         => [ 'language' => 'en' ],
+			'design_profile' => [],
+		];
 	$pages = factory_ai_blueprint_candidate_pages( $baseline, $display_name );
 	$cpt = factory_ai_blueprint_candidate_cpt( $baseline );
 	$taxonomies = factory_ai_blueprint_candidate_taxonomies( $baseline );
@@ -244,9 +261,19 @@ function factory_ai_blueprint_candidate_build_from_baseline( array $baseline, ar
 	return [
 		'version'                 => 'candidate-v1',
 		'baseline_version'        => sanitize_text_field( (string) ( $baseline['version'] ?? '0.2' ) ),
+		'locale'                  => [
+			'language' => sanitize_key( (string) ( $design_contract['locale']['language'] ?? 'en' ) ),
+			'city'     => factory_ai_blueprint_candidate_clamp_text( $site_locale['city'] ?? '', 80 ),
+		],
+		'business'                => [
+			'agency_name'      => factory_ai_blueprint_candidate_clamp_text( $site_business['agency_name'] ?? $display_name, 120 ),
+			'business_summary' => factory_ai_blueprint_candidate_clamp_text( $site_business['business_summary'] ?? $site_plan['business_summary'] ?? '', 280 ),
+			'city'             => factory_ai_blueprint_candidate_clamp_text( $site_business['city'] ?? $site_locale['city'] ?? '', 80 ),
+		],
+		'design_profile'          => is_array( $design_contract['design_profile'] ?? null ) ? $design_contract['design_profile'] : [],
 		'site'                    => [
 			'name'               => $display_name,
-			'language'           => sanitize_text_field( (string) ( $baseline['site']['language'] ?? 'en' ) ),
+			'language'           => sanitize_text_field( (string) ( $design_contract['locale']['language'] ?? $baseline['site']['language'] ?? 'en' ) ),
 			'permalink'          => sanitize_text_field( (string) ( $baseline['site']['permalink'] ?? '/%postname%/' ) ),
 			'theme'              => sanitize_text_field( (string) ( $baseline['theme']['slug'] ?? 'kava' ) ),
 			'style'              => [
@@ -624,6 +651,20 @@ function factory_ai_blueprint_candidate_normalize_site_plan( $site_plan ): array
 		return [];
 	}
 
+	$site_locale = is_array( $site_plan['locale'] ?? null ) ? $site_plan['locale'] : [];
+	$site_business = is_array( $site_plan['business'] ?? null ) ? $site_plan['business'] : [];
+	$design_contract = function_exists( 'factory_ai_normalize_design_profile_contract' )
+		? factory_ai_normalize_design_profile_contract(
+			[
+				'locale'         => $site_locale,
+				'design_profile' => is_array( $site_plan['design_profile'] ?? null ) ? $site_plan['design_profile'] : [],
+			]
+		)
+		: [
+			'locale'         => [ 'language' => 'en' ],
+			'design_profile' => [],
+		];
+
 	return [
 		'status'               => sanitize_key( (string) ( $site_plan['status'] ?? 'error' ) ),
 		'code'                 => sanitize_key( (string) ( $site_plan['code'] ?? '' ) ),
@@ -636,6 +677,16 @@ function factory_ai_blueprint_candidate_normalize_site_plan( $site_plan ): array
 		'confidence'           => factory_ai_normalize_confidence( $site_plan['confidence'] ?? 0 ),
 		'recommended_preset'   => sanitize_text_field( (string) ( $site_plan['recommended_preset'] ?? '' ) ),
 		'site_type'            => factory_ai_blueprint_candidate_normalize_site_type( (string) ( $site_plan['site_type'] ?? 'unknown' ) ),
+		'locale'               => [
+			'language' => sanitize_key( (string) ( $design_contract['locale']['language'] ?? 'en' ) ),
+			'city'     => factory_ai_blueprint_candidate_clamp_text( $site_locale['city'] ?? '', 80 ),
+		],
+		'business'             => [
+			'agency_name'      => factory_ai_blueprint_candidate_clamp_text( $site_business['agency_name'] ?? '', 120 ),
+			'business_summary' => factory_ai_blueprint_candidate_clamp_text( $site_business['business_summary'] ?? $site_plan['business_summary'] ?? '', 280 ),
+			'city'             => factory_ai_blueprint_candidate_clamp_text( $site_business['city'] ?? $site_locale['city'] ?? '', 80 ),
+		],
+		'design_profile'       => is_array( $design_contract['design_profile'] ?? null ) ? $design_contract['design_profile'] : [],
 		'business_summary'     => factory_ai_blueprint_candidate_clamp_text( $site_plan['business_summary'] ?? '', 280 ),
 		'pages'                => factory_ai_blueprint_candidate_page_summary_list( $site_plan['pages'] ?? [] ),
 		'sections'             => factory_ai_blueprint_candidate_section_summary_list( $site_plan['sections'] ?? [] ),
@@ -655,9 +706,33 @@ function factory_ai_blueprint_candidate_normalize_candidate( $candidate ) {
 		return null;
 	}
 
+	$candidate_locale = is_array( $candidate['locale'] ?? null ) ? $candidate['locale'] : [];
+	$candidate_business = is_array( $candidate['business'] ?? null ) ? $candidate['business'] : [];
+	$design_contract = function_exists( 'factory_ai_normalize_design_profile_contract' )
+		? factory_ai_normalize_design_profile_contract(
+			[
+				'locale'         => $candidate_locale,
+				'design_profile' => is_array( $candidate['design_profile'] ?? null ) ? $candidate['design_profile'] : [],
+			]
+		)
+		: [
+			'locale'         => [ 'language' => 'en' ],
+			'design_profile' => [],
+		];
+
 	return [
 		'version'                 => factory_ai_blueprint_candidate_clamp_text( $candidate['version'] ?? '', 80 ),
 		'baseline_version'        => factory_ai_blueprint_candidate_clamp_text( $candidate['baseline_version'] ?? '', 80 ),
+		'locale'                  => [
+			'language' => sanitize_key( (string) ( $design_contract['locale']['language'] ?? 'en' ) ),
+			'city'     => factory_ai_blueprint_candidate_clamp_text( $candidate_locale['city'] ?? '', 80 ),
+		],
+		'business'                => [
+			'agency_name'      => factory_ai_blueprint_candidate_clamp_text( $candidate_business['agency_name'] ?? '', 120 ),
+			'business_summary' => factory_ai_blueprint_candidate_clamp_text( $candidate_business['business_summary'] ?? '', 280 ),
+			'city'             => factory_ai_blueprint_candidate_clamp_text( $candidate_business['city'] ?? $candidate_locale['city'] ?? '', 80 ),
+		],
+		'design_profile'          => is_array( $design_contract['design_profile'] ?? null ) ? $design_contract['design_profile'] : [],
 		'site'                    => is_array( $candidate['site'] ?? null ) ? $candidate['site'] : [],
 		'pages'                   => factory_ai_blueprint_candidate_page_summary_list( $candidate['pages'] ?? [] ),
 		'cpt'                     => is_array( $candidate['cpt'] ?? null ) ? array_values( $candidate['cpt'] ) : [],
