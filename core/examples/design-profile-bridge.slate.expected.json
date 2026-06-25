@@ -1,0 +1,42 @@
+{
+  "design_profile": {
+    "tone": "modern",
+    "palette": {
+      "preset": "slate"
+    },
+    "typography_profile": "factory_default",
+    "hero_variant": "image_left_scrim",
+    "property_card_variant": "factory_default",
+    "catalog_variant": "stable_catalog_get_filters",
+    "single_property_variant": "factory_default",
+    "section_order": "home_default_v1",
+    "image_strategy": {
+      "source": "demo_pool",
+      "mode": "round_robin"
+    }
+  },
+  "style_context": {
+    "tone": "modern",
+    "primary_preset": "slate"
+  },
+  "style_tokens": {
+    "primary": "#334155",
+    "accent": "#64748b",
+    "background": "#f8fafc",
+    "surface": "#ffffff",
+    "text": "#0f172a",
+    "muted": "#475569",
+    "border": "#e2e8f0",
+    "link_hover": "#1e293b",
+    "tone": "modern",
+    "primary_preset": "slate",
+    "button": "#64748b",
+    "button_text": "#ffffff",
+    "link": "#334155",
+    "heading": "#0f172a"
+  },
+  "image_context": {
+    "source": "demo_pool",
+    "mode": "round_robin"
+  }
+}
