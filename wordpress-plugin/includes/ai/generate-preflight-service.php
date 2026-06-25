@@ -348,6 +348,20 @@ function factory_ai_generate_preflight_runtime_snapshot( array $dependency_statu
 function factory_ai_generate_preflight_dry_run_proof_preview( array $source_generate_gate, array $dependency_status, array $ownership_status ): array {
 	$preview = is_array( $source_generate_gate['source_preview_diff'] ?? null ) ? $source_generate_gate['source_preview_diff'] : [];
 	$diff_summary = is_array( $preview['diff_summary'] ?? null ) ? $preview['diff_summary'] : [];
+	$candidate_source = is_array( $preview['source_blueprint_candidate'] ?? null ) ? $preview['source_blueprint_candidate'] : [];
+	$candidate_body = is_array( $candidate_source['candidate'] ?? null ) ? $candidate_source['candidate'] : [];
+	$authoritative_design = function_exists( 'factory_ai_build_real_estate_apply_design_context' )
+		? factory_ai_build_real_estate_apply_design_context(
+			[
+				'design_profile' => is_array( $candidate_body['design_profile'] ?? null ) ? $candidate_body['design_profile'] : [],
+			]
+		)
+		: [
+			'design_profile' => [],
+			'style_context'  => [],
+			'style_tokens'   => [],
+			'image_context'  => [],
+		];
 	$page_targets = [];
 	$entity_types = [];
 
@@ -378,6 +392,10 @@ function factory_ai_generate_preflight_dry_run_proof_preview( array $source_gene
 			'updates'  => max( 0, (int) ( $diff_summary['updates'] ?? 0 ) ),
 			'skips'    => max( 0, (int) ( $diff_summary['skips'] ?? 0 ) ),
 		],
+		'design_profile'                   => is_array( $authoritative_design['design_profile'] ?? null ) ? $authoritative_design['design_profile'] : [],
+		'style_context'                    => is_array( $authoritative_design['style_context'] ?? null ) ? $authoritative_design['style_context'] : [],
+		'style_tokens'                     => is_array( $authoritative_design['style_tokens'] ?? null ) ? $authoritative_design['style_tokens'] : [],
+		'image_context'                    => is_array( $authoritative_design['image_context'] ?? null ) ? $authoritative_design['image_context'] : [],
 		'dependency_checks'                => [
 			'required_ready' => ! empty( $dependency_status['ready'] ),
 			'blocking_count' => count( $dependency_status['blocking'] ?? [] ),
@@ -509,6 +527,10 @@ function factory_ai_generate_preflight_normalize_dry_run_preview( $preview ): ar
 		'planned_pages'                     => factory_ai_generate_preflight_text_list( $preview['planned_pages'] ?? [], 120 ),
 		'planned_entity_types'              => factory_ai_generate_preflight_text_list( $preview['planned_entity_types'] ?? [], 80 ),
 		'planned_summary'                   => is_array( $preview['planned_summary'] ?? null ) ? $preview['planned_summary'] : [],
+		'design_profile'                    => is_array( $preview['design_profile'] ?? null ) ? $preview['design_profile'] : [],
+		'style_context'                     => is_array( $preview['style_context'] ?? null ) ? $preview['style_context'] : [],
+		'style_tokens'                      => is_array( $preview['style_tokens'] ?? null ) ? $preview['style_tokens'] : [],
+		'image_context'                     => is_array( $preview['image_context'] ?? null ) ? $preview['image_context'] : [],
 		'dependency_checks'                 => is_array( $preview['dependency_checks'] ?? null ) ? $preview['dependency_checks'] : [],
 		'ownership_checks'                  => is_array( $preview['ownership_checks'] ?? null ) ? $preview['ownership_checks'] : [],
 		'runtime_diff_required_before_apply' => ! empty( $preview['runtime_diff_required_before_apply'] ),

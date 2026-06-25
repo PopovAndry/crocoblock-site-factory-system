@@ -254,6 +254,56 @@ function factory_ai_design_profile_normalize_palette_input( string $value ): str
 	return $value;
 }
 
+function factory_ai_build_real_estate_apply_design_context( array $input = [] ): array {
+	$design_profile = is_array( $input['design_profile'] ?? null ) ? $input['design_profile'] : [];
+	$fallback_style = is_array( $input['style_context'] ?? null ) ? $input['style_context'] : [];
+	$fallback_image = is_array( $input['image_context'] ?? null ) ? $input['image_context'] : [];
+	$contract       = factory_ai_normalize_design_profile_contract(
+		[
+			'locale'         => is_array( $input['locale'] ?? null ) ? $input['locale'] : [],
+			'design_profile' => $design_profile,
+		]
+	);
+	$profile        = is_array( $contract['design_profile'] ?? null ) ? $contract['design_profile'] : factory_ai_design_profile_defaults()['design_profile'];
+	$tones          = factory_ai_design_profile_allowed_values()['tone'];
+	$runtime_presets = [ 'turquoise', 'blue', 'green', 'beige', 'slate' ];
+	$tone           = sanitize_key( (string) ( $profile['tone'] ?? $fallback_style['tone'] ?? 'premium' ) );
+	$primary_preset = sanitize_key(
+		(string) (
+			$profile['palette']['preset']
+			?? $fallback_style['primary_preset']
+			?? 'turquoise'
+		)
+	);
+
+	if ( ! in_array( $tone, $tones, true ) ) {
+		$tone = 'premium';
+	}
+
+	if ( ! in_array( $primary_preset, $runtime_presets, true ) ) {
+		$primary_preset = 'turquoise';
+	}
+
+	$style_context = [
+		'tone'           => $tone,
+		'primary_preset' => $primary_preset,
+	];
+	$image_strategy = is_array( $profile['image_strategy'] ?? null ) ? $profile['image_strategy'] : [];
+	$image_context  = [
+		'source' => sanitize_key( (string) ( $image_strategy['source'] ?? $fallback_image['source'] ?? 'demo_pool' ) ),
+		'mode'   => sanitize_key( (string) ( $image_strategy['mode'] ?? $fallback_image['mode'] ?? 'round_robin' ) ),
+	];
+
+	return [
+		'design_profile' => $profile,
+		'style_context'  => $style_context,
+		'style_tokens'   => function_exists( 'factory_rest_derive_real_estate_style_tokens' )
+			? factory_rest_derive_real_estate_style_tokens( $style_context )
+			: [],
+		'image_context'  => $image_context,
+	];
+}
+
 function factory_ai_design_profile_prompt_unsupported_requests( string $prompt ): array {
 	$lower = strtolower( $prompt );
 	$items = [];

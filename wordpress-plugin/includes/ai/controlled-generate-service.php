@@ -466,7 +466,7 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 		);
 	}
 
-	$apply_context = factory_ai_controlled_generate_sanitize_apply_context( $context );
+	$apply_context = factory_ai_controlled_generate_build_authoritative_apply_context( $context, $server_confirmation );
 
 	try {
 		$apply_result = factory_apply_real_estate_preset_internal(
@@ -484,8 +484,9 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 				],
 				'style_context'   => [
 					'context' => $apply_context['style_context'],
+					'tokens'  => $apply_context['style_tokens'],
 					'notes'   => [
-						'Controlled generate reused the safe style context after server-side gating.',
+						'Controlled generate converted the authoritative design profile into deterministic runtime style tokens after server-side gating.',
 					],
 				],
 				'image_context'   => [
@@ -799,7 +800,26 @@ function factory_ai_controlled_generate_normalize_context( array $context ): arr
 
 function factory_ai_controlled_generate_sanitize_apply_context( array $context ): array {
 	if ( function_exists( 'factory_rest_ai_sanitize_interpret_context' ) ) {
-		return factory_rest_ai_sanitize_interpret_context( $context );
+		$sanitized = factory_rest_ai_sanitize_interpret_context( $context );
+
+		if ( ! is_array( $sanitized ) ) {
+			$sanitized = [];
+		}
+
+		$sanitized['preset'] = 'real-estate';
+		$sanitized['preset_variables'] = is_array( $sanitized['preset_variables'] ?? null ) ? $sanitized['preset_variables'] : [];
+		$sanitized['style_context'] = is_array( $sanitized['style_context'] ?? null ) ? $sanitized['style_context'] : [];
+		$sanitized['image_context'] = is_array( $sanitized['image_context'] ?? null ) ? $sanitized['image_context'] : [];
+
+		if ( function_exists( 'factory_ai_normalize_enum' ) ) {
+			$sanitized['style_context']['primary_preset'] = factory_ai_normalize_enum(
+				$sanitized['style_context']['primary_preset'] ?? 'turquoise',
+				[ 'turquoise', 'blue', 'green', 'beige', 'slate' ],
+				'turquoise'
+			);
+		}
+
+		return $sanitized;
 	}
 
 	$preset_variables = is_array( $context['preset_variables'] ?? null ) ? $context['preset_variables'] : [];
@@ -820,12 +840,41 @@ function factory_ai_controlled_generate_sanitize_apply_context( array $context )
 		],
 		'style_context'    => [
 			'tone'           => function_exists( 'factory_ai_normalize_enum' ) ? factory_ai_normalize_enum( $style_context['tone'] ?? 'premium', [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ], 'premium' ) : 'premium',
-			'primary_preset' => function_exists( 'factory_ai_normalize_enum' ) ? factory_ai_normalize_enum( $style_context['primary_preset'] ?? 'turquoise', [ 'turquoise', 'blue', 'green', 'beige' ], 'turquoise' ) : 'turquoise',
+			'primary_preset' => function_exists( 'factory_ai_normalize_enum' ) ? factory_ai_normalize_enum( $style_context['primary_preset'] ?? 'turquoise', [ 'turquoise', 'blue', 'green', 'beige', 'slate' ], 'turquoise' ) : 'turquoise',
 		],
 		'image_context'    => [
 			'source' => 'demo_pool',
 			'mode'   => 'round_robin',
 		],
+	];
+}
+
+function factory_ai_controlled_generate_build_authoritative_apply_context( array $context, array $server_confirmation ): array {
+	$sanitized = factory_ai_controlled_generate_sanitize_apply_context( $context );
+	$source_generate_preflight = is_array( $server_confirmation['source_generate_preflight'] ?? null ) ? $server_confirmation['source_generate_preflight'] : [];
+	$dry_run_preview = is_array( $source_generate_preflight['dry_run_proof_preview'] ?? null ) ? $source_generate_preflight['dry_run_proof_preview'] : [];
+	$authoritative_design = function_exists( 'factory_ai_build_real_estate_apply_design_context' )
+		? factory_ai_build_real_estate_apply_design_context(
+			[
+				'design_profile' => is_array( $dry_run_preview['design_profile'] ?? null ) ? $dry_run_preview['design_profile'] : [],
+				'style_context'  => is_array( $dry_run_preview['style_context'] ?? null ) ? $dry_run_preview['style_context'] : $sanitized['style_context'],
+				'image_context'  => is_array( $dry_run_preview['image_context'] ?? null ) ? $dry_run_preview['image_context'] : $sanitized['image_context'],
+			]
+		)
+		: [
+			'design_profile' => is_array( $dry_run_preview['design_profile'] ?? null ) ? $dry_run_preview['design_profile'] : [],
+			'style_context'  => is_array( $dry_run_preview['style_context'] ?? null ) ? $dry_run_preview['style_context'] : $sanitized['style_context'],
+			'style_tokens'   => is_array( $dry_run_preview['style_tokens'] ?? null ) ? $dry_run_preview['style_tokens'] : [],
+			'image_context'  => is_array( $dry_run_preview['image_context'] ?? null ) ? $dry_run_preview['image_context'] : $sanitized['image_context'],
+		];
+
+	return [
+		'preset'           => 'real-estate',
+		'preset_variables' => $sanitized['preset_variables'],
+		'design_profile'   => is_array( $authoritative_design['design_profile'] ?? null ) ? $authoritative_design['design_profile'] : [],
+		'style_context'    => is_array( $authoritative_design['style_context'] ?? null ) ? $authoritative_design['style_context'] : $sanitized['style_context'],
+		'style_tokens'     => is_array( $authoritative_design['style_tokens'] ?? null ) ? $authoritative_design['style_tokens'] : [],
+		'image_context'    => is_array( $authoritative_design['image_context'] ?? null ) ? $authoritative_design['image_context'] : $sanitized['image_context'],
 	];
 }
 
