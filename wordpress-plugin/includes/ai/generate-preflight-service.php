@@ -362,6 +362,7 @@ function factory_ai_generate_preflight_dry_run_proof_preview( array $source_gene
 			'style_tokens'   => [],
 			'image_context'  => [],
 		];
+	$hero_variant = sanitize_key( (string) ( $authoritative_design['design_profile']['hero_variant'] ?? 'image_left_scrim' ) );
 	$page_targets = [];
 	$entity_types = [];
 
@@ -391,6 +392,12 @@ function factory_ai_generate_preflight_dry_run_proof_preview( array $source_gene
 			'creates'  => max( 0, (int) ( $diff_summary['creates'] ?? 0 ) ),
 			'updates'  => max( 0, (int) ( $diff_summary['updates'] ?? 0 ) ),
 			'skips'    => max( 0, (int) ( $diff_summary['skips'] ?? 0 ) ),
+		],
+		'hero_variant'                     => $hero_variant,
+		'hero_variant_proof'               => [
+			'requested'    => sanitize_key( (string) ( $candidate_body['design_profile']['hero_variant'] ?? $hero_variant ) ),
+			'authoritative'=> $hero_variant,
+			'apply_target' => 'pages.home.sections[type=hero].variant',
 		],
 		'design_profile'                   => is_array( $authoritative_design['design_profile'] ?? null ) ? $authoritative_design['design_profile'] : [],
 		'style_context'                    => is_array( $authoritative_design['style_context'] ?? null ) ? $authoritative_design['style_context'] : [],
@@ -527,6 +534,8 @@ function factory_ai_generate_preflight_normalize_dry_run_preview( $preview ): ar
 		'planned_pages'                     => factory_ai_generate_preflight_text_list( $preview['planned_pages'] ?? [], 120 ),
 		'planned_entity_types'              => factory_ai_generate_preflight_text_list( $preview['planned_entity_types'] ?? [], 80 ),
 		'planned_summary'                   => is_array( $preview['planned_summary'] ?? null ) ? $preview['planned_summary'] : [],
+		'hero_variant'                      => sanitize_key( (string) ( $preview['hero_variant'] ?? 'image_left_scrim' ) ),
+		'hero_variant_proof'                => is_array( $preview['hero_variant_proof'] ?? null ) ? $preview['hero_variant_proof'] : [],
 		'design_profile'                    => is_array( $preview['design_profile'] ?? null ) ? $preview['design_profile'] : [],
 		'style_context'                     => is_array( $preview['style_context'] ?? null ) ? $preview['style_context'] : [],
 		'style_tokens'                      => is_array( $preview['style_tokens'] ?? null ) ? $preview['style_tokens'] : [],

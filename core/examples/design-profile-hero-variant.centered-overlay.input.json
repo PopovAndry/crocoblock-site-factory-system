@@ -1,0 +1,21 @@
+{
+  "locale": {
+    "language": "en"
+  },
+  "design_profile": {
+    "tone": "modern",
+    "palette": {
+      "preset": "slate"
+    },
+    "typography_profile": "factory_default",
+    "hero_variant": "centered_overlay",
+    "property_card_variant": "factory_default",
+    "catalog_variant": "stable_catalog_get_filters",
+    "single_property_variant": "factory_default",
+    "section_order": "home_default_v1",
+    "image_strategy": {
+      "source": "demo_pool",
+      "mode": "round_robin"
+    }
+  }
+}

@@ -21,6 +21,10 @@ function factory_apply_real_estate_preset_internal( array $args = [] ): array {
 	$image_context = factory_real_estate_apply_service_normalize_image_context( $args['image_context'] ?? [], $base_blueprint );
 	$blueprint = factory_rest_apply_real_estate_preset_variables( $base_blueprint, $prompt_context['applied_variables'] );
 	$blueprint = factory_rest_apply_real_estate_style_tokens( $blueprint, $style_context['tokens'] );
+	$blueprint = factory_real_estate_apply_service_apply_home_hero_variant(
+		$blueprint,
+		(string) ( $style_context['context']['hero_variant'] ?? 'image_left_scrim' )
+	);
 	$prompt = $prompt_context['prompt'];
 	$dependencies = factory_rest_get_real_estate_dependency_status();
 
@@ -98,6 +102,7 @@ function factory_apply_real_estate_preset_internal( array $args = [] ): array {
 			'prompt_notes'      => $prompt_context['notes'],
 			'style_context'     => $style_context['context'],
 			'style_tokens'      => $style_context['tokens'],
+			'hero_variant'      => factory_real_estate_apply_service_find_home_hero_variant( $blueprint ),
 			'image_context'     => $image_context['context'],
 			'image_notes'       => $image_context['notes'],
 			'file'              => basename( $manifest_path ),
@@ -176,8 +181,10 @@ function factory_real_estate_apply_service_normalize_style_context( $style_conte
 	$tokens  = is_array( $style_context['tokens'] ?? null ) ? $style_context['tokens'] : [];
 	$tones   = [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ];
 	$presets = [ 'turquoise', 'blue', 'green', 'beige', 'slate' ];
+	$hero_variants = [ 'image_left_scrim', 'centered_overlay' ];
 	$tone    = sanitize_key( (string) ( $context['tone'] ?? $tokens['tone'] ?? 'premium' ) );
 	$primary_preset = sanitize_key( (string) ( $context['primary_preset'] ?? $tokens['primary_preset'] ?? 'turquoise' ) );
+	$hero_variant = sanitize_key( (string) ( $context['hero_variant'] ?? 'image_left_scrim' ) );
 	$notes = factory_real_estate_apply_service_text_list(
 		$style_context['notes'] ?? [
 			'Factory design tokens are deterministic; no AI palette generation is used.',
@@ -194,9 +201,14 @@ function factory_real_estate_apply_service_normalize_style_context( $style_conte
 		$primary_preset = 'turquoise';
 	}
 
+	if ( ! in_array( $hero_variant, $hero_variants, true ) ) {
+		$hero_variant = 'image_left_scrim';
+	}
+
 	$context = [
 		'tone'           => $tone,
 		'primary_preset' => $primary_preset,
+		'hero_variant'   => $hero_variant,
 	];
 
 	return [
@@ -289,4 +301,55 @@ function factory_real_estate_apply_service_text_list( $items, int $max ): array 
 	}
 
 	return array_values( array_unique( $normalized ) );
+}
+
+function factory_real_estate_apply_service_apply_home_hero_variant( array $blueprint, string $hero_variant ): array {
+	$hero_variant = sanitize_key( $hero_variant );
+
+	if ( ! in_array( $hero_variant, [ 'image_left_scrim', 'centered_overlay' ], true ) ) {
+		$hero_variant = 'image_left_scrim';
+	}
+
+	$sections = is_array( $blueprint['pages']['home']['sections'] ?? null ) ? $blueprint['pages']['home']['sections'] : null;
+
+	if ( ! is_array( $sections ) ) {
+		return $blueprint;
+	}
+
+	foreach ( $sections as $index => $section ) {
+		if ( ! is_array( $section ) ) {
+			continue;
+		}
+
+		if ( 'hero' !== sanitize_key( (string) ( $section['type'] ?? '' ) ) ) {
+			continue;
+		}
+
+		$sections[ $index ]['variant'] = $hero_variant;
+		$blueprint['pages']['home']['sections'] = $sections;
+
+		return $blueprint;
+	}
+
+	return $blueprint;
+}
+
+function factory_real_estate_apply_service_find_home_hero_variant( array $blueprint ): string {
+	$sections = is_array( $blueprint['pages']['home']['sections'] ?? null ) ? $blueprint['pages']['home']['sections'] : [];
+
+	foreach ( $sections as $section ) {
+		if ( ! is_array( $section ) ) {
+			continue;
+		}
+
+		if ( 'hero' !== sanitize_key( (string) ( $section['type'] ?? '' ) ) ) {
+			continue;
+		}
+
+		$variant = sanitize_key( (string) ( $section['variant'] ?? 'image_left_scrim' ) );
+
+		return in_array( $variant, [ 'image_left_scrim', 'centered_overlay' ], true ) ? $variant : 'image_left_scrim';
+	}
+
+	return 'image_left_scrim';
 }

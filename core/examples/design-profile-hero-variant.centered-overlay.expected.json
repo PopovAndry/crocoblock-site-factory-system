@@ -5,7 +5,7 @@
       "preset": "slate"
     },
     "typography_profile": "factory_default",
-    "hero_variant": "image_left_scrim",
+    "hero_variant": "centered_overlay",
     "property_card_variant": "factory_default",
     "catalog_variant": "stable_catalog_get_filters",
     "single_property_variant": "factory_default",
@@ -18,7 +18,7 @@
   "style_context": {
     "tone": "modern",
     "primary_preset": "slate",
-    "hero_variant": "image_left_scrim"
+    "hero_variant": "centered_overlay"
   },
   "style_tokens": {
     "primary": "#334155",

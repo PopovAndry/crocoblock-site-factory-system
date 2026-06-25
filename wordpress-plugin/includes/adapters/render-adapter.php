@@ -2667,19 +2667,16 @@ class Factory_Render_Adapter {
 				$subtitle  = $section['subtitle'] ?? '';
 				$cta_label = $section['cta_label'] ?? 'Browse properties';
 				$cta_url   = $this->resolve_frontend_url( $section['cta_url'] ?? '', '/properties/' );
-
-				$html .= '<section class="factory-home-hero" style="position: relative; width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); min-height: clamp(520px, 72vw, 720px); padding: clamp(96px, 12vw, 150px) 0 clamp(92px, 10vw, 130px); overflow: hidden; background: ' . esc_attr( $style_tokens['heading'] ) . ';">';
-				$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background-image: url(\'' . esc_url( $hero_image ) . '\'); background-size: cover; background-position: center; opacity: 1;"></div>';
-				$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5, 30, 28, 0.55) 0%, rgba(7, 47, 43, 0.38) 32%, rgba(15, 118, 110, 0.1) 58%, rgba(15, 118, 110, 0) 100%);"></div>';
-				$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
-				$html .= '<div style="max-width: 700px;">';
-				$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">Real Estate Beta</span>';
-				$html .= '<h1 style="font-size: clamp(38px, 5vw, 68px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
-				$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.92); margin: 0 0 28px; max-width: 640px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';
-				$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; border-radius: 999px; background: ' . esc_attr( $style_tokens['button'] ) . '; color: ' . esc_attr( $style_tokens['button_text'] ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';
-				$html .= '</div>';
-				$html .= '</div>';
-				$html .= '</section>';
+				$hero_variant = sanitize_key( (string) ( $section['variant'] ?? 'image_left_scrim' ) );
+				$html        .= $this->render_home_hero_section(
+					$hero_variant,
+					(string) $title,
+					(string) $subtitle,
+					(string) $cta_label,
+					(string) $cta_url,
+					(string) $hero_image,
+					$style_tokens
+				);
 				continue;
 			}
 
@@ -2713,6 +2710,53 @@ class Factory_Render_Adapter {
 		$html .= $this->render_home_benefits_section( $blueprint );
 		$html .= '</div>';
 		$html .= $this->render_generated_footer( $blueprint );
+
+		return $html;
+	}
+
+	private function render_home_hero_section(
+		string $hero_variant,
+		string $title,
+		string $subtitle,
+		string $cta_label,
+		string $cta_url,
+		string $hero_image,
+		array $style_tokens
+	): string {
+		$allowed_variant = in_array( $hero_variant, [ 'image_left_scrim', 'centered_overlay' ], true ) ? $hero_variant : 'image_left_scrim';
+		$primary = $style_tokens['primary'] ?? '#0f766e';
+		$button = $style_tokens['button'] ?? $primary;
+		$button_text = $style_tokens['button_text'] ?? '#ffffff';
+		$heading = $style_tokens['heading'] ?? '#0f172a';
+		$section_class = 'factory-home-hero factory-home-hero--' . str_replace( '_', '-', $allowed_variant );
+		$html  = '<section class="' . esc_attr( $section_class ) . '" data-factory-hero-variant="' . esc_attr( $allowed_variant ) . '" style="position: relative; width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); min-height: clamp(520px, 72vw, 720px); padding: clamp(96px, 12vw, 150px) 0 clamp(92px, 10vw, 130px); overflow: hidden; background: ' . esc_attr( $heading ) . ';">';
+		$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background-image: url(\'' . esc_url( $hero_image ) . '\'); background-size: cover; background-position: center; opacity: 1;"></div>';
+
+		if ( 'centered_overlay' === $allowed_variant ) {
+			$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: radial-gradient(circle at 50% 38%, rgba(15, 23, 42, 0.18) 0%, rgba(15, 23, 42, 0.42) 28%, rgba(15, 23, 42, 0.16) 58%, rgba(15, 23, 42, 0.02) 100%);"></div>';
+			$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
+			$html .= '<div style="max-width: 760px; margin: 0 auto; text-align: center;">';
+			$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">Real Estate Beta</span>';
+			$html .= '<h1 style="font-size: clamp(40px, 5.2vw, 70px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
+			$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.94); margin: 0 auto 28px; max-width: 620px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';
+			$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: ' . esc_attr( $button ) . '; color: ' . esc_attr( $button_text ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';
+			$html .= '</div>';
+			$html .= '</div>';
+			$html .= '</section>';
+
+			return $html;
+		}
+
+		$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5, 30, 28, 0.55) 0%, rgba(7, 47, 43, 0.38) 32%, rgba(15, 118, 110, 0.1) 58%, rgba(15, 118, 110, 0) 100%);"></div>';
+		$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
+		$html .= '<div style="max-width: 700px;">';
+		$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">Real Estate Beta</span>';
+		$html .= '<h1 style="font-size: clamp(38px, 5vw, 68px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
+		$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.92); margin: 0 0 28px; max-width: 640px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';
+		$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; border-radius: 999px; background: ' . esc_attr( $button ) . '; color: ' . esc_attr( $button_text ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';
+		$html .= '</div>';
+		$html .= '</div>';
+		$html .= '</section>';
 
 		return $html;
 	}

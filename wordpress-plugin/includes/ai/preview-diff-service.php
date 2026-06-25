@@ -755,7 +755,7 @@ function factory_ai_preview_diff_design_profile_summary( array $design_profile, 
 			],
 			[
 				'label' => 'Hero variant',
-				'value' => ucwords( str_replace( '_', ' ', (string) ( $profile['hero_variant'] ?? 'image_left_scrim' ) ) ),
+				'value' => ucfirst( str_replace( '_', ' ', (string) ( $profile['hero_variant'] ?? 'image_left_scrim' ) ) ),
 				'note'  => $capability_notes['design_profile.hero_variant'] ?? '',
 			],
 			[

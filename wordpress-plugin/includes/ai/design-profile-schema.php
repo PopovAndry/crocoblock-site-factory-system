@@ -10,7 +10,7 @@ function factory_ai_design_profile_allowed_values(): array {
 		'tone'                    => [ 'premium', 'minimal', 'modern', 'corporate', 'warm' ],
 		'palette_preset'          => [ 'turquoise', 'blue', 'green', 'slate' ],
 		'typography_profile'      => [ 'factory_default' ],
-		'hero_variant'            => [ 'image_left_scrim' ],
+		'hero_variant'            => [ 'image_left_scrim', 'centered_overlay' ],
 		'property_card_variant'   => [ 'factory_default' ],
 		'catalog_variant'         => [ 'stable_catalog_get_filters' ],
 		'single_property_variant' => [ 'factory_default' ],
@@ -144,7 +144,7 @@ function factory_ai_build_design_profile_context( string $prompt, array $context
 			'preset' => factory_ai_design_profile_detect_palette( $lower, (string) ( $style_context['primary_preset'] ?? $defaults['design_profile']['palette']['preset'] ) ),
 		],
 		'typography_profile'      => 'factory_default',
-		'hero_variant'            => 'image_left_scrim',
+		'hero_variant'            => factory_ai_design_profile_detect_hero_variant( $lower, (string) ( $style_context['hero_variant'] ?? $defaults['design_profile']['hero_variant'] ) ),
 		'property_card_variant'   => 'factory_default',
 		'catalog_variant'         => 'stable_catalog_get_filters',
 		'single_property_variant' => 'factory_default',
@@ -254,6 +254,23 @@ function factory_ai_design_profile_normalize_palette_input( string $value ): str
 	return $value;
 }
 
+function factory_ai_design_profile_detect_hero_variant( string $lower, string $fallback ): string {
+	$map = [
+		'centered_overlay' => [ 'centered overlay', 'centered hero overlay', 'centered hero', 'hero overlay' ],
+		'image_left_scrim' => [ 'left scrim', 'image left scrim', 'left aligned hero', 'left-aligned hero' ],
+	];
+
+	foreach ( $map as $variant => $terms ) {
+		foreach ( $terms as $term ) {
+			if ( false !== strpos( $lower, $term ) ) {
+				return $variant;
+			}
+		}
+	}
+
+	return sanitize_key( $fallback );
+}
+
 function factory_ai_build_real_estate_apply_design_context( array $input = [] ): array {
 	$design_profile = is_array( $input['design_profile'] ?? null ) ? $input['design_profile'] : [];
 	$fallback_style = is_array( $input['style_context'] ?? null ) ? $input['style_context'] : [];
@@ -266,8 +283,10 @@ function factory_ai_build_real_estate_apply_design_context( array $input = [] ):
 	);
 	$profile        = is_array( $contract['design_profile'] ?? null ) ? $contract['design_profile'] : factory_ai_design_profile_defaults()['design_profile'];
 	$tones          = factory_ai_design_profile_allowed_values()['tone'];
+	$hero_variants  = factory_ai_design_profile_allowed_values()['hero_variant'];
 	$runtime_presets = [ 'turquoise', 'blue', 'green', 'beige', 'slate' ];
 	$tone           = sanitize_key( (string) ( $profile['tone'] ?? $fallback_style['tone'] ?? 'premium' ) );
+	$hero_variant   = sanitize_key( (string) ( $profile['hero_variant'] ?? $fallback_style['hero_variant'] ?? 'image_left_scrim' ) );
 	$primary_preset = sanitize_key(
 		(string) (
 			$profile['palette']['preset']
@@ -284,9 +303,14 @@ function factory_ai_build_real_estate_apply_design_context( array $input = [] ):
 		$primary_preset = 'turquoise';
 	}
 
+	if ( ! in_array( $hero_variant, $hero_variants, true ) ) {
+		$hero_variant = 'image_left_scrim';
+	}
+
 	$style_context = [
 		'tone'           => $tone,
 		'primary_preset' => $primary_preset,
+		'hero_variant'   => $hero_variant,
 	];
 	$image_strategy = is_array( $profile['image_strategy'] ?? null ) ? $profile['image_strategy'] : [];
 	$image_context  = [
@@ -404,15 +428,7 @@ function factory_ai_design_profile_capability_matrix( array $input ): array {
 			true,
 			'The deterministic runtime already uses the factory default typography profile.'
 		),
-		factory_ai_design_profile_capability_entry(
-			'design_profile.hero_variant',
-			(string) ( $profile['hero_variant'] ?? 'image_left_scrim' ),
-			true,
-			true,
-			true,
-			true,
-			'The current Real Estate hero already matches this default variant.'
-		),
+		factory_ai_design_profile_hero_variant_capability_entry( (string) ( $profile['hero_variant'] ?? 'image_left_scrim' ) ),
 		factory_ai_design_profile_capability_entry(
 			'design_profile.property_card_variant',
 			(string) ( $profile['property_card_variant'] ?? 'factory_default' ),
@@ -526,6 +542,44 @@ function factory_ai_design_profile_capability_entry(
 		'status'              => $status,
 		'note'                => sanitize_text_field( $note ),
 	];
+}
+
+function factory_ai_design_profile_hero_variant_capability_entry( string $value ): array {
+	$value = sanitize_key( $value );
+
+	if ( 'centered_overlay' === $value ) {
+		return factory_ai_design_profile_capability_entry(
+			'design_profile.hero_variant',
+			$value,
+			true,
+			true,
+			true,
+			true,
+			'The deterministic runtime can persist and render the centered overlay Home hero variant.'
+		);
+	}
+
+	if ( 'image_left_scrim' === $value ) {
+		return factory_ai_design_profile_capability_entry(
+			'design_profile.hero_variant',
+			$value,
+			true,
+			true,
+			true,
+			true,
+			'The current Real Estate hero already matches the image-left scrim variant.'
+		);
+	}
+
+	return factory_ai_design_profile_capability_entry(
+		'design_profile.hero_variant',
+		$value,
+		false,
+		false,
+		false,
+		false,
+		'This hero variant is not supported by the current Design/Profile Schema v1 contract.'
+	);
 }
 
 function factory_ai_design_profile_palette_capability_entry( string $value ): array {
