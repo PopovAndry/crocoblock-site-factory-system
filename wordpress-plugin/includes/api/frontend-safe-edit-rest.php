@@ -26,6 +26,16 @@ function factory_register_frontend_safe_edit_rest_routes(): void {
 			'permission_callback' => 'factory_frontend_safe_edit_require_manage_options_and_nonce',
 		]
 	);
+
+	register_rest_route(
+		'factory/v1',
+		'/frontend-safe-edit/save',
+		[
+			'methods'             => 'POST',
+			'callback'            => 'factory_rest_frontend_safe_edit_save',
+			'permission_callback' => 'factory_frontend_safe_edit_require_manage_options_and_nonce',
+		]
+	);
 }
 
 function factory_frontend_safe_edit_require_manage_options_and_nonce( WP_REST_Request $request ) {
@@ -160,6 +170,145 @@ function factory_rest_frontend_safe_edit_preview( WP_REST_Request $request ): WP
 	);
 }
 
+function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_REST_Response {
+	$context = factory_frontend_safe_edit_collect_save_context();
+
+	if ( is_wp_error( $context ) ) {
+		return new WP_REST_Response(
+			[
+				'status'          => 'blocked',
+				'code'            => $context->get_error_code(),
+				'message'         => $context->get_error_message(),
+				'applies_changes' => false,
+				'source'          => 'frontend_safe_edit',
+			],
+			(int) ( $context->get_error_data()['status'] ?? 409 )
+		);
+	}
+
+	$ownership = $context['ownership'];
+
+	if ( ! empty( $ownership['blocked'] ) ) {
+		return new WP_REST_Response(
+			[
+				'status'           => 'blocked',
+				'code'             => 'frontend_safe_edit_ownership_blocked',
+				'message'          => 'Frontend safe edit save is blocked by current ownership state. No site changes were made.',
+				'applies_changes'  => false,
+				'source'           => 'frontend_safe_edit',
+				'blocking_reasons' => array_values( array_unique( $ownership['blocking_reasons'] ?? [] ) ),
+				'ownership'        => $ownership,
+				'current_values'   => $context['current_values'],
+				'next_step'        => 'review_ownership_state',
+			],
+			409
+		);
+	}
+
+	$safe_values     = $request->get_param( 'safe_values' );
+	$expected_values = $request->get_param( 'expected_values' );
+	$client_context  = $request->get_param( 'client_context' );
+	$strict_errors   = factory_frontend_safe_edit_validate_save_fields(
+		is_array( $safe_values ) ? $safe_values : [],
+		is_array( $expected_values ) ? $expected_values : []
+	);
+
+	if ( ! empty( $strict_errors ) ) {
+		return new WP_REST_Response(
+			[
+				'status'             => 'blocked',
+				'code'               => 'frontend_safe_edit_unsupported_fields',
+				'message'            => 'Frontend safe edit save rejected unsupported fields. No site changes were made.',
+				'applies_changes'    => false,
+				'source'             => 'frontend_safe_edit',
+				'unsupported_fields' => $strict_errors,
+				'current_values'     => $context['current_values'],
+				'ownership'          => $ownership,
+			],
+			400
+		);
+	}
+
+	$normalized_safe_values = factory_frontend_safe_edit_normalize_save_values(
+		is_array( $safe_values ) ? $safe_values : [],
+		$context['current_values']
+	);
+	$normalized_expected_values = factory_frontend_safe_edit_normalize_expected_values(
+		is_array( $expected_values ) ? $expected_values : []
+	);
+	$conflicts = factory_frontend_safe_edit_find_save_conflicts(
+		$normalized_safe_values['submitted_fields'],
+		$normalized_expected_values,
+		$context['current_values']
+	);
+
+	if ( ! empty( $conflicts ) ) {
+		return new WP_REST_Response(
+			[
+				'status'          => 'blocked',
+				'code'            => 'frontend_safe_edit_conflict',
+				'message'         => 'Frontend safe edit save is blocked because current server values no longer match the expected values.',
+				'applies_changes' => false,
+				'source'          => 'frontend_safe_edit',
+				'conflict_fields' => $conflicts,
+				'current_values'  => $context['current_values'],
+				'expected_values' => $normalized_expected_values,
+				'ownership'       => $ownership,
+				'client_context'  => is_array( $client_context ) ? $client_context : [],
+				'next_step'       => 'refresh_frontend_safe_edit_context',
+			],
+			409
+		);
+	}
+
+	$diff_summary = factory_frontend_safe_edit_build_diff_summary(
+		$context['current_values'],
+		$normalized_safe_values['values']
+	);
+	$changed_fields = array_map(
+		static function ( array $item ): string {
+			return (string) ( $item['field'] ?? '' );
+		},
+		$diff_summary['changed_fields'] ?? []
+	);
+	$changed_fields = array_values( array_filter( array_unique( $changed_fields ) ) );
+
+	if ( empty( $changed_fields ) ) {
+		return new WP_REST_Response(
+			[
+				'status'          => 'ok',
+				'code'            => 'frontend_safe_edit_no_changes',
+				'message'         => 'Frontend safe edit save found no changed safe values. No site changes were made.',
+				'applies_changes' => false,
+				'source'          => 'frontend_safe_edit',
+				'changed_fields'  => [],
+				'before_values'   => $context['current_values'],
+				'after_values'    => $context['current_values'],
+				'ignored_fields'  => [],
+				'ownership'       => $ownership,
+			]
+		);
+	}
+
+	return new WP_REST_Response(
+		[
+			'status'          => 'blocked',
+			'code'            => 'frontend_safe_edit_save_not_enabled',
+			'message'         => 'Frontend safe edit save contract is ready, but controlled apply is not enabled yet. No site changes were made.',
+			'applies_changes' => false,
+			'source'          => 'frontend_safe_edit',
+			'changed_fields'  => $changed_fields,
+			'before_values'   => $context['current_values'],
+			'after_values'    => $normalized_safe_values['values'],
+			'ignored_fields'  => [],
+			'ownership'       => $ownership,
+			'client_context'  => is_array( $client_context ) ? $client_context : [],
+			'next_step'       => 'implement_controlled_apply_bridge',
+		],
+		501
+	);
+}
+
 function factory_frontend_safe_edit_collect_context() {
 	$record = factory_frontend_safe_edit_get_authoritative_blueprint_record();
 
@@ -184,6 +333,25 @@ function factory_frontend_safe_edit_collect_context() {
 		'current_values'  => $current_values,
 		'ownership'       => $ownership,
 		'warnings'        => array_values( array_unique( $warnings ) ),
+	];
+}
+
+function factory_frontend_safe_edit_collect_save_context() {
+	$record = factory_frontend_safe_edit_get_stored_blueprint_record();
+
+	if ( is_wp_error( $record ) ) {
+		return $record;
+	}
+
+	$blueprint = $record['blueprint'];
+
+	return [
+		'source'         => 'frontend_safe_edit',
+		'blueprint'      => $blueprint,
+		'blueprint_source' => $record['source'],
+		'current_values' => factory_frontend_safe_edit_get_current_values( $blueprint ),
+		'ownership'      => factory_frontend_safe_edit_get_ownership_summary( $blueprint ),
+		'safe_fields'    => factory_frontend_safe_edit_field_schema(),
 	];
 }
 
@@ -215,6 +383,23 @@ function factory_frontend_safe_edit_get_authoritative_blueprint_record() {
 	return new WP_Error(
 		'factory_frontend_safe_edit_missing_blueprint',
 		'Factory blueprint is unavailable for frontend safe edit preview.',
+		[ 'status' => 409 ]
+	);
+}
+
+function factory_frontend_safe_edit_get_stored_blueprint_record() {
+	$stored = get_option( FACTORY_BLUEPRINT_OPTION );
+
+	if ( is_array( $stored ) && ! empty( $stored ) ) {
+		return [
+			'source'    => 'stored_blueprint',
+			'blueprint' => $stored,
+		];
+	}
+
+	return new WP_Error(
+		'frontend_safe_edit_missing_stored_blueprint',
+		'Frontend safe edit save requires a stored Factory blueprint. No preset fallback is allowed for save.',
 		[ 'status' => 409 ]
 	);
 }
@@ -349,6 +534,82 @@ function factory_frontend_safe_edit_normalize_preview_values( array $received, a
 		'values'         => $values,
 		'ignored_fields' => array_values( array_unique( array_filter( $ignored_fields ) ) ),
 	];
+}
+
+function factory_frontend_safe_edit_validate_save_fields( array $safe_values, array $expected_values ): array {
+	$schema = factory_frontend_safe_edit_field_schema();
+	$unsupported = [];
+
+	foreach ( $safe_values as $key => $unused_value ) {
+		if ( ! isset( $schema[ $key ] ) ) {
+			$unsupported[] = sanitize_key( (string) $key );
+		}
+	}
+
+	foreach ( $expected_values as $key => $unused_value ) {
+		if ( ! isset( $schema[ $key ] ) ) {
+			$unsupported[] = sanitize_key( (string) $key );
+		}
+	}
+
+	return array_values( array_unique( array_filter( $unsupported ) ) );
+}
+
+function factory_frontend_safe_edit_normalize_save_values( array $received, array $current_values ): array {
+	$schema = factory_frontend_safe_edit_field_schema();
+	$values = $current_values;
+	$submitted_fields = [];
+
+	foreach ( $schema as $key => $item ) {
+		if ( ! array_key_exists( $key, $received ) ) {
+			continue;
+		}
+
+		$values[ $key ] = factory_rest_sanitize_preset_variable( $received[ $key ], $item );
+		$submitted_fields[] = $key;
+	}
+
+	return [
+		'values'           => $values,
+		'submitted_fields' => array_values( array_unique( $submitted_fields ) ),
+	];
+}
+
+function factory_frontend_safe_edit_normalize_expected_values( array $expected_values ): array {
+	$schema = factory_frontend_safe_edit_field_schema();
+	$normalized = [];
+
+	foreach ( $schema as $key => $item ) {
+		if ( ! array_key_exists( $key, $expected_values ) ) {
+			continue;
+		}
+
+		$normalized[ $key ] = factory_rest_sanitize_preset_variable( $expected_values[ $key ], $item );
+	}
+
+	return $normalized;
+}
+
+function factory_frontend_safe_edit_find_save_conflicts( array $submitted_fields, array $expected_values, array $current_values ): array {
+	$conflicts = [];
+
+	foreach ( $submitted_fields as $field ) {
+		$expected = array_key_exists( $field, $expected_values )
+			? (string) $expected_values[ $field ]
+			: null;
+		$current = (string) ( $current_values[ $field ] ?? '' );
+
+		if ( null === $expected ) {
+			$conflicts[] = $field;
+			continue;
+		}
+
+		if ( $expected !== $current ) {
+			$conflicts[] = $field;
+		}
+	}
+
+	return array_values( array_unique( $conflicts ) );
 }
 
 function factory_frontend_safe_edit_build_diff_summary( array $current_values, array $preview_values ): array {
