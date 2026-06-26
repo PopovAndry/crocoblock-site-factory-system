@@ -14,6 +14,76 @@ class Factory_Render_Adapter {
 		add_action( 'template_redirect', [ $this, 'redirect_property_archive' ] );
 		add_filter( 'body_class', [ $this, 'add_contact_page_body_class' ] );
 		add_action( 'wp_head', [ $this, 'print_contact_page_title_styles' ] );
+		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_frontend_safe_edit_assets' ] );
+		add_filter( 'the_content', [ $this, 'decorate_frontend_safe_fields' ], 20 );
+	}
+
+	public function enqueue_frontend_safe_edit_assets(): void {
+		if ( ! $this->is_frontend_safe_edit_enabled() || ! $this->is_frontend_safe_edit_target_request() || ! $this->is_frontend_safe_edit_request_allowed() ) {
+			return;
+		}
+
+		$asset_url  = FACTORY_PLUGIN_URL . 'frontend/assets/';
+		$asset_path = FACTORY_PLUGIN_DIR . 'frontend/assets/';
+
+		wp_enqueue_style(
+			'factory-frontend-safe-edit',
+			$asset_url . 'frontend-safe-edit.css',
+			[],
+			file_exists( $asset_path . 'frontend-safe-edit.css' ) ? filemtime( $asset_path . 'frontend-safe-edit.css' ) : FACTORY_PLUGIN_VERSION
+		);
+
+		wp_enqueue_script(
+			'factory-frontend-safe-edit',
+			$asset_url . 'frontend-safe-edit.js',
+			[],
+			file_exists( $asset_path . 'frontend-safe-edit.js' ) ? filemtime( $asset_path . 'frontend-safe-edit.js' ) : FACTORY_PLUGIN_VERSION,
+			true
+		);
+
+		wp_localize_script(
+			'factory-frontend-safe-edit',
+			'FactoryFrontendSafeEditConfig',
+			[
+				'restBase'  => esc_url_raw( rest_url( 'factory/v1' ) ),
+				'restNonce' => wp_create_nonce( 'wp_rest' ),
+				'endpoints' => [
+					'context' => esc_url_raw( rest_url( 'factory/v1/frontend-safe-edit/context' ) ),
+					'preview' => esc_url_raw( rest_url( 'factory/v1/frontend-safe-edit/preview' ) ),
+				],
+				'pageType'  => $this->is_generated_home_page_request() ? 'home' : 'contact',
+			]
+		);
+	}
+
+	public function decorate_frontend_safe_fields( string $content ): string {
+		if ( is_admin() || ! $this->is_frontend_safe_edit_enabled() ) {
+			return $content;
+		}
+
+		if ( ! $this->is_frontend_safe_edit_request_allowed() ) {
+			return $content;
+		}
+
+		if ( ! in_the_loop() || ! is_main_query() || false !== strpos( $content, 'data-factory-safe-field=' ) ) {
+			return $content;
+		}
+
+		$blueprint = factory_get_blueprint();
+
+		if ( empty( $blueprint ) ) {
+			return $content;
+		}
+
+		if ( $this->is_generated_home_page_request() ) {
+			return $this->decorate_home_safe_field_content( $content, $blueprint );
+		}
+
+		if ( $this->is_generated_contact_page_request() ) {
+			return $this->decorate_contact_safe_field_content( $content, $blueprint );
+		}
+
+		return $content;
 	}
 
 	public function redirect_property_archive(): void {
@@ -2596,6 +2666,18 @@ class Factory_Render_Adapter {
 		return is_page( $slug );
 	}
 
+	private function is_frontend_safe_edit_enabled(): bool {
+		return ! is_admin() && is_user_logged_in() && current_user_can( 'manage_options' );
+	}
+
+	private function is_frontend_safe_edit_target_request(): bool {
+		return $this->is_generated_home_page_request() || $this->is_generated_contact_page_request();
+	}
+
+	private function is_frontend_safe_edit_request_allowed(): bool {
+		return function_exists( 'factory_frontend_safe_edit_is_request_allowed' ) && factory_frontend_safe_edit_is_request_allowed();
+	}
+
 	private function get_configured_page_content( array $blueprint, string $page_key ): string {
 		if ( 'home' === $page_key ) {
 			return $this->render_home_page_content( $blueprint );
@@ -2638,6 +2720,126 @@ class Factory_Render_Adapter {
 		$html .= '</footer>';
 
 		return $html;
+	}
+
+	private function decorate_home_safe_field_content( string $content, array $blueprint ): string {
+		$defaults     = factory_rest_get_real_estate_variable_defaults( $blueprint );
+		$home         = $this->get_configured_page( $blueprint, 'home' );
+		$hero_section = factory_rest_find_real_estate_home_section( $home, 'hero' );
+		$brand        = is_string( $home['title'] ?? null ) && '' !== trim( $home['title'] )
+			? trim( $home['title'] )
+			: (string) ( $defaults['agency_name'] ?? '' );
+		$hero_title   = (string) ( $hero_section['title'] ?? $defaults['hero_title'] ?? '' );
+		$subtitle     = (string) ( $hero_section['subtitle'] ?? $defaults['hero_subtitle'] ?? '' );
+		$cta_label    = (string) ( $hero_section['cta_label'] ?? $defaults['hero_cta_text'] ?? '' );
+
+		$content = $this->replace_first_exact(
+			$content,
+			'>' . esc_html( $hero_title ) . '</h1>',
+			'>' . $this->render_frontend_safe_field_marker( 'hero_title', $hero_title ) . '</h1>'
+		);
+		$content = $this->replace_first_exact(
+			$content,
+			'>' . esc_html( $subtitle ) . '</p>',
+			'>' . $this->render_frontend_safe_field_marker( 'hero_subtitle', $subtitle ) . '</p>'
+		);
+		$content = $this->replace_first_exact(
+			$content,
+			'>' . esc_html( $cta_label ) . '</a>',
+			'>' . $this->render_frontend_safe_field_marker( 'hero_cta_text', $cta_label ) . '</a>'
+		);
+		$content = $this->replace_first_exact(
+			$content,
+			'<strong style="display: block; font-size: 22px; line-height: 1.2; margin-bottom: 10px; color: #fff;">' . esc_html( $brand ) . '</strong>',
+			'<strong style="display: block; font-size: 22px; line-height: 1.2; margin-bottom: 10px; color: #fff;">' . $this->render_frontend_safe_field_marker( 'agency_name', $brand ) . '</strong>'
+		);
+
+		return $content;
+	}
+
+	private function decorate_contact_safe_field_content( string $content, array $blueprint ): string {
+		$defaults = factory_rest_get_real_estate_variable_defaults( $blueprint );
+		$home     = $this->get_configured_page( $blueprint, 'home' );
+		$brand    = is_string( $home['title'] ?? null ) && '' !== trim( $home['title'] )
+			? trim( $home['title'] )
+			: (string) ( $defaults['agency_name'] ?? '' );
+		$title    = (string) ( $defaults['contact_title'] ?? '' );
+		$intro    = (string) ( $defaults['contact_intro'] ?? '' );
+		$phone    = (string) ( $defaults['phone'] ?? '' );
+		$email    = (string) ( $defaults['email'] ?? '' );
+
+		$content = $this->replace_first_exact(
+			$content,
+			'>' . esc_html( $title ) . '</h1>',
+			'>' . $this->render_frontend_safe_field_marker( 'contact_title', $title ) . '</h1>'
+		);
+		$content = $this->replace_first_exact(
+			$content,
+			'>' . esc_html( $intro ) . '</p>',
+			'>' . $this->render_frontend_safe_field_marker( 'contact_intro', $intro ) . '</p>'
+		);
+		$content = $this->replace_first_exact(
+			$content,
+			'><span>' . esc_html( $phone ) . '</span></div>',
+			'>' . $this->render_frontend_safe_field_wrapper( 'phone', $phone ) . '</div>'
+		);
+		$content = $this->replace_first_exact(
+			$content,
+			'><span>' . esc_html( $email ) . '</span></div>',
+			'>' . $this->render_frontend_safe_field_wrapper( 'email', $email ) . '</div>'
+		);
+		$content = $this->replace_first_exact(
+			$content,
+			'<strong style="display: block; font-size: 22px; line-height: 1.2; margin-bottom: 10px; color: #fff;">' . esc_html( $brand ) . '</strong>',
+			'<strong style="display: block; font-size: 22px; line-height: 1.2; margin-bottom: 10px; color: #fff;">' . $this->render_frontend_safe_field_marker( 'agency_name', $brand ) . '</strong>'
+		);
+
+		return $content;
+	}
+
+	private function replace_first_exact( string $content, string $search, string $replacement ): string {
+		if ( '' === $search ) {
+			return $content;
+		}
+
+		$position = strpos( $content, $search );
+
+		if ( false === $position ) {
+			return $content;
+		}
+
+		return substr( $content, 0, $position ) . $replacement . substr( $content, $position + strlen( $search ) );
+	}
+
+	private function render_frontend_safe_field_wrapper( string $field, string $value ): string {
+		return '<span>' . $this->render_frontend_safe_field_marker( $field, $value ) . '</span>';
+	}
+
+	private function render_frontend_safe_field_marker( string $field, string $value ): string {
+		$meta = $this->get_frontend_safe_field_meta( $field );
+
+		return sprintf(
+			'<span class="factory-frontend-safe-field" data-factory-safe-field="%1$s" data-factory-safe-field-label="%2$s" data-factory-safe-field-type="%3$s">%4$s</span>',
+			esc_attr( $field ),
+			esc_attr( $meta['label'] ),
+			esc_attr( $meta['type'] ),
+			esc_html( $value )
+		);
+	}
+
+	private function get_frontend_safe_field_meta( string $field ): array {
+		$meta = [
+			'agency_name'   => [ 'label' => 'Agency name', 'type' => 'text' ],
+			'hero_title'    => [ 'label' => 'Hero title', 'type' => 'text' ],
+			'hero_subtitle' => [ 'label' => 'Hero subtitle', 'type' => 'textarea' ],
+			'hero_cta_text' => [ 'label' => 'Hero CTA text', 'type' => 'text' ],
+			'contact_title' => [ 'label' => 'Contact title', 'type' => 'text' ],
+			'contact_intro' => [ 'label' => 'Contact intro', 'type' => 'textarea' ],
+			'phone'         => [ 'label' => 'Phone', 'type' => 'phone' ],
+			'email'         => [ 'label' => 'Email', 'type' => 'email' ],
+		];
+
+		return $meta[ $field ] ?? [ 'label' => ucwords( str_replace( '_', ' ', $field ) ), 'type' => 'text' ];
 	}
 
 	private function render_home_page_content( array $blueprint ): string {
