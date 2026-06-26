@@ -1,0 +1,67 @@
+{
+  "name": "hero-centered-overlay",
+  "prompt": "Create a Kyiv real estate agency website in slate colors with a centered hero overlay.",
+  "site_type": "real_estate",
+  "assertions": {
+    "site-plan": {
+      "provider_called": false,
+      "applies_changes": false,
+      "design_profile": {
+        "hero_variant": "centered_overlay",
+        "palette": {
+          "preset": "slate"
+        }
+      }
+    },
+    "preview-diff": {
+      "provider_called": false,
+      "applies_changes": false
+    },
+    "generate-preflight": {
+      "provider_called": false,
+      "applies_changes": false,
+      "dry_run_proof_preview": {
+        "hero_variant": "centered_overlay",
+        "hero_variant_proof": {
+          "requested": "centered_overlay",
+          "authoritative": "centered_overlay",
+          "apply_target": "pages.home.sections[type=hero].variant"
+        },
+        "design_profile": {
+          "hero_variant": "centered_overlay"
+        },
+        "style_context": {
+          "hero_variant": "centered_overlay",
+          "primary_preset": "slate"
+        }
+      }
+    },
+    "generate-confirmation": {
+      "provider_called": false,
+      "applies_changes": false,
+      "runtime_diff_evidence": {
+        "hero_variant": "centered_overlay",
+        "hero_variant_proof": {
+          "requested": "centered_overlay",
+          "authoritative": "centered_overlay",
+          "apply_target": "pages.home.sections[type=hero].variant"
+        },
+        "design_profile": {
+          "hero_variant": "centered_overlay"
+        },
+        "style_context": {
+          "hero_variant": "centered_overlay",
+          "primary_preset": "slate"
+        }
+      }
+    }
+  },
+  "exact_generate": {
+    "confirmation_phrase": "GENERATE REAL ESTATE DEMO",
+    "frontend_path": "/",
+    "frontend_markers": [
+      "data-factory-hero-variant=\"centered_overlay\"",
+      "factory-home-hero--centered-overlay"
+    ]
+  }
+}

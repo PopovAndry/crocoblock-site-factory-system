@@ -1,0 +1,77 @@
+{
+  "name": "palette-slate",
+  "prompt": "Create a Kyiv real estate agency website in slate colors with a modern feel.",
+  "site_type": "real_estate",
+  "assertions": {
+    "site-plan": {
+      "provider_called": false,
+      "applies_changes": false,
+      "design_profile": {
+        "palette": {
+          "preset": "slate"
+        }
+      }
+    },
+    "blueprint-candidate": {
+      "provider_called": false,
+      "applies_changes": false,
+      "candidate": {
+        "design_profile": {
+          "palette": {
+            "preset": "slate"
+          }
+        }
+      }
+    },
+    "generate-preflight": {
+      "provider_called": false,
+      "applies_changes": false,
+      "dry_run_proof_preview": {
+        "design_profile": {
+          "palette": {
+            "preset": "slate"
+          }
+        },
+        "style_context": {
+          "primary_preset": "slate"
+        },
+        "style_tokens": {
+          "primary": "#334155",
+          "accent": "#64748b",
+          "background": "#f8fafc",
+          "text": "#0f172a"
+        }
+      }
+    },
+    "generate-confirmation": {
+      "provider_called": false,
+      "applies_changes": false,
+      "runtime_diff_evidence": {
+        "design_profile": {
+          "palette": {
+            "preset": "slate"
+          }
+        },
+        "style_context": {
+          "primary_preset": "slate"
+        },
+        "style_tokens": {
+          "primary": "#334155",
+          "accent": "#64748b",
+          "background": "#f8fafc",
+          "text": "#0f172a"
+        }
+      }
+    }
+  },
+  "exact_generate": {
+    "confirmation_phrase": "GENERATE REAL ESTATE DEMO",
+    "frontend_path": "/",
+    "frontend_markers": [
+      "#334155",
+      "#64748b",
+      "#f8fafc",
+      "#0f172a"
+    ]
+  }
+}
