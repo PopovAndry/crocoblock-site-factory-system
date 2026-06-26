@@ -18,6 +18,7 @@
 		currentValues: {},
 		draftValues: {},
 		selectedField: null,
+		previewBlocked: false,
 		panel: null,
 		form: null,
 		fieldLabel: null,
@@ -55,7 +56,10 @@
 
 			if ( ! response.ok ) {
 				const message = data && data.message ? data.message : 'Request failed.';
-				throw new Error( message );
+				const error = new Error( message );
+				error.status = response.status;
+				error.data = data;
+				throw error;
 			}
 
 			return data;
@@ -188,13 +192,14 @@
 			? state.draftValues[ field ]
 			: '';
 		const isTextarea = meta.sanitizer === 'textarea';
+		const canPreview = !! state.context.can_edit && ! state.previewBlocked;
 
 		state.fieldLabel.textContent = meta.label || field;
 		state.fieldHint.textContent = 'Sanitizer: ' + ( meta.sanitizer || 'text' ) + ' | Max: ' + ( meta.max || '' );
-		state.fieldInput.disabled = ! state.context.can_edit;
+		state.fieldInput.disabled = ! canPreview;
 		state.fieldInput.rows = isTextarea ? 4 : 2;
 		state.fieldInput.value = value;
-		state.previewButton.disabled = ! state.context.can_edit;
+		state.previewButton.disabled = ! canPreview;
 	}
 
 	function selectField( field ) {
@@ -211,21 +216,58 @@
 	function initializeMarkers() {
 		markers.forEach( function ( marker ) {
 			marker.classList.add( 'is-safe-edit-ready' );
-			marker.setAttribute( 'tabindex', '0' );
-			marker.setAttribute( 'role', 'button' );
+			const isNestedInteractive = !! marker.closest( 'a, button, [role="button"], input, select, textarea, label' );
 
-			const select = function () {
+			if ( ! isNestedInteractive ) {
+				marker.setAttribute( 'tabindex', '0' );
+				marker.setAttribute( 'role', 'button' );
+			}
+
+			const select = function ( event ) {
+				if ( event ) {
+					event.preventDefault();
+					event.stopPropagation();
+				}
+
 				selectField( marker.dataset.factorySafeField );
 			};
 
 			marker.addEventListener( 'click', select );
-			marker.addEventListener( 'keydown', function ( event ) {
-				if ( event.key === 'Enter' || event.key === ' ' ) {
-					event.preventDefault();
-					select();
-				}
-			} );
+
+			if ( ! isNestedInteractive ) {
+				marker.addEventListener( 'keydown', function ( event ) {
+					if ( event.key === 'Enter' || event.key === ' ' ) {
+						event.preventDefault();
+						select( event );
+					}
+				} );
+			}
 		} );
+	}
+
+	function updatePreviewLockState( blocked ) {
+		state.previewBlocked = !! blocked;
+
+		if ( state.previewBlocked ) {
+			updatePanelStatus( 'Preview is blocked until ownership is safe.', 'warning' );
+			updateWarnings(
+				( state.context && state.context.warnings ? state.context.warnings.slice() : [] ).concat( [
+					'Preview remains disabled until ownership state is safe again.',
+				] )
+			);
+		}
+
+		if ( state.selectedField ) {
+			configureInputForField( state.selectedField );
+		}
+	}
+
+	function clearPreviewLockState() {
+		state.previewBlocked = false;
+
+		if ( state.selectedField ) {
+			configureInputForField( state.selectedField );
+		}
 	}
 
 	function applyPreviewValues( values ) {
@@ -254,7 +296,7 @@
 	}
 
 	function runPreview() {
-		if ( ! state.context || ! state.context.can_edit ) {
+		if ( ! state.context || ! state.context.can_edit || state.previewBlocked ) {
 			updatePanelStatus( 'Preview is blocked until ownership is safe.', 'warning' );
 			return Promise.resolve();
 		}
@@ -271,6 +313,12 @@
 				safe_values: state.draftValues,
 			} ),
 		} ).then( function ( response ) {
+			if ( response && response.can_edit === false ) {
+				updatePreviewLockState( true );
+				return;
+			}
+
+			clearPreviewLockState();
 			state.draftValues = Object.assign( {}, response.preview_values || {} );
 			applyPreviewValues( state.draftValues );
 			updateSummary( state.context, response );
@@ -286,9 +334,18 @@
 				configureInputForField( state.selectedField );
 			}
 		} ).catch( function ( error ) {
+			if ( error && ( error.status === 409 || ( error.data && error.data.can_edit === false ) || ( error.data && 'frontend_safe_edit_preview_blocked' === error.data.code ) ) ) {
+				updatePreviewLockState( true );
+				return;
+			}
+
 			updatePanelStatus( error.message || 'Preview request failed.', 'error' );
 		} ).finally( function () {
-			state.previewButton.disabled = ! state.selectedField;
+			if ( state.selectedField ) {
+				configureInputForField( state.selectedField );
+			} else {
+				state.previewButton.disabled = true;
+			}
 		} );
 	}
 
@@ -312,6 +369,7 @@
 			state.context = response;
 			state.currentValues = Object.assign( {}, response.current_values || {} );
 			state.draftValues = Object.assign( {}, response.current_values || {} );
+			state.previewBlocked = ! response.can_edit;
 
 			updateSummary( response, null );
 			updateWarnings( response.warnings || [] );
