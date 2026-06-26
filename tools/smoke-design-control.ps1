@@ -44,6 +44,16 @@ function ConvertTo-Base64Utf8 {
     return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Text))
 }
 
+function Write-Utf8NoBomFile {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 function Get-ObjectPropertyValue {
     param(
         [object]$Object,
@@ -271,7 +281,21 @@ if (is_string($payloadFile) && '' !== $payloadFile && file_exists($payloadFile))
     $payloadJson = (string) base64_decode((string) (getenv('FACTORY_SMOKE_PAYLOAD_B64') ?: ''), true);
 }
 
+if ('' !== $payloadJson && 0 === strpos($payloadJson, "\xEF\xBB\xBF")) {
+    $payloadJson = substr($payloadJson, 3);
+}
+
 $payload = '' !== $payloadJson ? json_decode($payloadJson, true) : null;
+
+if ('' !== $payloadJson && JSON_ERROR_NONE !== json_last_error()) {
+    factory_smoke_emit(array(
+        'http_status' => 500,
+        'is_wp_error' => true,
+        'error_code' => 'payload_json_decode_failed',
+        'errors' => array('Payload JSON decode failed: ' . json_last_error_msg()),
+    ));
+    return;
+}
 
 if (function_exists('get_users') && function_exists('wp_set_current_user')) {
     $admins = get_users(array(
@@ -313,7 +337,7 @@ factory_smoke_emit(array(
 ));
 '@
 
-    Set-Content -LiteralPath $helperPath -Value $php -Encoding UTF8
+    Write-Utf8NoBomFile -Path $helperPath -Content $php
     return $helperPath
 }
 
@@ -409,7 +433,7 @@ function Invoke-SmokeRoute {
     $payloadJson = ConvertTo-SmokeJson -Value $Payload
     $helperDirectory = Split-Path -Parent $HelperPath
     $payloadPath = Join-Path $helperDirectory 'payload.json'
-    Set-Content -LiteralPath $payloadPath -Value $payloadJson -Encoding UTF8
+    Write-Utf8NoBomFile -Path $payloadPath -Content $payloadJson
 
     return Invoke-WpCliHelper -RuntimeRoot $RuntimeRoot -HelperPath $HelperPath -EnvironmentValues @{
         FACTORY_SMOKE_ACTION = 'route'
