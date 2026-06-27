@@ -303,7 +303,7 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 			[
 				'status'          => 'blocked',
 				'code'            => 'frontend_safe_edit_save_not_enabled',
-				'message'         => 'Frontend safe edit save is only enabled for Hero title in this beta. No site changes were made.',
+				'message'         => 'Frontend safe edit save is only enabled for Hero title and Hero subtitle in this beta. No site changes were made.',
 				'applies_changes' => false,
 				'source'          => 'frontend_safe_edit',
 				'changed_fields'  => $changed_fields,
@@ -312,7 +312,7 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 				'ignored_fields'  => [],
 				'ownership'       => $ownership,
 				'client_context'  => is_array( $client_context ) ? $client_context : [],
-				'next_step'       => 'hero_title_only_beta',
+				'next_step'       => 'hero_copy_only_beta',
 			],
 			501
 		);
@@ -329,16 +329,25 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 		}
 	}
 
+	$changed_field_proof = [];
+
+	foreach ( $changed_fields as $field ) {
+		$changed_field_proof[ $field ] = [
+			'before_value' => (string) ( $context['current_values'][ $field ] ?? '' ),
+			'after_value'  => (string) ( $overlay_variables[ $field ] ?? '' ),
+		];
+	}
+
 	$apply_args = [
 		'source'         => 'frontend_safe_edit',
 		'base_blueprint' => $context['blueprint'],
 		'prompt_context' => [
-			'prompt'            => 'Frontend safe edit save: hero_title',
+			'prompt'            => 'Frontend safe edit save: ' . implode( ',', $changed_fields ),
 			'preset_variables'  => $overlay_variables,
 			'applied_variables' => $overlay_variables,
 			'notes'             => [
 				'Frontend safe edit save uses the stored Factory blueprint as the base.',
-				'Only the hero_title safe variable is allowed to persist in this beta save flow.',
+				'Only the hero_title and hero_subtitle safe variables are allowed to persist in this beta save flow.',
 				'Generated pages are refreshed through the deterministic Real Estate apply service.',
 			],
 		],
@@ -346,9 +355,7 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 		'image_context'  => $image_context,
 		'manifest_metadata' => [
 			'frontend_safe_edit' => [
-				'field'        => 'hero_title',
-				'before_value' => (string) ( $context['current_values']['hero_title'] ?? '' ),
-				'after_value'  => (string) ( $overlay_variables['hero_title'] ?? '' ),
+				'fields' => $changed_field_proof,
 			],
 		],
 	];
@@ -768,7 +775,7 @@ function factory_frontend_safe_edit_build_diff_summary( array $current_values, a
 }
 
 function factory_frontend_safe_edit_mutable_save_fields(): array {
-	return [ 'hero_title' ];
+	return [ 'hero_title', 'hero_subtitle' ];
 }
 
 function factory_frontend_safe_edit_capture_runtime_snapshot(): array {

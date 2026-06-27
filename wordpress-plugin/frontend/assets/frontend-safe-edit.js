@@ -213,11 +213,18 @@
 		const lines = [];
 		const beforeTitle = proof.before_values && proof.before_values.hero_title ? proof.before_values.hero_title : '';
 		const afterTitle = proof.after_values && proof.after_values.hero_title ? proof.after_values.hero_title : '';
+		const beforeSubtitle = proof.before_values && proof.before_values.hero_subtitle ? proof.before_values.hero_subtitle : '';
+		const afterSubtitle = proof.after_values && proof.after_values.hero_subtitle ? proof.after_values.hero_subtitle : '';
+		const changedFields = Array.isArray( proof.changed_fields ) ? proof.changed_fields : [];
 
-		lines.push( 'Save proof: Hero Title only beta' );
+		lines.push( 'Save proof: Hero title and Hero subtitle beta' );
 
-		if ( beforeTitle || afterTitle ) {
+		if ( changedFields.indexOf( 'hero_title' ) !== -1 && ( beforeTitle || afterTitle ) ) {
 			lines.push( 'Title: ' + beforeTitle + ' -> ' + afterTitle );
+		}
+
+		if ( changedFields.indexOf( 'hero_subtitle' ) !== -1 && ( beforeSubtitle || afterSubtitle ) ) {
+			lines.push( 'Subtitle: ' + beforeSubtitle + ' -> ' + afterSubtitle );
 		}
 
 		if ( typeof proof.validation_count === 'number' ) {
@@ -241,7 +248,15 @@
 	}
 
 	function fieldSupportsSave( field ) {
-		return field === 'hero_title';
+		return field === 'hero_title' || field === 'hero_subtitle';
+	}
+
+	function getSaveEnabledFieldLabel( field ) {
+		if ( field === 'hero_subtitle' ) {
+			return 'Hero subtitle';
+		}
+
+		return 'Hero title';
 	}
 
 	function hasDraftChange( field ) {
@@ -281,8 +296,8 @@
 		const isTextarea = meta.sanitizer === 'textarea';
 		const canPreview = !! state.context.can_edit && ! state.previewBlocked;
 		const saveHint = fieldSupportsSave( field )
-			? 'Save is available for Hero title after a successful preview.'
-			: 'Preview only in this beta. Save currently supports Hero title only.';
+			? 'Save is available for ' + getSaveEnabledFieldLabel( field ) + ' after a successful preview.'
+			: 'Preview only in this beta. Save currently supports Hero title and Hero subtitle only.';
 
 		state.fieldLabel.textContent = meta.label || field;
 		state.fieldHint.textContent = 'Sanitizer: ' + ( meta.sanitizer || 'text' ) + ' | Max: ' + ( meta.max || '' ) + ' | ' + saveHint;
@@ -475,16 +490,16 @@
 
 	function runSave() {
 		if ( ! fieldSupportsSave( state.selectedField ) ) {
-			updatePanelStatus( 'Save is only enabled for Hero title in this beta.', 'warning' );
+			updatePanelStatus( 'Save is only enabled for Hero title and Hero subtitle in this beta.', 'warning' );
 			return Promise.resolve();
 		}
 
 		if ( ! state.saveReady || ! hasDraftChange( state.selectedField ) ) {
-			updatePanelStatus( 'Preview Hero title before saving.', 'warning' );
+			updatePanelStatus( 'Preview ' + getSaveEnabledFieldLabel( state.selectedField ) + ' before saving.', 'warning' );
 			return Promise.resolve();
 		}
 
-		updatePanelStatus( 'Saving Hero title through the controlled Factory path...', 'loading' );
+		updatePanelStatus( 'Saving ' + getSaveEnabledFieldLabel( state.selectedField ) + ' through the controlled Factory path...', 'loading' );
 		state.saveButton.disabled = true;
 
 		return apiFetch( config.endpoints.save, {
@@ -494,19 +509,19 @@
 			},
 			body: JSON.stringify( {
 				safe_values: {
-					hero_title: state.draftValues.hero_title,
+					[ state.selectedField ]: state.draftValues[ state.selectedField ],
 				},
 				expected_values: {
-					hero_title: state.currentValues.hero_title,
+					[ state.selectedField ]: state.currentValues[ state.selectedField ],
 				},
 			} ),
 		} ).then( function ( response ) {
 			state.saveReady = false;
 			updateSaveProof( response );
-			updatePanelStatus( 'Hero title saved. Generated Home copy was refreshed through Factory.', 'success' );
+			updatePanelStatus( getSaveEnabledFieldLabel( state.selectedField ) + ' saved. Generated Home copy was refreshed through Factory.', 'success' );
 			return refreshContextAfterSave().then( function () {
 				updateSaveProof( response );
-				selectField( 'hero_title' );
+				selectField( state.selectedField );
 			} );
 		} ).catch( function ( error ) {
 			state.saveReady = false;
@@ -556,7 +571,7 @@
 			updateSaveProof( null );
 			updatePanelStatus(
 				response.can_edit
-					? 'Safe copy preview is ready. Hero title can be saved in this beta after preview.'
+					? 'Safe copy preview is ready. Hero title and Hero subtitle can be saved in this beta after preview.'
 					: 'Preview is available, but ownership review is required before any future save flow.',
 				response.can_edit ? 'success' : 'warning'
 			);
