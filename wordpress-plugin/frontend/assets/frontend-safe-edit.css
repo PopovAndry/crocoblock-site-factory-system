@@ -100,6 +100,7 @@
 
 .factory-frontend-safe-edit-panel__status,
 .factory-frontend-safe-edit-panel__summary,
+.factory-frontend-safe-edit-panel__save-proof,
 .factory-frontend-safe-edit-panel__warnings,
 .factory-frontend-safe-edit-panel__hint {
 	margin-bottom: 12px;
@@ -141,6 +142,16 @@
 	color: #334155;
 }
 
+.factory-frontend-safe-edit-panel__save-proof {
+	display: grid;
+	gap: 4px;
+	padding: 10px 12px;
+	border: 1px solid #dbe5ee;
+	border-radius: 8px;
+	background: #f8fafc;
+	color: #334155;
+}
+
 .factory-frontend-safe-edit-panel__label {
 	display: block;
 	margin-bottom: 6px;
@@ -173,7 +184,7 @@
 
 .factory-frontend-safe-edit-panel__actions {
 	display: grid;
-	grid-template-columns: repeat( 2, minmax( 0, 1fr ) );
+	grid-template-columns: repeat( 3, minmax( 0, 1fr ) );
 	gap: 8px;
 }
 
@@ -194,6 +205,12 @@
 .factory-frontend-safe-edit-panel__button--primary {
 	border-color: #0f766e;
 	background: #0f766e;
+	color: #fff;
+}
+
+.factory-frontend-safe-edit-panel__button--accent {
+	border-color: #0f172a;
+	background: #0f172a;
 	color: #fff;
 }
 

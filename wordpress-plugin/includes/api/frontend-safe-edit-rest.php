@@ -290,22 +290,151 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 		);
 	}
 
+	$mutable_fields = factory_frontend_safe_edit_mutable_save_fields();
+	$unsupported_for_save = array_values(
+		array_diff(
+			$changed_fields,
+			$mutable_fields
+		)
+	);
+
+	if ( ! empty( $unsupported_for_save ) ) {
+		return new WP_REST_Response(
+			[
+				'status'          => 'blocked',
+				'code'            => 'frontend_safe_edit_save_not_enabled',
+				'message'         => 'Frontend safe edit save is only enabled for Hero title in this beta. No site changes were made.',
+				'applies_changes' => false,
+				'source'          => 'frontend_safe_edit',
+				'changed_fields'  => $changed_fields,
+				'before_values'   => $context['current_values'],
+				'after_values'    => $normalized_safe_values['values'],
+				'ignored_fields'  => [],
+				'ownership'       => $ownership,
+				'client_context'  => is_array( $client_context ) ? $client_context : [],
+				'next_step'       => 'hero_title_only_beta',
+			],
+			501
+		);
+	}
+
+	$runtime_snapshot_before = factory_frontend_safe_edit_capture_runtime_snapshot();
+	$style_context           = factory_frontend_safe_edit_extract_style_context( $context['blueprint'] );
+	$image_context           = factory_frontend_safe_edit_extract_image_context( $context['blueprint'] );
+	$overlay_variables       = $context['current_values'];
+
+	foreach ( $mutable_fields as $field ) {
+		if ( array_key_exists( $field, $normalized_safe_values['values'] ) ) {
+			$overlay_variables[ $field ] = $normalized_safe_values['values'][ $field ];
+		}
+	}
+
+	$apply_args = [
+		'source'         => 'frontend_safe_edit',
+		'base_blueprint' => $context['blueprint'],
+		'prompt_context' => [
+			'prompt'            => 'Frontend safe edit save: hero_title',
+			'preset_variables'  => $overlay_variables,
+			'applied_variables' => $overlay_variables,
+			'notes'             => [
+				'Frontend safe edit save uses the stored Factory blueprint as the base.',
+				'Only the hero_title safe variable is allowed to persist in this beta save flow.',
+				'Generated pages are refreshed through the deterministic Real Estate apply service.',
+			],
+		],
+		'style_context'  => $style_context,
+		'image_context'  => $image_context,
+		'manifest_metadata' => [
+			'frontend_safe_edit' => [
+				'field'        => 'hero_title',
+				'before_value' => (string) ( $context['current_values']['hero_title'] ?? '' ),
+				'after_value'  => (string) ( $overlay_variables['hero_title'] ?? '' ),
+			],
+		],
+	];
+
+	$apply_boundary_started = false;
+
+	try {
+		$apply_boundary_started = true;
+		$apply_result           = factory_apply_real_estate_preset_internal( $apply_args );
+	} catch ( Throwable $e ) {
+		return new WP_REST_Response(
+			[
+				'status'                  => 'error',
+				'code'                    => 'frontend_safe_edit_save_failed_after_apply_started',
+				'message'                 => 'Frontend safe edit save failed after entering the apply boundary. Partial mutation may have occurred.',
+				'applies_changes'         => true,
+				'source'                  => 'frontend_safe_edit',
+				'changed_fields'          => $changed_fields,
+				'before_values'           => $context['current_values'],
+				'after_values'            => $normalized_safe_values['values'],
+				'ignored_fields'          => [],
+				'ownership_before'        => $ownership,
+				'runtime_snapshot_before' => $runtime_snapshot_before,
+				'mutation_status'         => $apply_boundary_started ? 'unknown_after_apply_started' : 'not_started',
+				'next_step'               => 'review_updated_frontend',
+				'risks'                   => [
+					'Partial mutation may have occurred after the deterministic apply path started.',
+					'Run validation/doctor and review the latest proof before further changes.',
+				],
+			],
+			500
+		);
+	}
+
+	if ( empty( $apply_result['ok'] ) ) {
+		return new WP_REST_Response(
+			[
+				'status'                  => 'blocked',
+				'code'                    => sanitize_key( (string) ( $apply_result['error_code'] ?? 'frontend_safe_edit_apply_failed' ) ),
+				'message'                 => (string) ( $apply_result['error_message'] ?? 'Frontend safe edit save could not apply the deterministic Real Estate refresh.' ),
+				'applies_changes'         => false,
+				'source'                  => 'frontend_safe_edit',
+				'changed_fields'          => $changed_fields,
+				'before_values'           => $context['current_values'],
+				'after_values'            => $normalized_safe_values['values'],
+				'ignored_fields'          => [],
+				'ownership_before'        => $ownership,
+				'runtime_snapshot_before' => $runtime_snapshot_before,
+				'dependencies'            => is_array( $apply_result['dependencies'] ?? null ) ? $apply_result['dependencies'] : [],
+				'next_step'               => 'review_updated_frontend',
+			],
+			max( 400, (int) ( $apply_result['http_status'] ?? 409 ) )
+		);
+	}
+
+	$updated_blueprint_context = factory_frontend_safe_edit_collect_save_context();
+	$updated_current_values    = is_wp_error( $updated_blueprint_context )
+		? factory_frontend_safe_edit_get_current_values( is_array( $apply_result['blueprint'] ?? null ) ? $apply_result['blueprint'] : $context['blueprint'] )
+		: $updated_blueprint_context['current_values'];
+	$ownership_after          = is_wp_error( $updated_blueprint_context )
+		? $ownership
+		: $updated_blueprint_context['ownership'];
+	$runtime_snapshot_after   = factory_frontend_safe_edit_capture_runtime_snapshot();
+	$apply_response           = is_array( $apply_result['response'] ?? null ) ? $apply_result['response'] : [];
+
 	return new WP_REST_Response(
 		[
-			'status'          => 'blocked',
-			'code'            => 'frontend_safe_edit_save_not_enabled',
-			'message'         => 'Frontend safe edit save contract is ready, but controlled apply is not enabled yet. No site changes were made.',
-			'applies_changes' => false,
-			'source'          => 'frontend_safe_edit',
-			'changed_fields'  => $changed_fields,
-			'before_values'   => $context['current_values'],
-			'after_values'    => $normalized_safe_values['values'],
-			'ignored_fields'  => [],
-			'ownership'       => $ownership,
-			'client_context'  => is_array( $client_context ) ? $client_context : [],
-			'next_step'       => 'implement_controlled_apply_bridge',
-		],
-		501
+			'status'                  => 'ok',
+			'code'                    => 'frontend_safe_edit_saved',
+			'message'                 => 'Hero title was saved through the controlled Factory apply path.',
+			'applies_changes'         => true,
+			'source'                  => 'frontend_safe_edit',
+			'changed_fields'          => $changed_fields,
+			'before_values'           => $context['current_values'],
+			'after_values'            => $updated_current_values,
+			'ignored_fields'          => [],
+			'ownership_before'        => $ownership,
+			'ownership_after'         => $ownership_after,
+			'runtime_snapshot_before' => $runtime_snapshot_before,
+			'runtime_snapshot_after'  => $runtime_snapshot_after,
+			'execution_count'         => isset( $apply_response['execution_count'] ) ? (int) $apply_response['execution_count'] : count( $apply_result['execution'] ?? [] ),
+			'validation_count'        => isset( $apply_response['validation_count'] ) ? (int) $apply_response['validation_count'] : count( $apply_result['report']['checks'] ?? [] ),
+			'results_summary'         => is_array( $apply_response['results_summary'] ?? null ) ? $apply_response['results_summary'] : ( is_array( $apply_result['results']['summary'] ?? null ) ? $apply_result['results']['summary'] : [] ),
+			'manifest_file'           => ! empty( $apply_result['manifest_path'] ) ? basename( (string) $apply_result['manifest_path'] ) : '',
+			'next_step'               => 'review_updated_frontend',
+		]
 	);
 }
 
@@ -635,5 +764,93 @@ function factory_frontend_safe_edit_build_diff_summary( array $current_values, a
 		'changed_count'   => count( $changed ),
 		'unchanged_count' => count( factory_frontend_safe_edit_field_schema() ) - count( $changed ),
 		'changed_fields'  => $changed,
+	];
+}
+
+function factory_frontend_safe_edit_mutable_save_fields(): array {
+	return [ 'hero_title' ];
+}
+
+function factory_frontend_safe_edit_capture_runtime_snapshot(): array {
+	$page_counts       = function_exists( 'wp_count_posts' ) ? wp_count_posts( 'page' ) : null;
+	$property_counts   = function_exists( 'wp_count_posts' ) && post_type_exists( 'property' ) ? wp_count_posts( 'property' ) : null;
+	$attachment_counts = function_exists( 'wp_count_posts' ) ? wp_count_posts( 'attachment' ) : null;
+
+	return [
+		'pages'            => factory_frontend_safe_edit_snapshot_total_count( $page_counts ),
+		'published_pages'  => is_object( $page_counts ) ? max( 0, (int) ( $page_counts->publish ?? 0 ) ) : 0,
+		'properties'       => factory_frontend_safe_edit_snapshot_total_count( $property_counts ),
+		'attachments'      => factory_frontend_safe_edit_snapshot_total_count( $attachment_counts ),
+	];
+}
+
+function factory_frontend_safe_edit_snapshot_total_count( $counts ): int {
+	if ( ! is_object( $counts ) ) {
+		return 0;
+	}
+
+	$total = 0;
+
+	foreach ( get_object_vars( $counts ) as $status => $count ) {
+		if ( 'trash' === $status || 'auto-draft' === $status ) {
+			continue;
+		}
+
+		$total += max( 0, (int) $count );
+	}
+
+	return $total;
+}
+
+function factory_frontend_safe_edit_extract_style_context( array $blueprint ): array {
+	$style = is_array( $blueprint['site']['style'] ?? null ) ? $blueprint['site']['style'] : [];
+
+	return [
+		'context' => [
+			'tone'           => sanitize_key( (string) ( $style['tone'] ?? 'premium' ) ),
+			'primary_preset' => sanitize_key( (string) ( $style['primary_preset'] ?? 'turquoise' ) ),
+			'hero_variant'   => function_exists( 'factory_real_estate_apply_service_find_home_hero_variant' )
+				? factory_real_estate_apply_service_find_home_hero_variant( $blueprint )
+				: 'image_left_scrim',
+		],
+		'tokens'  => is_array( $style ) ? $style : [],
+		'notes'   => [
+			'Frontend safe edit reuses the existing stored blueprint style context.',
+		],
+	];
+}
+
+function factory_frontend_safe_edit_extract_image_context( array $blueprint ): array {
+	$pools = [];
+	$asset_pools = $blueprint['site']['assets']['property_images'] ?? [];
+
+	if ( is_array( $asset_pools ) ) {
+		foreach ( $asset_pools as $type => $sources ) {
+			if ( ! is_string( $type ) || '' === trim( $type ) ) {
+				continue;
+			}
+
+			$pools[ $type ] = is_array( $sources )
+				? count(
+					array_filter(
+						$sources,
+						static function ( $source_path ) {
+							return is_string( $source_path ) && '' !== trim( $source_path );
+						}
+					)
+				)
+				: ( is_string( $sources ) && '' !== trim( $sources ) ? 1 : 0 );
+		}
+	}
+
+	return [
+		'context' => [
+			'source' => 'demo_pool',
+			'mode'   => 'round_robin',
+			'pools'  => $pools,
+		],
+		'notes'   => [
+			'Frontend safe edit reuses the existing bundled image context.',
+		],
 	];
 }

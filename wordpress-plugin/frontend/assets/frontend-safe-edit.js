@@ -13,12 +13,19 @@
 		return;
 	}
 
+	if ( ! config.endpoints.save && config.restBase ) {
+		config.endpoints.save = String( config.restBase ).replace( /\/$/, '' ) + '/frontend-safe-edit/save';
+	}
+
 	const state = {
 		context: null,
 		currentValues: {},
 		draftValues: {},
 		selectedField: null,
 		previewBlocked: false,
+		lastPreviewResponse: null,
+		saveReady: false,
+		saveBlocked: false,
 		panel: null,
 		form: null,
 		fieldLabel: null,
@@ -28,7 +35,9 @@
 		summary: null,
 		warnings: null,
 		previewButton: null,
+		saveButton: null,
 		resetButton: null,
+		saveProof: null,
 	};
 
 	function apiFetch( url, options ) {
@@ -80,12 +89,14 @@
 			'<p class="factory-frontend-safe-edit-panel__intro">Select a highlighted field on the page, edit the safe value here, and preview the result without saving.</p>' +
 			'<div class="factory-frontend-safe-edit-panel__status" data-role="status"></div>' +
 			'<div class="factory-frontend-safe-edit-panel__summary" data-role="summary"></div>' +
+			'<div class="factory-frontend-safe-edit-panel__save-proof" data-role="save-proof"></div>' +
 			'<form class="factory-frontend-safe-edit-panel__form" data-role="form">' +
 				'<label class="factory-frontend-safe-edit-panel__label" data-role="field-label" for="factory-frontend-safe-edit-input">Safe field</label>' +
 				'<textarea id="factory-frontend-safe-edit-input" class="factory-frontend-safe-edit-panel__input" rows="3" data-role="field-input"></textarea>' +
 				'<div class="factory-frontend-safe-edit-panel__hint" data-role="field-hint"></div>' +
 				'<div class="factory-frontend-safe-edit-panel__actions">' +
 					'<button type="submit" class="factory-frontend-safe-edit-panel__button factory-frontend-safe-edit-panel__button--primary" data-role="preview">Preview</button>' +
+					'<button type="button" class="factory-frontend-safe-edit-panel__button factory-frontend-safe-edit-panel__button--accent" data-role="save" hidden>Save</button>' +
 					'<button type="button" class="factory-frontend-safe-edit-panel__button" data-role="reset">Reset</button>' +
 				'</div>' +
 			'</form>' +
@@ -102,7 +113,9 @@
 		state.summary = panel.querySelector( '[data-role="summary"]' );
 		state.warnings = panel.querySelector( '[data-role="warnings"]' );
 		state.previewButton = panel.querySelector( '[data-role="preview"]' );
+		state.saveButton = panel.querySelector( '[data-role="save"]' );
 		state.resetButton = panel.querySelector( '[data-role="reset"]' );
+		state.saveProof = panel.querySelector( '[data-role="save-proof"]' );
 
 		state.form.addEventListener( 'submit', function ( event ) {
 			event.preventDefault();
@@ -113,12 +126,19 @@
 			resetPreview();
 		} );
 
+		state.saveButton.addEventListener( 'click', function () {
+			void runSave();
+		} );
+
 		state.fieldInput.addEventListener( 'input', function () {
 			if ( ! state.selectedField ) {
 				return;
 			}
 
 			state.draftValues[ state.selectedField ] = state.fieldInput.value;
+			state.lastPreviewResponse = null;
+			state.saveReady = false;
+			updateSaveControl();
 		} );
 	}
 
@@ -179,6 +199,73 @@
 			'</ul>';
 	}
 
+	function updateSaveProof( proof ) {
+		if ( ! state.saveProof ) {
+			return;
+		}
+
+		if ( ! proof ) {
+			state.saveProof.innerHTML = '';
+			state.saveProof.hidden = true;
+			return;
+		}
+
+		const lines = [];
+		const beforeTitle = proof.before_values && proof.before_values.hero_title ? proof.before_values.hero_title : '';
+		const afterTitle = proof.after_values && proof.after_values.hero_title ? proof.after_values.hero_title : '';
+
+		lines.push( 'Save proof: Hero Title only beta' );
+
+		if ( beforeTitle || afterTitle ) {
+			lines.push( 'Title: ' + beforeTitle + ' -> ' + afterTitle );
+		}
+
+		if ( typeof proof.validation_count === 'number' ) {
+			lines.push( 'Validation checks: ' + proof.validation_count );
+		}
+
+		if ( typeof proof.execution_count === 'number' ) {
+			lines.push( 'Execution steps: ' + proof.execution_count );
+		}
+
+		if ( proof.manifest_file ) {
+			lines.push( 'Manifest: ' + proof.manifest_file );
+		}
+
+		state.saveProof.hidden = false;
+		state.saveProof.innerHTML = lines
+			.map( function ( line ) {
+				return '<div>' + escapeHtml( line ) + '</div>';
+			} )
+			.join( '' );
+	}
+
+	function fieldSupportsSave( field ) {
+		return field === 'hero_title';
+	}
+
+	function hasDraftChange( field ) {
+		if ( ! field ) {
+			return false;
+		}
+
+		return String( state.draftValues[ field ] || '' ) !== String( state.currentValues[ field ] || '' );
+	}
+
+	function updateSaveControl() {
+		if ( ! state.saveButton ) {
+			return;
+		}
+
+		const supported = fieldSupportsSave( state.selectedField );
+		const changed = hasDraftChange( state.selectedField );
+		const canShow = supported && changed;
+		const canSave = canShow && state.saveReady && ! state.previewBlocked && ! state.saveBlocked && !! state.context && !! state.context.can_edit;
+
+		state.saveButton.hidden = ! canShow;
+		state.saveButton.disabled = ! canSave;
+	}
+
 	function configureInputForField( field ) {
 		if ( ! field || ! state.context || ! state.context.safe_fields || ! state.context.safe_fields[ field ] ) {
 			state.fieldInput.value = '';
@@ -193,13 +280,17 @@
 			: '';
 		const isTextarea = meta.sanitizer === 'textarea';
 		const canPreview = !! state.context.can_edit && ! state.previewBlocked;
+		const saveHint = fieldSupportsSave( field )
+			? 'Save is available for Hero title after a successful preview.'
+			: 'Preview only in this beta. Save currently supports Hero title only.';
 
 		state.fieldLabel.textContent = meta.label || field;
-		state.fieldHint.textContent = 'Sanitizer: ' + ( meta.sanitizer || 'text' ) + ' | Max: ' + ( meta.max || '' );
+		state.fieldHint.textContent = 'Sanitizer: ' + ( meta.sanitizer || 'text' ) + ' | Max: ' + ( meta.max || '' ) + ' | ' + saveHint;
 		state.fieldInput.disabled = ! canPreview;
 		state.fieldInput.rows = isTextarea ? 4 : 2;
 		state.fieldInput.value = value;
 		state.previewButton.disabled = ! canPreview;
+		updateSaveControl();
 	}
 
 	function selectField( field ) {
@@ -247,6 +338,8 @@
 
 	function updatePreviewLockState( blocked ) {
 		state.previewBlocked = !! blocked;
+		state.saveReady = false;
+		state.saveBlocked = !! blocked;
 
 		if ( state.previewBlocked ) {
 			updatePanelStatus( 'Preview is blocked until ownership is safe.', 'warning' );
@@ -264,6 +357,7 @@
 
 	function clearPreviewLockState() {
 		state.previewBlocked = false;
+		state.saveBlocked = false;
 
 		if ( state.selectedField ) {
 			configureInputForField( state.selectedField );
@@ -284,9 +378,12 @@
 
 	function resetPreview() {
 		state.draftValues = Object.assign( {}, state.currentValues );
+		state.lastPreviewResponse = null;
+		state.saveReady = false;
 		applyPreviewValues( state.currentValues );
 		updatePanelStatus( 'Preview reset to current stored values.', 'neutral' );
 		updateWarnings( state.context && state.context.warnings ? state.context.warnings : [] );
+		updateSaveProof( null );
 
 		if ( state.selectedField ) {
 			configureInputForField( state.selectedField );
@@ -303,6 +400,8 @@
 
 		updatePanelStatus( 'Building preview...', 'loading' );
 		state.previewButton.disabled = true;
+		state.saveReady = false;
+		updateSaveControl();
 
 		return apiFetch( config.endpoints.preview, {
 			method: 'POST',
@@ -319,10 +418,13 @@
 			}
 
 			clearPreviewLockState();
+			state.lastPreviewResponse = response;
 			state.draftValues = Object.assign( {}, response.preview_values || {} );
 			applyPreviewValues( state.draftValues );
 			updateSummary( state.context, response );
 			updateWarnings( response.warnings || [] );
+			updateSaveProof( null );
+			state.saveReady = fieldSupportsSave( state.selectedField ) && hasDraftChange( state.selectedField );
 			updatePanelStatus(
 				response.diff_summary && response.diff_summary.changed_count
 					? 'Preview updated. No site changes were made.'
@@ -339,12 +441,88 @@
 				return;
 			}
 
+			state.saveReady = false;
 			updatePanelStatus( error.message || 'Preview request failed.', 'error' );
 		} ).finally( function () {
 			if ( state.selectedField ) {
 				configureInputForField( state.selectedField );
 			} else {
 				state.previewButton.disabled = true;
+			}
+		} );
+	}
+
+	function refreshContextAfterSave() {
+		return apiFetch( config.endpoints.context, {
+			method: 'GET',
+		} ).then( function ( response ) {
+			state.context = response;
+			state.currentValues = Object.assign( {}, response.current_values || {} );
+			state.draftValues = Object.assign( {}, response.current_values || {} );
+			state.previewBlocked = ! response.can_edit;
+			state.lastPreviewResponse = null;
+			state.saveReady = false;
+			state.saveBlocked = ! response.can_edit;
+			applyPreviewValues( state.currentValues );
+			updateSummary( response, null );
+			updateWarnings( response.warnings || [] );
+
+			if ( state.selectedField ) {
+				configureInputForField( state.selectedField );
+			}
+		} );
+	}
+
+	function runSave() {
+		if ( ! fieldSupportsSave( state.selectedField ) ) {
+			updatePanelStatus( 'Save is only enabled for Hero title in this beta.', 'warning' );
+			return Promise.resolve();
+		}
+
+		if ( ! state.saveReady || ! hasDraftChange( state.selectedField ) ) {
+			updatePanelStatus( 'Preview Hero title before saving.', 'warning' );
+			return Promise.resolve();
+		}
+
+		updatePanelStatus( 'Saving Hero title through the controlled Factory path...', 'loading' );
+		state.saveButton.disabled = true;
+
+		return apiFetch( config.endpoints.save, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify( {
+				safe_values: {
+					hero_title: state.draftValues.hero_title,
+				},
+				expected_values: {
+					hero_title: state.currentValues.hero_title,
+				},
+			} ),
+		} ).then( function ( response ) {
+			state.saveReady = false;
+			updateSaveProof( response );
+			updatePanelStatus( 'Hero title saved. Generated Home copy was refreshed through Factory.', 'success' );
+			return refreshContextAfterSave().then( function () {
+				updateSaveProof( response );
+				selectField( 'hero_title' );
+			} );
+		} ).catch( function ( error ) {
+			state.saveReady = false;
+			state.saveBlocked = !! ( error && error.status === 409 );
+			updateSaveControl();
+			updatePanelStatus( error.message || 'Save request failed.', 'error' );
+
+			if ( error && error.data ) {
+				updateSaveProof( error.data );
+				if ( error.data.code === 'frontend_safe_edit_ownership_blocked' ) {
+					updateWarnings( [ 'Save is blocked until ownership is safe again.' ] );
+				}
+			}
+		} ).finally( function () {
+			if ( state.selectedField ) {
+				configureInputForField( state.selectedField );
 			}
 		} );
 	}
@@ -370,12 +548,15 @@
 			state.currentValues = Object.assign( {}, response.current_values || {} );
 			state.draftValues = Object.assign( {}, response.current_values || {} );
 			state.previewBlocked = ! response.can_edit;
+			state.saveReady = false;
+			state.saveBlocked = ! response.can_edit;
 
 			updateSummary( response, null );
 			updateWarnings( response.warnings || [] );
+			updateSaveProof( null );
 			updatePanelStatus(
 				response.can_edit
-					? 'Safe copy preview is ready. Nothing will be saved from this panel.'
+					? 'Safe copy preview is ready. Hero title can be saved in this beta after preview.'
 					: 'Preview is available, but ownership review is required before any future save flow.',
 				response.can_edit ? 'success' : 'warning'
 			);
