@@ -113,7 +113,7 @@ function factory_rest_frontend_safe_edit_preview( WP_REST_Request $request ): WP
 
 	if ( ! $context['can_edit'] ) {
 		$warnings = $context['warnings'];
-		$warnings[] = 'Frontend safe edit preview is blocked until Home and Contact ownership state is safe.';
+		$warnings[] = 'Frontend safe edit preview is blocked until Home, Properties, and Contact ownership state is safe.';
 
 		return new WP_REST_Response(
 			[
@@ -263,6 +263,36 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 		is_array( $safe_values ) ? $safe_values : [],
 		$context['current_values']
 	);
+	$before_resolved_values = factory_frontend_safe_edit_build_save_resolved_values(
+		$context['current_values'],
+		$context['blueprint']
+	);
+
+	if ( ! empty( $normalized_safe_values['invalid_fields'] ) ) {
+		return new WP_REST_Response(
+			[
+				'status'                 => 'blocked',
+				'code'                   => 'frontend_safe_edit_invalid_save_values',
+				'message'                => 'Frontend safe edit save rejected invalid field values. No site changes were made.',
+				'applies_changes'        => false,
+				'source'                 => 'frontend_safe_edit',
+				'invalid_fields'         => $normalized_safe_values['invalid_fields'],
+				'before_values'          => $context['current_values'],
+				'after_values'           => $context['current_values'],
+				'before_resolved_values' => $before_resolved_values,
+				'after_resolved_values'  => $before_resolved_values,
+				'ownership'              => $ownership,
+				'client_context'         => is_array( $client_context ) ? $client_context : [],
+				'next_step'              => 'correct_invalid_safe_values',
+			],
+			400
+		);
+	}
+
+	$requested_resolved_values = factory_frontend_safe_edit_build_save_resolved_values(
+		$normalized_safe_values['values'],
+		$context['blueprint']
+	);
 	$normalized_expected_values = factory_frontend_safe_edit_normalize_expected_values(
 		is_array( $expected_values ) ? $expected_values : []
 	);
@@ -283,6 +313,8 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 				'conflict_fields' => $conflicts,
 				'current_values'  => $context['current_values'],
 				'expected_values' => $normalized_expected_values,
+				'before_resolved_values' => $before_resolved_values,
+				'after_resolved_values'  => $requested_resolved_values,
 				'ownership'       => $ownership,
 				'client_context'  => is_array( $client_context ) ? $client_context : [],
 				'next_step'       => 'refresh_frontend_safe_edit_context',
@@ -314,6 +346,8 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 				'changed_fields'  => [],
 				'before_values'   => $context['current_values'],
 				'after_values'    => $context['current_values'],
+				'before_resolved_values' => $before_resolved_values,
+				'after_resolved_values'  => $before_resolved_values,
 				'ignored_fields'  => [],
 				'ownership'       => $ownership,
 			]
@@ -333,24 +367,63 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 			[
 				'status'          => 'blocked',
 				'code'            => 'frontend_safe_edit_save_not_enabled',
-				'message'         => 'Frontend safe edit save is only enabled for Hero title, Hero subtitle, and Hero CTA text in this beta. No site changes were made.',
+				'message'         => 'Frontend safe edit save is only enabled for Hero title, Hero subtitle, Hero CTA text, and Hero CTA destination in this beta. No site changes were made.',
 				'applies_changes' => false,
 				'source'          => 'frontend_safe_edit',
 				'changed_fields'  => $changed_fields,
 				'before_values'   => $context['current_values'],
 				'after_values'    => $normalized_safe_values['values'],
+				'before_resolved_values' => $before_resolved_values,
+				'after_resolved_values'  => $requested_resolved_values,
 				'ignored_fields'  => [],
 				'ownership'       => $ownership,
 				'client_context'  => is_array( $client_context ) ? $client_context : [],
-				'next_step'       => 'hero_copy_and_cta_only_beta',
+				'next_step'       => 'hero_copy_and_cta_destination_beta',
 			],
 			501
 		);
 	}
 
+	$prepared_blueprint = $context['blueprint'];
+	$destination_preflight = null;
+
+	if ( in_array( 'hero_cta_destination', $changed_fields, true ) ) {
+		$destination_preflight = factory_frontend_safe_edit_get_destination_preflight(
+			$context['blueprint'],
+			(string) ( $normalized_safe_values['values']['hero_cta_destination'] ?? '' )
+		);
+
+		if ( ! empty( $destination_preflight['blocked'] ) ) {
+			return new WP_REST_Response(
+				[
+					'status'                 => 'blocked',
+					'code'                   => 'frontend_safe_edit_destination_ownership_blocked',
+					'message'                => 'Frontend safe edit save is blocked because the requested CTA destination is not currently Factory-managed and safe to target.',
+					'applies_changes'        => false,
+					'source'                 => 'frontend_safe_edit',
+					'changed_fields'         => $changed_fields,
+					'before_values'          => $context['current_values'],
+					'after_values'           => $normalized_safe_values['values'],
+					'before_resolved_values' => $before_resolved_values,
+					'after_resolved_values'  => $requested_resolved_values,
+					'ownership'              => $ownership,
+					'destination_preflight'  => $destination_preflight,
+					'client_context'         => is_array( $client_context ) ? $client_context : [],
+					'next_step'              => 'review_destination_ownership',
+				],
+				409
+			);
+		}
+
+		$prepared_blueprint = factory_frontend_safe_edit_apply_hero_cta_destination_to_blueprint(
+			$prepared_blueprint,
+			(string) ( $normalized_safe_values['values']['hero_cta_destination'] ?? '' )
+		);
+	}
+
 	$runtime_snapshot_before = factory_frontend_safe_edit_capture_runtime_snapshot();
-	$style_context           = factory_frontend_safe_edit_extract_style_context( $context['blueprint'] );
-	$image_context           = factory_frontend_safe_edit_extract_image_context( $context['blueprint'] );
+	$style_context           = factory_frontend_safe_edit_extract_style_context( $prepared_blueprint );
+	$image_context           = factory_frontend_safe_edit_extract_image_context( $prepared_blueprint );
 	$overlay_variables       = $context['current_values'];
 
 	foreach ( $mutable_fields as $field ) {
@@ -364,20 +437,23 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 	foreach ( $changed_fields as $field ) {
 		$changed_field_proof[ $field ] = [
 			'before_value' => (string) ( $context['current_values'][ $field ] ?? '' ),
-			'after_value'  => (string) ( $overlay_variables[ $field ] ?? '' ),
+			'after_value'  => 'hero_cta_destination' === $field
+				? (string) ( $normalized_safe_values['values'][ $field ] ?? '' )
+				: (string) ( $overlay_variables[ $field ] ?? '' ),
 		];
 	}
 
 	$apply_args = [
 		'source'         => 'frontend_safe_edit',
-		'base_blueprint' => $context['blueprint'],
+		'base_blueprint' => $prepared_blueprint,
 		'prompt_context' => [
 			'prompt'            => 'Frontend safe edit save: ' . implode( ',', $changed_fields ),
 			'preset_variables'  => $overlay_variables,
 			'applied_variables' => $overlay_variables,
 			'notes'             => [
 				'Frontend safe edit save uses the stored Factory blueprint as the base.',
-				'Only the hero_title, hero_subtitle, and hero_cta_text safe variables are allowed to persist in this beta save flow.',
+				'Only the hero_title, hero_subtitle, hero_cta_text, and hero_cta_destination safe fields are allowed to persist in this beta save flow.',
+				'Hero CTA destination updates the stored Home hero cta_url in the base blueprint before the deterministic apply service runs.',
 				'Generated pages are refreshed through the deterministic Real Estate apply service.',
 			],
 		],
@@ -406,8 +482,11 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 				'changed_fields'          => $changed_fields,
 				'before_values'           => $context['current_values'],
 				'after_values'            => $normalized_safe_values['values'],
+				'before_resolved_values'  => $before_resolved_values,
+				'after_resolved_values'   => $requested_resolved_values,
 				'ignored_fields'          => [],
 				'ownership_before'        => $ownership,
+				'destination_preflight'   => $destination_preflight,
 				'runtime_snapshot_before' => $runtime_snapshot_before,
 				'mutation_status'         => $apply_boundary_started ? 'unknown_after_apply_started' : 'not_started',
 				'next_step'               => 'review_updated_frontend',
@@ -431,8 +510,11 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 				'changed_fields'          => $changed_fields,
 				'before_values'           => $context['current_values'],
 				'after_values'            => $normalized_safe_values['values'],
+				'before_resolved_values'  => $before_resolved_values,
+				'after_resolved_values'   => $requested_resolved_values,
 				'ignored_fields'          => [],
 				'ownership_before'        => $ownership,
+				'destination_preflight'   => $destination_preflight,
 				'runtime_snapshot_before' => $runtime_snapshot_before,
 				'dependencies'            => is_array( $apply_result['dependencies'] ?? null ) ? $apply_result['dependencies'] : [],
 				'next_step'               => 'review_updated_frontend',
@@ -443,11 +525,19 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 
 	$updated_blueprint_context = factory_frontend_safe_edit_collect_save_context();
 	$updated_current_values    = is_wp_error( $updated_blueprint_context )
-		? factory_frontend_safe_edit_get_current_values( is_array( $apply_result['blueprint'] ?? null ) ? $apply_result['blueprint'] : $context['blueprint'] )
+		? factory_frontend_safe_edit_get_current_values( is_array( $apply_result['blueprint'] ?? null ) ? $apply_result['blueprint'] : $prepared_blueprint )
 		: $updated_blueprint_context['current_values'];
 	$ownership_after          = is_wp_error( $updated_blueprint_context )
 		? $ownership
 		: $updated_blueprint_context['ownership'];
+	$updated_resolved_values  = is_wp_error( $updated_blueprint_context )
+		? factory_frontend_safe_edit_build_save_resolved_values(
+			$updated_current_values,
+			is_array( $apply_result['blueprint'] ?? null ) ? $apply_result['blueprint'] : $prepared_blueprint
+		)
+		: factory_frontend_safe_edit_flatten_resolved_values(
+			is_array( $updated_blueprint_context['resolved_values'] ?? null ) ? $updated_blueprint_context['resolved_values'] : []
+		);
 	$runtime_snapshot_after   = factory_frontend_safe_edit_capture_runtime_snapshot();
 	$apply_response           = is_array( $apply_result['response'] ?? null ) ? $apply_result['response'] : [];
 	$saved_field_labels       = factory_frontend_safe_edit_describe_fields( $changed_fields );
@@ -462,9 +552,12 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 			'changed_fields'          => $changed_fields,
 			'before_values'           => $context['current_values'],
 			'after_values'            => $updated_current_values,
+			'before_resolved_values'  => $before_resolved_values,
+			'after_resolved_values'   => $updated_resolved_values,
 			'ignored_fields'          => [],
 			'ownership_before'        => $ownership,
 			'ownership_after'         => $ownership_after,
+			'destination_preflight'   => $destination_preflight,
 			'runtime_snapshot_before' => $runtime_snapshot_before,
 			'runtime_snapshot_after'  => $runtime_snapshot_after,
 			'execution_count'         => isset( $apply_response['execution_count'] ) ? (int) $apply_response['execution_count'] : count( $apply_result['execution'] ?? [] ),
@@ -613,8 +706,9 @@ function factory_frontend_safe_edit_get_current_values( array $blueprint ): arra
 
 function factory_frontend_safe_edit_get_ownership_summary( array $blueprint ): array {
 	$pages = [
-		'home'    => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'home' ),
-		'contact' => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'contact' ),
+		'home'     => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'home' ),
+		'archive'  => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'archive' ),
+		'contact'  => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'contact' ),
 	];
 	$blocking_reasons = [];
 
@@ -637,9 +731,10 @@ function factory_frontend_safe_edit_get_page_ownership( array $blueprint, string
 	$slug = is_string( $page['slug'] ?? null ) ? $page['slug'] : '';
 	$post = '' !== $slug ? get_page_by_path( $slug ) : null;
 	$blocking_reasons = [];
+	$page_label = factory_frontend_safe_edit_get_page_label( $page_key );
 
 	if ( ! $post instanceof WP_Post ) {
-		$blocking_reasons[] = ucfirst( $page_key ) . ' page is missing.';
+		$blocking_reasons[] = $page_label . ' page is missing.';
 
 		return [
 			'page_key'         => $page_key,
@@ -661,15 +756,15 @@ function factory_frontend_safe_edit_get_page_ownership( array $blueprint, string
 	$last_generated = '' !== (string) get_post_meta( $post->ID, '_factory_last_generated_hash', true );
 
 	if ( ! $managed ) {
-		$blocking_reasons[] = ucfirst( $page_key ) . ' page is not marked as Factory-managed.';
+		$blocking_reasons[] = $page_label . ' page is not marked as Factory-managed.';
 	}
 
 	if ( $user_modified ) {
-		$blocking_reasons[] = ucfirst( $page_key ) . ' page is marked as user-modified.';
+		$blocking_reasons[] = $page_label . ' page is marked as user-modified.';
 	}
 
 	if ( in_array( $lock, [ 'user_modified', 'user_owned', 'frozen', 'locked' ], true ) ) {
-		$blocking_reasons[] = ucfirst( $page_key ) . ' page lock is ' . $lock . '.';
+		$blocking_reasons[] = $page_label . ' page lock is ' . $lock . '.';
 	}
 
 	return [
@@ -684,6 +779,19 @@ function factory_frontend_safe_edit_get_page_ownership( array $blueprint, string
 		'blocked'          => ! empty( $blocking_reasons ),
 		'blocking_reasons' => $blocking_reasons,
 	];
+}
+
+function factory_frontend_safe_edit_get_page_label( string $page_key ): string {
+	switch ( $page_key ) {
+		case 'archive':
+			return 'Properties';
+		case 'contact':
+			return 'Contact';
+		case 'home':
+			return 'Home';
+		default:
+			return ucwords( str_replace( '_', ' ', $page_key ) );
+	}
 }
 
 function factory_frontend_safe_edit_normalize_preview_values( array $received, array $current_values, array $safe_fields ): array {
@@ -750,6 +858,7 @@ function factory_frontend_safe_edit_normalize_save_values( array $received, arra
 	$schema = factory_frontend_safe_edit_field_schema();
 	$values = $current_values;
 	$submitted_fields = [];
+	$invalid_fields = [];
 
 	foreach ( $schema as $key => $item ) {
 		if ( ! array_key_exists( $key, $received ) ) {
@@ -762,6 +871,11 @@ function factory_frontend_safe_edit_normalize_save_values( array $received, arra
 			$item,
 			$current_values
 		);
+
+		if ( isset( $normalized['error'] ) ) {
+			$invalid_fields[ $key ] = (string) $normalized['error'];
+		}
+
 		$values[ $key ] = (string) ( $normalized['value'] ?? '' );
 		$submitted_fields[] = $key;
 	}
@@ -769,6 +883,7 @@ function factory_frontend_safe_edit_normalize_save_values( array $received, arra
 	return [
 		'values'           => $values,
 		'submitted_fields' => array_values( array_unique( $submitted_fields ) ),
+		'invalid_fields'   => $invalid_fields,
 	];
 }
 
@@ -842,7 +957,7 @@ function factory_frontend_safe_edit_build_diff_summary( array $current_values, a
 }
 
 function factory_frontend_safe_edit_mutable_save_fields(): array {
-	return [ 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
+	return [ 'hero_title', 'hero_subtitle', 'hero_cta_text', 'hero_cta_destination' ];
 }
 
 function factory_frontend_safe_edit_build_field_bundle( array $blueprint ): array {
@@ -909,6 +1024,18 @@ function factory_frontend_safe_edit_build_resolved_values( array $current_values
 	];
 }
 
+function factory_frontend_safe_edit_build_save_resolved_values( array $values, array $blueprint ): array {
+	return factory_frontend_safe_edit_flatten_resolved_values(
+		factory_frontend_safe_edit_build_resolved_values( $values, $values, $blueprint )
+	);
+}
+
+function factory_frontend_safe_edit_flatten_resolved_values( array $resolved_values ): array {
+	return [
+		'hero_cta_destination' => (string) ( $resolved_values['hero_cta_destination']['current'] ?? '' ),
+	];
+}
+
 function factory_frontend_safe_edit_get_destination_targets( array $blueprint ): array {
 	$home = is_array( $blueprint['pages']['home'] ?? null ) ? $blueprint['pages']['home'] : [];
 	$archive = is_array( $blueprint['pages']['archive'] ?? null ) ? $blueprint['pages']['archive'] : [];
@@ -933,6 +1060,39 @@ function factory_frontend_safe_edit_get_destination_targets( array $blueprint ):
 	];
 }
 
+function factory_frontend_safe_edit_get_destination_preflight( array $blueprint, string $destination ): array {
+	$destination = sanitize_key( $destination );
+	$targets = factory_frontend_safe_edit_get_destination_targets( $blueprint );
+	$ownership_map = [
+		'home'       => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'home' ),
+		'properties' => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'archive' ),
+		'contact'    => factory_frontend_safe_edit_get_page_ownership( $blueprint, 'contact' ),
+	];
+
+	if ( ! isset( $targets[ $destination ] ) || ! isset( $ownership_map[ $destination ] ) ) {
+		return [
+			'destination'      => $destination,
+			'label'            => 'Unknown',
+			'href'             => '',
+			'mode'             => 'invalid',
+			'blocked'          => true,
+			'blocking_reasons' => [ 'Hero CTA destination must be one of: home, properties, contact.' ],
+		];
+	}
+
+	$page_ownership = $ownership_map[ $destination ];
+
+	return [
+		'destination'      => $destination,
+		'label'            => (string) ( $targets[ $destination ]['label'] ?? factory_frontend_safe_edit_get_page_label( $page_ownership['page_key'] ?? $destination ) ),
+		'href'             => (string) ( $targets[ $destination ]['href'] ?? '' ),
+		'mode'             => 'generated_page',
+		'blocked'          => ! empty( $page_ownership['blocked'] ),
+		'blocking_reasons' => array_values( array_unique( $page_ownership['blocking_reasons'] ?? [] ) ),
+		'page'             => $page_ownership,
+	];
+}
+
 function factory_frontend_safe_edit_build_destination_href( string $slug, bool $is_home ): string {
 	if ( $is_home ) {
 		return home_url( '/' );
@@ -945,6 +1105,27 @@ function factory_frontend_safe_edit_build_destination_href( string $slug, bool $
 	}
 
 	return home_url( '/' . ltrim( $slug, '/' ) . '/' );
+}
+
+function factory_frontend_safe_edit_apply_hero_cta_destination_to_blueprint( array $blueprint, string $destination ): array {
+	$destination = sanitize_key( $destination );
+	$targets = factory_frontend_safe_edit_get_destination_targets( $blueprint );
+	$target_href = isset( $targets[ $destination ]['href'] ) ? (string) $targets[ $destination ]['href'] : '';
+
+	if ( '' === $target_href ) {
+		return $blueprint;
+	}
+
+	foreach ( $blueprint['pages']['home']['sections'] ?? [] as $index => $section ) {
+		if ( ! is_array( $section ) || 'hero' !== ( $section['type'] ?? '' ) ) {
+			continue;
+		}
+
+		$blueprint['pages']['home']['sections'][ $index ]['cta_url'] = $target_href;
+		break;
+	}
+
+	return $blueprint;
 }
 
 function factory_frontend_safe_edit_get_hero_cta_destination_state( array $blueprint ): array {

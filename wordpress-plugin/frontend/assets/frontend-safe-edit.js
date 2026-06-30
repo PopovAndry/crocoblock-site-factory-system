@@ -84,12 +84,12 @@
 		panel.innerHTML =
 			'<div class="factory-frontend-safe-edit-panel__header">' +
 				'<div>' +
-					'<div class="factory-frontend-safe-edit-panel__eyebrow">Factory safe edit preview</div>' +
-					'<h2 class="factory-frontend-safe-edit-panel__title">Review safe copy fields</h2>' +
+					'<div class="factory-frontend-safe-edit-panel__eyebrow">Factory safe edit</div>' +
+					'<h2 class="factory-frontend-safe-edit-panel__title">Review and save safe fields</h2>' +
 				'</div>' +
-				'<span class="factory-frontend-safe-edit-panel__badge">Preview only</span>' +
+				'<span class="factory-frontend-safe-edit-panel__badge">Controlled save beta</span>' +
 			'</div>' +
-			'<p class="factory-frontend-safe-edit-panel__intro">Select a highlighted field on the page, edit the safe value here, and preview the result without saving.</p>' +
+			'<p class="factory-frontend-safe-edit-panel__intro">Select a highlighted field on the page, edit the safe value here, preview it, and save supported fields through the controlled Factory path.</p>' +
 			'<div class="factory-frontend-safe-edit-panel__status" data-role="status"></div>' +
 			'<div class="factory-frontend-safe-edit-panel__summary" data-role="summary"></div>' +
 			'<div class="factory-frontend-safe-edit-panel__save-proof" data-role="save-proof"></div>' +
@@ -292,9 +292,17 @@
 		const afterSubtitle = proof.after_values && proof.after_values.hero_subtitle ? proof.after_values.hero_subtitle : '';
 		const beforeCta = proof.before_values && proof.before_values.hero_cta_text ? proof.before_values.hero_cta_text : '';
 		const afterCta = proof.after_values && proof.after_values.hero_cta_text ? proof.after_values.hero_cta_text : '';
+		const beforeDestination = proof.before_values && proof.before_values.hero_cta_destination ? proof.before_values.hero_cta_destination : '';
+		const afterDestination = proof.after_values && proof.after_values.hero_cta_destination ? proof.after_values.hero_cta_destination : '';
+		const beforeResolvedDestination = proof.before_resolved_values && proof.before_resolved_values.hero_cta_destination
+			? proof.before_resolved_values.hero_cta_destination
+			: '';
+		const afterResolvedDestination = proof.after_resolved_values && proof.after_resolved_values.hero_cta_destination
+			? proof.after_resolved_values.hero_cta_destination
+			: '';
 		const changedFields = Array.isArray( proof.changed_fields ) ? proof.changed_fields : [];
 
-		lines.push( 'Save proof: Hero title, Hero subtitle, and Hero CTA text beta' );
+		lines.push( 'Save proof: controlled Factory beta' );
 
 		if ( changedFields.indexOf( 'hero_title' ) !== -1 && ( beforeTitle || afterTitle ) ) {
 			lines.push( 'Title: ' + beforeTitle + ' -> ' + afterTitle );
@@ -306,6 +314,14 @@
 
 		if ( changedFields.indexOf( 'hero_cta_text' ) !== -1 && ( beforeCta || afterCta ) ) {
 			lines.push( 'CTA: ' + beforeCta + ' -> ' + afterCta );
+		}
+
+		if ( changedFields.indexOf( 'hero_cta_destination' ) !== -1 && ( beforeDestination || afterDestination ) ) {
+			lines.push( 'Destination: ' + beforeDestination + ' -> ' + afterDestination );
+		}
+
+		if ( changedFields.indexOf( 'hero_cta_destination' ) !== -1 && ( beforeResolvedDestination || afterResolvedDestination ) ) {
+			lines.push( 'Href: ' + beforeResolvedDestination + ' -> ' + afterResolvedDestination );
 		}
 
 		if ( typeof proof.validation_count === 'number' ) {
@@ -329,7 +345,7 @@
 	}
 
 	function fieldSupportsSave( field ) {
-		return field === 'hero_title' || field === 'hero_subtitle' || field === 'hero_cta_text';
+		return field === 'hero_title' || field === 'hero_subtitle' || field === 'hero_cta_text' || field === 'hero_cta_destination';
 	}
 
 	function getSaveEnabledFieldLabel( field ) {
@@ -339,6 +355,10 @@
 
 		if ( field === 'hero_cta_text' ) {
 			return 'Hero CTA text';
+		}
+
+		if ( field === 'hero_cta_destination' ) {
+			return 'Hero CTA destination';
 		}
 
 		return 'Hero title';
@@ -648,7 +668,7 @@
 
 	function runSave() {
 		if ( ! fieldSupportsSave( state.selectedField ) ) {
-			updatePanelStatus( 'Save is only enabled for Hero title, Hero subtitle, and Hero CTA text in this beta.', 'warning' );
+			updatePanelStatus( 'Save is only enabled for Hero title, Hero subtitle, Hero CTA text, and Hero CTA destination in this beta.', 'warning' );
 			return Promise.resolve();
 		}
 
@@ -676,7 +696,7 @@
 		} ).then( function ( response ) {
 			state.saveReady = false;
 			updateSaveProof( response );
-			updatePanelStatus( getSaveEnabledFieldLabel( state.selectedField ) + ' saved. Generated Home copy was refreshed through Factory.', 'success' );
+			updatePanelStatus( getSaveEnabledFieldLabel( state.selectedField ) + ' saved. Generated pages were refreshed through Factory.', 'success' );
 			return refreshContextAfterSave().then( function () {
 				updateSaveProof( response );
 				selectField( state.selectedField );
@@ -729,7 +749,7 @@
 			updateSaveProof( null );
 			updatePanelStatus(
 				response.can_edit
-					? 'Safe copy preview is ready. Hero title, Hero subtitle, and Hero CTA text can be saved in this beta after preview.'
+					? 'Safe edit preview is ready. Hero title, Hero subtitle, Hero CTA text, and Hero CTA destination can be saved in this beta after preview.'
 					: 'Preview is available, but ownership review is required before any future save flow.',
 				response.can_edit ? 'success' : 'warning'
 			);
