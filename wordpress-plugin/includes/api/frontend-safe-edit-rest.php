@@ -420,12 +420,13 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 		: $updated_blueprint_context['ownership'];
 	$runtime_snapshot_after   = factory_frontend_safe_edit_capture_runtime_snapshot();
 	$apply_response           = is_array( $apply_result['response'] ?? null ) ? $apply_result['response'] : [];
+	$saved_field_labels       = factory_frontend_safe_edit_describe_fields( $changed_fields );
 
 	return new WP_REST_Response(
 		[
 			'status'                  => 'ok',
 			'code'                    => 'frontend_safe_edit_saved',
-			'message'                 => 'Hero title was saved through the controlled Factory apply path.',
+			'message'                 => sprintf( 'Frontend safe edit save for %s was applied through the controlled Factory path.', $saved_field_labels ),
 			'applies_changes'         => true,
 			'source'                  => 'frontend_safe_edit',
 			'changed_fields'          => $changed_fields,
@@ -776,6 +777,33 @@ function factory_frontend_safe_edit_build_diff_summary( array $current_values, a
 
 function factory_frontend_safe_edit_mutable_save_fields(): array {
 	return [ 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
+}
+
+function factory_frontend_safe_edit_describe_fields( array $fields ): string {
+	$schema = factory_frontend_safe_edit_field_schema();
+	$labels = [];
+
+	foreach ( $fields as $field ) {
+		if ( ! is_string( $field ) || '' === trim( $field ) ) {
+			continue;
+		}
+
+		$labels[] = (string) ( $schema[ $field ]['label'] ?? ucwords( str_replace( '_', ' ', $field ) ) );
+	}
+
+	$labels = array_values( array_unique( array_filter( $labels ) ) );
+
+	if ( empty( $labels ) ) {
+		return 'the selected field';
+	}
+
+	if ( 1 === count( $labels ) ) {
+		return $labels[0];
+	}
+
+	$last_label = array_pop( $labels );
+
+	return implode( ', ', $labels ) . ' and ' . $last_label;
 }
 
 function factory_frontend_safe_edit_capture_runtime_snapshot(): array {
