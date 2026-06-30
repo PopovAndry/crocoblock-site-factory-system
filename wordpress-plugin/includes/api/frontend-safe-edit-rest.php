@@ -303,7 +303,7 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 			[
 				'status'          => 'blocked',
 				'code'            => 'frontend_safe_edit_save_not_enabled',
-				'message'         => 'Frontend safe edit save is only enabled for Hero title and Hero subtitle in this beta. No site changes were made.',
+				'message'         => 'Frontend safe edit save is only enabled for Hero title, Hero subtitle, and Hero CTA text in this beta. No site changes were made.',
 				'applies_changes' => false,
 				'source'          => 'frontend_safe_edit',
 				'changed_fields'  => $changed_fields,
@@ -312,7 +312,7 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 				'ignored_fields'  => [],
 				'ownership'       => $ownership,
 				'client_context'  => is_array( $client_context ) ? $client_context : [],
-				'next_step'       => 'hero_copy_only_beta',
+				'next_step'       => 'hero_copy_and_cta_only_beta',
 			],
 			501
 		);
@@ -347,7 +347,7 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 			'applied_variables' => $overlay_variables,
 			'notes'             => [
 				'Frontend safe edit save uses the stored Factory blueprint as the base.',
-				'Only the hero_title and hero_subtitle safe variables are allowed to persist in this beta save flow.',
+				'Only the hero_title, hero_subtitle, and hero_cta_text safe variables are allowed to persist in this beta save flow.',
 				'Generated pages are refreshed through the deterministic Real Estate apply service.',
 			],
 		],
@@ -775,7 +775,7 @@ function factory_frontend_safe_edit_build_diff_summary( array $current_values, a
 }
 
 function factory_frontend_safe_edit_mutable_save_fields(): array {
-	return [ 'hero_title', 'hero_subtitle' ];
+	return [ 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
 }
 
 function factory_frontend_safe_edit_capture_runtime_snapshot(): array {

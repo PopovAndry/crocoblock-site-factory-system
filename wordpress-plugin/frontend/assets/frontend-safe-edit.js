@@ -215,9 +215,11 @@
 		const afterTitle = proof.after_values && proof.after_values.hero_title ? proof.after_values.hero_title : '';
 		const beforeSubtitle = proof.before_values && proof.before_values.hero_subtitle ? proof.before_values.hero_subtitle : '';
 		const afterSubtitle = proof.after_values && proof.after_values.hero_subtitle ? proof.after_values.hero_subtitle : '';
+		const beforeCta = proof.before_values && proof.before_values.hero_cta_text ? proof.before_values.hero_cta_text : '';
+		const afterCta = proof.after_values && proof.after_values.hero_cta_text ? proof.after_values.hero_cta_text : '';
 		const changedFields = Array.isArray( proof.changed_fields ) ? proof.changed_fields : [];
 
-		lines.push( 'Save proof: Hero title and Hero subtitle beta' );
+		lines.push( 'Save proof: Hero title, Hero subtitle, and Hero CTA text beta' );
 
 		if ( changedFields.indexOf( 'hero_title' ) !== -1 && ( beforeTitle || afterTitle ) ) {
 			lines.push( 'Title: ' + beforeTitle + ' -> ' + afterTitle );
@@ -225,6 +227,10 @@
 
 		if ( changedFields.indexOf( 'hero_subtitle' ) !== -1 && ( beforeSubtitle || afterSubtitle ) ) {
 			lines.push( 'Subtitle: ' + beforeSubtitle + ' -> ' + afterSubtitle );
+		}
+
+		if ( changedFields.indexOf( 'hero_cta_text' ) !== -1 && ( beforeCta || afterCta ) ) {
+			lines.push( 'CTA: ' + beforeCta + ' -> ' + afterCta );
 		}
 
 		if ( typeof proof.validation_count === 'number' ) {
@@ -248,12 +254,16 @@
 	}
 
 	function fieldSupportsSave( field ) {
-		return field === 'hero_title' || field === 'hero_subtitle';
+		return field === 'hero_title' || field === 'hero_subtitle' || field === 'hero_cta_text';
 	}
 
 	function getSaveEnabledFieldLabel( field ) {
 		if ( field === 'hero_subtitle' ) {
 			return 'Hero subtitle';
+		}
+
+		if ( field === 'hero_cta_text' ) {
+			return 'Hero CTA text';
 		}
 
 		return 'Hero title';
@@ -297,7 +307,7 @@
 		const canPreview = !! state.context.can_edit && ! state.previewBlocked;
 		const saveHint = fieldSupportsSave( field )
 			? 'Save is available for ' + getSaveEnabledFieldLabel( field ) + ' after a successful preview.'
-			: 'Preview only in this beta. Save currently supports Hero title and Hero subtitle only.';
+			: 'Preview only in this beta. Save currently supports Hero title, Hero subtitle, and Hero CTA text only.';
 
 		state.fieldLabel.textContent = meta.label || field;
 		state.fieldHint.textContent = 'Sanitizer: ' + ( meta.sanitizer || 'text' ) + ' | Max: ' + ( meta.max || '' ) + ' | ' + saveHint;
@@ -490,7 +500,7 @@
 
 	function runSave() {
 		if ( ! fieldSupportsSave( state.selectedField ) ) {
-			updatePanelStatus( 'Save is only enabled for Hero title and Hero subtitle in this beta.', 'warning' );
+			updatePanelStatus( 'Save is only enabled for Hero title, Hero subtitle, and Hero CTA text in this beta.', 'warning' );
 			return Promise.resolve();
 		}
 
@@ -571,7 +581,7 @@
 			updateSaveProof( null );
 			updatePanelStatus(
 				response.can_edit
-					? 'Safe copy preview is ready. Hero title and Hero subtitle can be saved in this beta after preview.'
+					? 'Safe copy preview is ready. Hero title, Hero subtitle, and Hero CTA text can be saved in this beta after preview.'
 					: 'Preview is available, but ownership review is required before any future save flow.',
 				response.can_edit ? 'success' : 'warning'
 			);
