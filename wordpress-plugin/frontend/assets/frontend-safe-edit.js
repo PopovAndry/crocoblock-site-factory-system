@@ -28,8 +28,11 @@
 		saveBlocked: false,
 		panel: null,
 		form: null,
+		fieldPickerLabel: null,
+		fieldPicker: null,
 		fieldLabel: null,
 		fieldInput: null,
+		fieldSelect: null,
 		fieldHint: null,
 		status: null,
 		summary: null,
@@ -91,8 +94,11 @@
 			'<div class="factory-frontend-safe-edit-panel__summary" data-role="summary"></div>' +
 			'<div class="factory-frontend-safe-edit-panel__save-proof" data-role="save-proof"></div>' +
 			'<form class="factory-frontend-safe-edit-panel__form" data-role="form">' +
+				'<label class="factory-frontend-safe-edit-panel__label" data-role="field-picker-label" for="factory-frontend-safe-edit-field-picker" hidden>CTA field</label>' +
+				'<select id="factory-frontend-safe-edit-field-picker" class="factory-frontend-safe-edit-panel__input" data-role="field-picker" hidden></select>' +
 				'<label class="factory-frontend-safe-edit-panel__label" data-role="field-label" for="factory-frontend-safe-edit-input">Safe field</label>' +
 				'<textarea id="factory-frontend-safe-edit-input" class="factory-frontend-safe-edit-panel__input" rows="3" data-role="field-input"></textarea>' +
+				'<select id="factory-frontend-safe-edit-select" class="factory-frontend-safe-edit-panel__input" data-role="field-select" hidden></select>' +
 				'<div class="factory-frontend-safe-edit-panel__hint" data-role="field-hint"></div>' +
 				'<div class="factory-frontend-safe-edit-panel__actions">' +
 					'<button type="submit" class="factory-frontend-safe-edit-panel__button factory-frontend-safe-edit-panel__button--primary" data-role="preview">Preview</button>' +
@@ -106,8 +112,11 @@
 
 		state.panel = panel;
 		state.form = panel.querySelector( '[data-role="form"]' );
+		state.fieldPickerLabel = panel.querySelector( '[data-role="field-picker-label"]' );
+		state.fieldPicker = panel.querySelector( '[data-role="field-picker"]' );
 		state.fieldLabel = panel.querySelector( '[data-role="field-label"]' );
 		state.fieldInput = panel.querySelector( '[data-role="field-input"]' );
+		state.fieldSelect = panel.querySelector( '[data-role="field-select"]' );
 		state.fieldHint = panel.querySelector( '[data-role="field-hint"]' );
 		state.status = panel.querySelector( '[data-role="status"]' );
 		state.summary = panel.querySelector( '[data-role="summary"]' );
@@ -130,16 +139,82 @@
 			void runSave();
 		} );
 
-		state.fieldInput.addEventListener( 'input', function () {
-			if ( ! state.selectedField ) {
+		state.fieldPicker.addEventListener( 'change', function () {
+			if ( ! state.fieldPicker.value ) {
 				return;
 			}
 
-			state.draftValues[ state.selectedField ] = state.fieldInput.value;
-			state.lastPreviewResponse = null;
-			state.saveReady = false;
-			updateSaveControl();
+			selectField( state.fieldPicker.value );
 		} );
+
+		state.fieldInput.addEventListener( 'input', function () {
+			updateDraftValue( state.fieldInput.value );
+		} );
+
+		state.fieldSelect.addEventListener( 'change', function () {
+			updateDraftValue( state.fieldSelect.value );
+		} );
+	}
+
+	function updateDraftValue( value ) {
+		if ( ! state.selectedField ) {
+			return;
+		}
+
+		state.draftValues[ state.selectedField ] = value;
+		state.lastPreviewResponse = null;
+		state.saveReady = false;
+		updateSaveControl();
+	}
+
+	function getMarkerField( field ) {
+		return field === 'hero_cta_destination' ? 'hero_cta_text' : field;
+	}
+
+	function getLinkedFields( field ) {
+		const markerField = getMarkerField( field );
+		const linked = [ markerField ];
+
+		if (
+			'hero_cta_text' === markerField &&
+			state.context &&
+			state.context.safe_fields &&
+			state.context.safe_fields.hero_cta_destination
+		) {
+			linked.push( 'hero_cta_destination' );
+		}
+
+		return linked;
+	}
+
+	function updateFieldPicker( field ) {
+		if ( ! state.fieldPicker || ! state.fieldPickerLabel || ! state.context || ! state.context.safe_fields ) {
+			return;
+		}
+
+		const linkedFields = getLinkedFields( field ).filter( function ( key ) {
+			return !! state.context.safe_fields[ key ];
+		} );
+
+		if ( linkedFields.length <= 1 ) {
+			state.fieldPicker.hidden = true;
+			state.fieldPickerLabel.hidden = true;
+			state.fieldPicker.innerHTML = '';
+			if ( ! state.selectedField ) {
+				state.fieldPicker.value = '';
+			}
+			return;
+		}
+
+		state.fieldPicker.hidden = false;
+		state.fieldPickerLabel.hidden = false;
+		state.fieldPicker.innerHTML = linkedFields
+			.map( function ( key ) {
+				const meta = state.context.safe_fields[ key ] || {};
+				return '<option value="' + escapeHtml( key ) + '">' + escapeHtml( meta.label || key ) + '</option>';
+			} )
+			.join( '' );
+		state.fieldPicker.value = field;
 	}
 
 	function updatePanelStatus( message, tone ) {
@@ -291,11 +366,84 @@
 		state.saveButton.disabled = ! canSave;
 	}
 
+	function getFieldHint( field, meta, saveHint ) {
+		const lines = [];
+
+		if ( meta.control === 'select' ) {
+			const optionLabels = Array.isArray( meta.options )
+				? meta.options.map( function ( option ) {
+					return option && option.label ? option.label : option.value;
+				} ).filter( Boolean )
+				: [];
+			lines.push( 'Control: select' );
+			if ( optionLabels.length ) {
+				lines.push( 'Options: ' + optionLabels.join( ', ' ) );
+			}
+		} else {
+			lines.push( 'Sanitizer: ' + ( meta.sanitizer || 'text' ) );
+			lines.push( 'Max: ' + ( meta.max || '' ) );
+		}
+
+		lines.push( saveHint );
+
+		if ( field === 'hero_cta_destination' ) {
+			const currentHref = state.context && state.context.resolved_values && state.context.resolved_values.hero_cta_destination
+				? state.context.resolved_values.hero_cta_destination.current
+				: '';
+			const previewHref = state.lastPreviewResponse && state.lastPreviewResponse.resolved_values && state.lastPreviewResponse.resolved_values.hero_cta_destination
+				? state.lastPreviewResponse.resolved_values.hero_cta_destination.preview
+				: '';
+
+			if ( currentHref ) {
+				lines.push( 'Current href: ' + currentHref );
+			}
+
+			if ( previewHref && previewHref !== currentHref ) {
+				lines.push( 'Preview href: ' + previewHref );
+			}
+
+			if ( meta.blocking_reason ) {
+				lines.push( meta.blocking_reason );
+			}
+		}
+
+		return lines.join( ' | ' );
+	}
+
+	function updateFieldControlVisibility( meta, value, canPreview ) {
+		const isSelect = meta.control === 'select';
+
+		state.fieldInput.hidden = isSelect;
+		state.fieldSelect.hidden = ! isSelect;
+		state.fieldInput.disabled = isSelect || ! canPreview;
+		state.fieldSelect.disabled = ! isSelect || ! canPreview;
+
+		if ( isSelect ) {
+			state.fieldSelect.innerHTML = ( Array.isArray( meta.options ) ? meta.options : [] )
+				.map( function ( option ) {
+					const optionValue = option && option.value ? option.value : '';
+					const optionLabel = option && option.label ? option.label : optionValue;
+					return '<option value="' + escapeHtml( optionValue ) + '">' + escapeHtml( optionLabel ) + '</option>';
+				} )
+				.join( '' );
+			state.fieldSelect.value = value;
+			return;
+		}
+
+		state.fieldInput.rows = meta.sanitizer === 'textarea' ? 4 : 2;
+		state.fieldInput.value = value;
+	}
+
 	function configureInputForField( field ) {
 		if ( ! field || ! state.context || ! state.context.safe_fields || ! state.context.safe_fields[ field ] ) {
 			state.fieldInput.value = '';
+			state.fieldSelect.innerHTML = '';
 			state.fieldInput.disabled = true;
+			state.fieldSelect.disabled = true;
+			state.fieldInput.hidden = false;
+			state.fieldSelect.hidden = true;
 			state.previewButton.disabled = true;
+			updateFieldPicker( '' );
 			return;
 		}
 
@@ -303,17 +451,17 @@
 		const value = Object.prototype.hasOwnProperty.call( state.draftValues, field )
 			? state.draftValues[ field ]
 			: '';
-		const isTextarea = meta.sanitizer === 'textarea';
-		const canPreview = !! state.context.can_edit && ! state.previewBlocked;
+		const canPreview = !! state.context.can_edit && ! state.previewBlocked && ! meta.readonly;
 		const saveHint = fieldSupportsSave( field )
 			? 'Save is available for ' + getSaveEnabledFieldLabel( field ) + ' after a successful preview.'
-			: 'Preview only in this beta. Save currently supports Hero title, Hero subtitle, and Hero CTA text only.';
+			: meta.readonly
+				? 'Preview is unavailable for this field until the CTA destination can be mapped safely.'
+				: 'Preview only in this beta. Save currently supports Hero title, Hero subtitle, and Hero CTA text only.';
 
+		updateFieldPicker( field );
 		state.fieldLabel.textContent = meta.label || field;
-		state.fieldHint.textContent = 'Sanitizer: ' + ( meta.sanitizer || 'text' ) + ' | Max: ' + ( meta.max || '' ) + ' | ' + saveHint;
-		state.fieldInput.disabled = ! canPreview;
-		state.fieldInput.rows = isTextarea ? 4 : 2;
-		state.fieldInput.value = value;
+		state.fieldHint.textContent = getFieldHint( field, meta, saveHint );
+		updateFieldControlVisibility( meta, value, canPreview );
 		state.previewButton.disabled = ! canPreview;
 		updateSaveControl();
 	}
@@ -322,7 +470,7 @@
 		state.selectedField = field;
 
 		markers.forEach( function ( marker ) {
-			const isActive = marker.dataset.factorySafeField === field;
+			const isActive = marker.dataset.factorySafeField === getMarkerField( field );
 			marker.classList.toggle( 'is-active', isActive );
 		} );
 

@@ -89,6 +89,7 @@ function factory_rest_frontend_safe_edit_context(): WP_REST_Response {
 			'blueprint_source' => $context['blueprint_source'],
 			'safe_fields'    => $context['safe_fields'],
 			'current_values' => $context['current_values'],
+			'resolved_values'=> $context['resolved_values'],
 			'ownership'      => $context['ownership'],
 			'warnings'       => $context['warnings'],
 		]
@@ -124,6 +125,7 @@ function factory_rest_frontend_safe_edit_preview( WP_REST_Request $request ): WP
 				'blueprint_source' => $context['blueprint_source'],
 				'safe_fields'      => $context['safe_fields'],
 				'current_values'   => $context['current_values'],
+				'resolved_values'  => $context['resolved_values'],
 				'ownership'        => $context['ownership'],
 				'warnings'         => array_values( array_unique( $warnings ) ),
 			],
@@ -134,13 +136,40 @@ function factory_rest_frontend_safe_edit_preview( WP_REST_Request $request ): WP
 	$received = $request->get_param( 'safe_values' );
 	$normalized = factory_frontend_safe_edit_normalize_preview_values(
 		is_array( $received ) ? $received : [],
-		$context['current_values']
+		$context['current_values'],
+		$context['safe_fields']
 	);
+	$warnings = $context['warnings'];
+
+	if ( ! empty( $normalized['invalid_fields'] ) ) {
+		return new WP_REST_Response(
+			[
+				'status'           => 'blocked',
+				'code'             => 'frontend_safe_edit_invalid_preview_values',
+				'message'          => 'Frontend safe edit preview rejected invalid field values. No site changes were made.',
+				'applies_changes'  => false,
+				'can_edit'         => $context['can_edit'],
+				'blueprint_source' => $context['blueprint_source'],
+				'safe_fields'      => $context['safe_fields'],
+				'current_values'   => $context['current_values'],
+				'resolved_values'  => $context['resolved_values'],
+				'invalid_fields'   => $normalized['invalid_fields'],
+				'ownership'        => $context['ownership'],
+				'warnings'         => array_values( array_unique( $warnings ) ),
+			],
+			400
+		);
+	}
+
 	$diff_summary = factory_frontend_safe_edit_build_diff_summary(
 		$context['current_values'],
 		$normalized['values']
 	);
-	$warnings = $context['warnings'];
+	$resolved_values = factory_frontend_safe_edit_build_resolved_values(
+		$context['current_values'],
+		$normalized['values'],
+		$context['blueprint']
+	);
 
 	if ( ! empty( $normalized['ignored_fields'] ) ) {
 		$warnings[] = 'Unsupported fields were ignored: ' . implode( ', ', $normalized['ignored_fields'] ) . '.';
@@ -161,6 +190,7 @@ function factory_rest_frontend_safe_edit_preview( WP_REST_Request $request ): WP
 			'safe_fields'      => $context['safe_fields'],
 			'current_values'   => $context['current_values'],
 			'preview_values'   => $normalized['values'],
+			'resolved_values'  => $resolved_values,
 			'normalized_values'=> $normalized['values'],
 			'ignored_fields'   => $normalized['ignored_fields'],
 			'diff_summary'     => $diff_summary,
@@ -454,9 +484,10 @@ function factory_frontend_safe_edit_collect_context() {
 	}
 
 	$blueprint = $record['blueprint'];
-	$current_values = factory_frontend_safe_edit_get_current_values( $blueprint );
+	$field_bundle = factory_frontend_safe_edit_build_field_bundle( $blueprint );
+	$current_values = $field_bundle['current_values'];
 	$ownership = factory_frontend_safe_edit_get_ownership_summary( $blueprint );
-	$warnings = [];
+	$warnings = $field_bundle['warnings'];
 	$can_edit = ! $ownership['blocked'] && 'stored_blueprint' === $record['source'];
 
 	if ( 'stored_blueprint' !== $record['source'] ) {
@@ -466,8 +497,10 @@ function factory_frontend_safe_edit_collect_context() {
 	return [
 		'can_edit'        => $can_edit,
 		'blueprint_source'=> $record['source'],
-		'safe_fields'     => factory_frontend_safe_edit_field_schema(),
+		'blueprint'       => $blueprint,
+		'safe_fields'     => $field_bundle['safe_fields'],
 		'current_values'  => $current_values,
+		'resolved_values' => $field_bundle['resolved_values'],
 		'ownership'       => $ownership,
 		'warnings'        => array_values( array_unique( $warnings ) ),
 	];
@@ -481,14 +514,17 @@ function factory_frontend_safe_edit_collect_save_context() {
 	}
 
 	$blueprint = $record['blueprint'];
+	$field_bundle = factory_frontend_safe_edit_build_field_bundle( $blueprint );
 
 	return [
 		'source'         => 'frontend_safe_edit',
 		'blueprint'      => $blueprint,
 		'blueprint_source' => $record['source'],
-		'current_values' => factory_frontend_safe_edit_get_current_values( $blueprint ),
+		'current_values' => $field_bundle['current_values'],
+		'resolved_values' => $field_bundle['resolved_values'],
 		'ownership'      => factory_frontend_safe_edit_get_ownership_summary( $blueprint ),
-		'safe_fields'    => factory_frontend_safe_edit_field_schema(),
+		'safe_fields'    => $field_bundle['safe_fields'],
+		'warnings'       => $field_bundle['warnings'],
 	];
 }
 
@@ -558,18 +594,21 @@ function factory_frontend_safe_edit_field_schema(): array {
 		$schema[ $key ]['label'] = $labels[ $key ] ?? ucwords( str_replace( '_', ' ', $key ) );
 	}
 
+	$schema['hero_cta_destination'] = [
+		'max'       => 24,
+		'sanitizer' => 'text',
+		'label'     => 'Hero CTA destination',
+		'control'   => 'select',
+		'options'   => factory_frontend_safe_edit_destination_options(),
+	];
+
 	return $schema;
 }
 
 function factory_frontend_safe_edit_get_current_values( array $blueprint ): array {
-	$defaults = factory_rest_get_real_estate_variable_defaults( $blueprint );
-	$values   = [];
+	$field_bundle = factory_frontend_safe_edit_build_field_bundle( $blueprint );
 
-	foreach ( factory_frontend_safe_edit_field_schema() as $key => $schema ) {
-		$values[ $key ] = factory_rest_sanitize_preset_variable( $defaults[ $key ] ?? '', $schema );
-	}
-
-	return $values;
+	return $field_bundle['current_values'];
 }
 
 function factory_frontend_safe_edit_get_ownership_summary( array $blueprint ): array {
@@ -647,10 +686,11 @@ function factory_frontend_safe_edit_get_page_ownership( array $blueprint, string
 	];
 }
 
-function factory_frontend_safe_edit_normalize_preview_values( array $received, array $current_values ): array {
-	$schema = factory_frontend_safe_edit_field_schema();
+function factory_frontend_safe_edit_normalize_preview_values( array $received, array $current_values, array $safe_fields ): array {
+	$schema = $safe_fields;
 	$values = [];
 	$ignored_fields = [];
+	$invalid_fields = [];
 
 	foreach ( $received as $key => $value ) {
 		if ( ! isset( $schema[ $key ] ) ) {
@@ -660,7 +700,20 @@ function factory_frontend_safe_edit_normalize_preview_values( array $received, a
 
 	foreach ( $schema as $key => $item ) {
 		if ( array_key_exists( $key, $received ) ) {
-			$values[ $key ] = factory_rest_sanitize_preset_variable( $received[ $key ], $item );
+			$normalized = factory_frontend_safe_edit_normalize_field_value(
+				$key,
+				$received[ $key ],
+				$item,
+				$current_values
+			);
+
+			if ( isset( $normalized['error'] ) ) {
+				$invalid_fields[ $key ] = (string) $normalized['error'];
+				$values[ $key ] = (string) ( $current_values[ $key ] ?? '' );
+				continue;
+			}
+
+			$values[ $key ] = (string) $normalized['value'];
 			continue;
 		}
 
@@ -670,6 +723,7 @@ function factory_frontend_safe_edit_normalize_preview_values( array $received, a
 	return [
 		'values'         => $values,
 		'ignored_fields' => array_values( array_unique( array_filter( $ignored_fields ) ) ),
+		'invalid_fields' => $invalid_fields,
 	];
 }
 
@@ -702,7 +756,13 @@ function factory_frontend_safe_edit_normalize_save_values( array $received, arra
 			continue;
 		}
 
-		$values[ $key ] = factory_rest_sanitize_preset_variable( $received[ $key ], $item );
+		$normalized = factory_frontend_safe_edit_normalize_field_value(
+			$key,
+			$received[ $key ],
+			$item,
+			$current_values
+		);
+		$values[ $key ] = (string) ( $normalized['value'] ?? '' );
 		$submitted_fields[] = $key;
 	}
 
@@ -721,7 +781,13 @@ function factory_frontend_safe_edit_normalize_expected_values( array $expected_v
 			continue;
 		}
 
-		$normalized[ $key ] = factory_rest_sanitize_preset_variable( $expected_values[ $key ], $item );
+		$value = factory_frontend_safe_edit_normalize_field_value(
+			$key,
+			$expected_values[ $key ],
+			$item,
+			[]
+		);
+		$normalized[ $key ] = (string) ( $value['value'] ?? '' );
 	}
 
 	return $normalized;
@@ -777,6 +843,243 @@ function factory_frontend_safe_edit_build_diff_summary( array $current_values, a
 
 function factory_frontend_safe_edit_mutable_save_fields(): array {
 	return [ 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
+}
+
+function factory_frontend_safe_edit_build_field_bundle( array $blueprint ): array {
+	$safe_fields = factory_frontend_safe_edit_field_schema();
+	$defaults = factory_rest_get_real_estate_variable_defaults( $blueprint );
+	$current_values = [];
+
+	foreach ( $safe_fields as $key => $schema ) {
+		if ( 'hero_cta_destination' === $key ) {
+			continue;
+		}
+
+		$current_values[ $key ] = factory_rest_sanitize_preset_variable( $defaults[ $key ] ?? '', $schema );
+	}
+
+	$destination_state = factory_frontend_safe_edit_get_hero_cta_destination_state( $blueprint );
+	$current_values['hero_cta_destination'] = $destination_state['blocked'] ? '' : $destination_state['value'];
+	$safe_fields['hero_cta_destination']['readonly'] = ! empty( $destination_state['blocked'] );
+	$safe_fields['hero_cta_destination']['blocked'] = ! empty( $destination_state['blocked'] );
+
+	if ( ! empty( $destination_state['blocking_reason'] ) ) {
+		$safe_fields['hero_cta_destination']['blocking_reason'] = (string) $destination_state['blocking_reason'];
+	}
+
+	return [
+		'safe_fields' => $safe_fields,
+		'current_values' => $current_values,
+		'resolved_values' => factory_frontend_safe_edit_build_resolved_values( $current_values, $current_values, $blueprint ),
+		'warnings' => ! empty( $destination_state['blocking_reason'] )
+			? [ (string) $destination_state['blocking_reason'] ]
+			: [],
+	];
+}
+
+function factory_frontend_safe_edit_destination_options(): array {
+	return [
+		[
+			'value' => 'home',
+			'label' => 'Home',
+		],
+		[
+			'value' => 'properties',
+			'label' => 'Properties',
+		],
+		[
+			'value' => 'contact',
+			'label' => 'Contact',
+		],
+	];
+}
+
+function factory_frontend_safe_edit_build_resolved_values( array $current_values, array $preview_values, array $blueprint ): array {
+	$targets = factory_frontend_safe_edit_get_destination_targets( $blueprint );
+	$current_destination = (string) ( $current_values['hero_cta_destination'] ?? '' );
+	$preview_destination = (string) ( $preview_values['hero_cta_destination'] ?? '' );
+	$current_href = isset( $targets[ $current_destination ]['href'] ) ? (string) $targets[ $current_destination ]['href'] : '';
+	$preview_href = isset( $targets[ $preview_destination ]['href'] ) ? (string) $targets[ $preview_destination ]['href'] : '';
+
+	return [
+		'hero_cta_destination' => [
+			'current' => $current_href,
+			'preview' => $preview_href,
+		],
+	];
+}
+
+function factory_frontend_safe_edit_get_destination_targets( array $blueprint ): array {
+	$home = is_array( $blueprint['pages']['home'] ?? null ) ? $blueprint['pages']['home'] : [];
+	$archive = is_array( $blueprint['pages']['archive'] ?? null ) ? $blueprint['pages']['archive'] : [];
+	$contact = is_array( $blueprint['pages']['contact'] ?? null ) ? $blueprint['pages']['contact'] : [];
+	$archive_slug = is_string( $archive['slug'] ?? null ) && '' !== trim( $archive['slug'] ) ? trim( $archive['slug'] ) : 'properties';
+	$contact_slug = is_string( $contact['slug'] ?? null ) && '' !== trim( $contact['slug'] ) ? trim( $contact['slug'] ) : 'contact';
+	$home_slug = is_string( $home['slug'] ?? null ) ? trim( (string) $home['slug'] ) : '';
+
+	return [
+		'home' => [
+			'label' => 'Home',
+			'href'  => factory_frontend_safe_edit_build_destination_href( $home_slug, true ),
+		],
+		'properties' => [
+			'label' => 'Properties',
+			'href'  => factory_frontend_safe_edit_build_destination_href( $archive_slug, false ),
+		],
+		'contact' => [
+			'label' => 'Contact',
+			'href'  => factory_frontend_safe_edit_build_destination_href( $contact_slug, false ),
+		],
+	];
+}
+
+function factory_frontend_safe_edit_build_destination_href( string $slug, bool $is_home ): string {
+	if ( $is_home ) {
+		return home_url( '/' );
+	}
+
+	$slug = trim( $slug );
+
+	if ( '' === $slug ) {
+		return '';
+	}
+
+	return home_url( '/' . ltrim( $slug, '/' ) . '/' );
+}
+
+function factory_frontend_safe_edit_get_hero_cta_destination_state( array $blueprint ): array {
+	$home = is_array( $blueprint['pages']['home'] ?? null ) ? $blueprint['pages']['home'] : [];
+	$hero = factory_rest_find_real_estate_home_section( $home, 'hero' );
+	$raw_url = is_string( $hero['cta_url'] ?? null ) ? trim( (string) $hero['cta_url'] ) : '';
+	$targets = factory_frontend_safe_edit_get_destination_targets( $blueprint );
+	$resolved_current = factory_frontend_safe_edit_resolve_internal_cta_url( $raw_url );
+
+	foreach ( $targets as $key => $target ) {
+		if ( factory_frontend_safe_edit_urls_match( $resolved_current, (string) ( $target['href'] ?? '' ) ) ) {
+			return [
+				'value' => $key,
+				'resolved_href' => (string) ( $target['href'] ?? '' ),
+				'raw_url' => $raw_url,
+				'blocked' => false,
+				'blocking_reason' => '',
+			];
+		}
+	}
+
+	return [
+		'value' => '',
+		'resolved_href' => '',
+		'raw_url' => $raw_url,
+		'blocked' => true,
+		'blocking_reason' => 'Hero CTA destination is read-only because the stored CTA URL could not be mapped to Home, Properties, or Contact safely.',
+	];
+}
+
+function factory_frontend_safe_edit_resolve_internal_cta_url( string $url ): string {
+	$url = trim( $url );
+
+	if ( '' === $url ) {
+		return '';
+	}
+
+	if ( 0 === strpos( $url, '//' ) || 0 === strpos( $url, '#' ) ) {
+		return '';
+	}
+
+	if ( preg_match( '#^(javascript:|data:|mailto:|tel:)#i', $url ) ) {
+		return '';
+	}
+
+	if ( false !== strpos( $url, '?' ) || false !== strpos( $url, '#' ) ) {
+		return '';
+	}
+
+	if ( preg_match( '#^https?://#i', $url ) ) {
+		$url_parts = wp_parse_url( $url );
+		$home_parts = wp_parse_url( home_url( '/' ) );
+
+		if ( ! is_array( $url_parts ) || ! is_array( $home_parts ) ) {
+			return '';
+		}
+
+		$url_host = strtolower( (string) ( $url_parts['host'] ?? '' ) );
+		$home_host = strtolower( (string) ( $home_parts['host'] ?? '' ) );
+
+		if ( '' === $url_host || $url_host !== $home_host ) {
+			return '';
+		}
+
+		$url = (string) ( $url_parts['path'] ?? '/' );
+	}
+
+	return home_url( '/' . ltrim( $url, '/' ) );
+}
+
+function factory_frontend_safe_edit_urls_match( string $left, string $right ): bool {
+	return factory_frontend_safe_edit_normalize_resolved_url( $left ) === factory_frontend_safe_edit_normalize_resolved_url( $right );
+}
+
+function factory_frontend_safe_edit_normalize_resolved_url( string $url ): string {
+	$url = trim( $url );
+
+	if ( '' === $url ) {
+		return '';
+	}
+
+	$parts = wp_parse_url( $url );
+
+	if ( ! is_array( $parts ) ) {
+		return '';
+	}
+
+	$host = strtolower( (string) ( $parts['host'] ?? '' ) );
+	$path = (string) ( $parts['path'] ?? '/' );
+	$path = '/' === $path ? '/' : untrailingslashit( $path ) . '/';
+
+	return $host . $path;
+}
+
+function factory_frontend_safe_edit_normalize_field_value( string $field, $value, array $schema, array $current_values ): array {
+	if ( 'hero_cta_destination' !== $field ) {
+		return [
+			'value' => factory_rest_sanitize_preset_variable( $value, $schema ),
+		];
+	}
+
+	if ( ! empty( $schema['blocked'] ) ) {
+		$current = (string) ( $current_values[ $field ] ?? '' );
+		$received = sanitize_key( (string) $value );
+
+		if ( '' === $received || $received === $current ) {
+			return [
+				'value' => $current,
+			];
+		}
+
+		return [
+			'value' => $current,
+			'error' => (string) ( $schema['blocking_reason'] ?? 'Hero CTA destination is currently read-only.' ),
+		];
+	}
+
+	$normalized = sanitize_key( (string) $value );
+	$allowed_values = array_map(
+		static function ( array $option ): string {
+			return sanitize_key( (string) ( $option['value'] ?? '' ) );
+		},
+		is_array( $schema['options'] ?? null ) ? $schema['options'] : []
+	);
+
+	if ( '' === $normalized || ! in_array( $normalized, $allowed_values, true ) ) {
+		return [
+			'value' => (string) ( $current_values[ $field ] ?? '' ),
+			'error' => 'Hero CTA destination must be one of: home, properties, contact.',
+		];
+	}
+
+	return [
+		'value' => $normalized,
+	];
 }
 
 function factory_frontend_safe_edit_describe_fields( array $fields ): string {
