@@ -476,7 +476,7 @@
 			? 'Save is available for ' + getSaveEnabledFieldLabel( field ) + ' after a successful preview.'
 			: meta.readonly
 				? 'Preview is unavailable for this field until the CTA destination can be mapped safely.'
-				: 'Preview only in this beta. Save currently supports Hero title, Hero subtitle, and Hero CTA text only.';
+				: 'Preview only in this beta. Save currently supports Hero title, Hero subtitle, Hero CTA text, and Hero CTA destination.';
 
 		updateFieldPicker( field );
 		state.fieldLabel.textContent = meta.label || field;

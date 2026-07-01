@@ -500,12 +500,21 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 	}
 
 	if ( empty( $apply_result['ok'] ) ) {
+		$runtime_snapshot_after_failure = $apply_boundary_started
+			? factory_frontend_safe_edit_capture_runtime_snapshot()
+			: [];
+		$apply_response = is_array( $apply_result['response'] ?? null ) ? $apply_result['response'] : [];
+
 		return new WP_REST_Response(
 			[
-				'status'                  => 'blocked',
-				'code'                    => sanitize_key( (string) ( $apply_result['error_code'] ?? 'frontend_safe_edit_apply_failed' ) ),
-				'message'                 => (string) ( $apply_result['error_message'] ?? 'Frontend safe edit save could not apply the deterministic Real Estate refresh.' ),
-				'applies_changes'         => false,
+				'status'                  => 'error',
+				'code'                    => $apply_boundary_started
+					? 'frontend_safe_edit_apply_failed_after_boundary'
+					: sanitize_key( (string) ( $apply_result['error_code'] ?? 'frontend_safe_edit_apply_failed' ) ),
+				'message'                 => $apply_boundary_started
+					? 'Frontend safe edit save failed after entering the apply boundary. Partial mutation may have occurred.'
+					: (string) ( $apply_result['error_message'] ?? 'Frontend safe edit save could not apply the deterministic Real Estate refresh.' ),
+				'applies_changes'         => $apply_boundary_started,
 				'source'                  => 'frontend_safe_edit',
 				'changed_fields'          => $changed_fields,
 				'before_values'           => $context['current_values'],
@@ -516,8 +525,24 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 				'ownership_before'        => $ownership,
 				'destination_preflight'   => $destination_preflight,
 				'runtime_snapshot_before' => $runtime_snapshot_before,
+				'runtime_snapshot_after'  => $runtime_snapshot_after_failure,
+				'mutation_status'         => $apply_boundary_started ? 'unknown_after_apply_started' : 'not_started',
 				'dependencies'            => is_array( $apply_result['dependencies'] ?? null ) ? $apply_result['dependencies'] : [],
-				'next_step'               => 'review_updated_frontend',
+				'apply_result_summary'    => [
+					'error_code'      => sanitize_key( (string) ( $apply_result['error_code'] ?? 'frontend_safe_edit_apply_failed' ) ),
+					'error_message'   => (string) ( $apply_result['error_message'] ?? '' ),
+					'http_status'     => isset( $apply_result['http_status'] ) ? (int) $apply_result['http_status'] : 0,
+					'execution_count' => isset( $apply_response['execution_count'] ) ? (int) $apply_response['execution_count'] : count( $apply_result['execution'] ?? [] ),
+					'validation_count'=> isset( $apply_response['validation_count'] ) ? (int) $apply_response['validation_count'] : count( $apply_result['report']['checks'] ?? [] ),
+					'results_summary' => is_array( $apply_response['results_summary'] ?? null ) ? $apply_response['results_summary'] : ( is_array( $apply_result['results']['summary'] ?? null ) ? $apply_result['results']['summary'] : [] ),
+				],
+				'next_step'               => 'run_validation_and_review_frontend',
+				'risks'                   => $apply_boundary_started
+					? [
+						'Partial mutation may have occurred after the deterministic apply path started.',
+						'Run validation/doctor and review the latest proof before further changes.',
+					]
+					: [],
 			],
 			max( 400, (int) ( $apply_result['http_status'] ?? 409 ) )
 		);
