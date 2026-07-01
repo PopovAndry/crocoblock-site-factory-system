@@ -4,6 +4,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/dependency-status.php';
+
 add_action( 'template_redirect', 'factory_console_maybe_render' );
 add_action( 'wp_enqueue_scripts', 'factory_console_enqueue_assets' );
 add_filter( 'show_admin_bar', 'factory_console_filter_admin_bar' );
@@ -92,20 +94,20 @@ function factory_console_build_client_config(): array {
 		];
 
 	return [
-		'restBase'        => esc_url_raw( rest_url( 'factory/v1' ) ),
-		'restNonce'       => wp_create_nonce( 'wp_rest' ),
-		'consoleMode'     => 'alpha_read_only',
-		'currentUser'     => [
+		'restBase'         => esc_url_raw( rest_url( 'factory/v1' ) ),
+		'restNonce'        => wp_create_nonce( 'wp_rest' ),
+		'consoleMode'      => 'alpha_read_only',
+		'currentUser'      => [
 			'can_manage_factory' => current_user_can( 'manage_options' ),
 		],
-		'siteTypeOptions' => [
+		'siteTypeOptions'  => [
 			[
 				'value'    => 'real_estate',
 				'label'    => 'Real Estate',
 				'disabled' => false,
 			],
 		],
-		'endpoints'       => [
+		'endpoints'        => [
 			'aiSettings'             => esc_url_raw( rest_url( 'factory/v1/ai/settings' ) ),
 			'aiEstimate'             => esc_url_raw( rest_url( 'factory/v1/ai/estimate' ) ),
 			'aiSitePlan'             => esc_url_raw( rest_url( 'factory/v1/ai/site-plan' ) ),
@@ -115,8 +117,9 @@ function factory_console_build_client_config(): array {
 			'aiGeneratePreflight'    => esc_url_raw( rest_url( 'factory/v1/ai/generate-preflight' ) ),
 			'aiGenerateConfirmation' => esc_url_raw( rest_url( 'factory/v1/ai/generate-confirmation' ) ),
 		],
-		'siteLinks'       => factory_console_site_links(),
-		'aiSettings'      => $settings,
+		'siteLinks'        => factory_console_site_links(),
+		'aiSettings'       => $settings,
+		'dependencyStatus' => factory_console_dependency_status_data(),
 	];
 }
 
@@ -139,6 +142,9 @@ function factory_console_site_links(): array {
 		'frontend_edit'      => esc_url_raw( home_url( '' === $home_slug ? '/' : '/' . ltrim( $home_slug, '/' ) . '/' ) ),
 		'dashboard'          => esc_url_raw( admin_url( 'admin.php?page=factory-control-panel' ) ),
 		'ai_settings'        => esc_url_raw( admin_url( 'admin.php?page=factory-ai-settings' ) ),
+		'plugins'            => esc_url_raw( admin_url( 'plugins.php' ) ),
+		'themes'             => esc_url_raw( admin_url( 'themes.php' ) ),
+		'wizard'             => esc_url_raw( admin_url( 'admin.php?page=jet-plugins-wizard' ) ),
 	];
 }
 

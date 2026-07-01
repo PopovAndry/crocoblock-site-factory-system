@@ -25,6 +25,7 @@
 	];
 	const defaultPrompt = 'Create a Kyiv real estate agency website with a homepage, property catalog, contact page, validation proof, deterministic style tokens, and guided safe editing.';
 	const aiSettingsSeed = config.aiSettings || {};
+	const dependencyStatusSeed = config.dependencyStatus || {};
 	const models = Array.isArray( aiSettingsSeed.available_models ) && aiSettingsSeed.available_models.length
 		? aiSettingsSeed.available_models
 		: defaultModels;
@@ -36,6 +37,7 @@
 		prompt: defaultPrompt,
 		siteType: 'real_estate',
 		operationType: 'planning',
+		activeTab: '',
 		selectedModel: aiSettingsSeed.selected_model || 'balanced',
 		settings: aiSettingsSeed,
 		estimate: null,
@@ -53,6 +55,7 @@
 			generatePreflight: null,
 			generateConfirmation: null,
 		},
+		dependencyStatus: dependencyStatusSeed,
 	};
 
 	if ( ! root || ! config.restNonce || ! config.endpoints ) {
@@ -69,6 +72,7 @@
 
 	function request( path, options ) {
 		options = options || {};
+
 		const headers = Object.assign(
 			{
 				'X-WP-Nonce': config.restNonce,
@@ -123,7 +127,7 @@
 			return 'ok';
 		}
 
-		if ( value === 'warning' || value === 'blocked' ) {
+		if ( value === 'warning' || value === 'blocked' || value === 'needs_attention' ) {
 			return 'warning';
 		}
 
@@ -152,6 +156,37 @@
 
 	function promptLength() {
 		return String( state.prompt || '' ).trim().length;
+	}
+
+	function dependencyNeedsAttention() {
+		return visibleDependencies().some( function ( item ) {
+			return item && item.status !== 'ok';
+		} );
+	}
+
+	function wizardLinkAvailable() {
+		const wizard = state.dependencyStatus?.setup_helper?.wizard || {};
+
+		return !! ( wizard && wizard.installed && wizard.active && config.siteLinks && config.siteLinks.wizard );
+	}
+
+	function availableTabs() {
+		return [
+			{ key: 'setup', label: 'Setup' },
+			{ key: 'create', label: 'Create' },
+			{ key: 'manage', label: 'Manage' },
+			{ key: 'edit', label: 'Edit' },
+			{ key: 'history', label: 'History' },
+			{ key: 'developer', label: 'Developer' },
+		];
+	}
+
+	function ensureActiveTab() {
+		if ( state.activeTab ) {
+			return;
+		}
+
+		state.activeTab = dependencyNeedsAttention() ? 'setup' : 'create';
 	}
 
 	function recommendModel() {
@@ -255,16 +290,6 @@
 		return true === data?.applies_changes || 'true' === data?.applies_changes;
 	}
 
-	function primaryResponse() {
-		return state.flow.generateConfirmation
-			|| state.flow.generatePreflight
-			|| state.flow.generateGate
-			|| state.flow.previewDiff
-			|| state.flow.blueprintCandidate
-			|| state.flow.sitePlan
-			|| null;
-	}
-
 	function stageResponse( key ) {
 		return state.flow[ key ] || null;
 	}
@@ -295,22 +320,27 @@
 		};
 	}
 
-	function stageEndpoint(key) {
+	function stageEndpoint( key ) {
 		if ( key === 'sitePlan' ) {
 			return config.endpoints.aiSitePlan;
 		}
+
 		if ( key === 'blueprintCandidate' ) {
 			return config.endpoints.aiBlueprintCandidate;
 		}
+
 		if ( key === 'previewDiff' ) {
 			return config.endpoints.aiPreviewDiff;
 		}
+
 		if ( key === 'generateGate' ) {
 			return config.endpoints.aiGenerateGate;
 		}
+
 		if ( key === 'generatePreflight' ) {
 			return config.endpoints.aiGeneratePreflight;
 		}
+
 		if ( key === 'generateConfirmation' ) {
 			return config.endpoints.aiGenerateConfirmation;
 		}
@@ -318,7 +348,7 @@
 		return '';
 	}
 
-	function stageBody(key, payload) {
+	function stageBody( key, payload ) {
 		if ( key === 'sitePlan' ) {
 			return {
 				prompt: payload.prompt,
@@ -403,6 +433,7 @@
 
 		state.error = '';
 		state.notice = '';
+		state.activeTab = 'create';
 		state.isPlanning = true;
 		state.currentStage = 'sitePlan';
 		resetFlow();
@@ -480,7 +511,7 @@
 
 	function renderPromptCard() {
 		return [
-			'<section class="factory-console-card factory-console-card-hero">',
+			'<section class="factory-console-card factory-console-card-hero factory-console-card-compact">',
 				'<div class="factory-console-card__header">',
 					'<div>',
 						'<div class="factory-console-kicker">Independent Factory Console</div>',
@@ -498,13 +529,261 @@
 				'</div>',
 				'<label class="factory-console-field factory-console-field-wide">',
 					'<span>Prompt</span>',
-					'<textarea rows="6" data-factory-console-prompt>' + escapeHtml( state.prompt ) + '</textarea>',
+					'<textarea rows="5" data-factory-console-prompt>' + escapeHtml( state.prompt ) + '</textarea>',
 				'</label>',
 				'<div class="factory-console-actions">',
 					'<button type="button" class="factory-console-button factory-console-button-primary" data-factory-console-plan' + ( state.isPlanning ? ' disabled' : '' ) + '>' + escapeHtml( state.isPlanning ? 'Planning...' : 'Plan' ) + '</button>',
 					'<button type="button" class="factory-console-button" data-factory-console-estimate' + ( state.estimating ? ' disabled' : '' ) + '>' + escapeHtml( state.estimating ? 'Estimating...' : 'Refresh estimate' ) + '</button>',
 					'<span class="factory-console-inline-note">No provider call. No mutation. Generate stays disabled in 11a.</span>',
 				'</div>',
+			'</section>',
+		].join( '' );
+	}
+
+	function dependencyTone( status ) {
+		if ( status === 'ok' ) {
+			return 'ok';
+		}
+
+		if ( status === 'missing' || status === 'inactive' || status === 'wrong_version' ) {
+			return 'warning';
+		}
+
+		return 'neutral';
+	}
+
+	function dependencyStatusLabel( item ) {
+		if ( ! item || ! item.status ) {
+			return 'Unknown';
+		}
+
+		if ( item.status === 'ok' ) {
+			return 'Ready';
+		}
+
+		if ( item.status === 'missing' ) {
+			return 'Missing';
+		}
+
+		if ( item.status === 'inactive' ) {
+			return 'Inactive';
+		}
+
+		if ( item.status === 'wrong_version' ) {
+			return 'Wrong version';
+		}
+
+		if ( item.status === 'optional_missing' ) {
+			return 'Optional missing';
+		}
+
+		return item.status;
+	}
+
+	function actionHintMeta( actionHint ) {
+		const links = config.siteLinks || {};
+
+		if ( actionHint === 'open_wizard' && wizardLinkAvailable() ) {
+			return {
+				label: 'Open Wizard',
+				href: links.wizard,
+			};
+		}
+
+		if ( actionHint === 'open_plugins' && links.plugins ) {
+			return {
+				label: 'Open Plugins',
+				href: links.plugins,
+			};
+		}
+
+		if ( actionHint === 'open_themes' && links.themes ) {
+			return {
+				label: 'Open Themes',
+				href: links.themes,
+			};
+		}
+
+		return null;
+	}
+
+	function dependencyCapabilityModel() {
+		return state.dependencyStatus?.capability_model || {};
+	}
+
+	function baseCapabilities() {
+		const siteTypeCapabilities = dependencyCapabilityModel().site_type_capabilities || {};
+		const capabilities = siteTypeCapabilities[ state.siteType ] || [];
+
+		return Array.isArray( capabilities ) ? capabilities.slice() : [];
+	}
+
+	function collectPlanInferenceText() {
+		const parts = [
+			state.prompt || '',
+			state.flow.sitePlan?.business_summary || '',
+			state.flow.sitePlan?.next_step || '',
+			state.flow.blueprintCandidate?.next_step || '',
+			state.flow.previewDiff?.preview?.summary || '',
+		];
+
+		return parts.join( ' ' ).toLowerCase();
+	}
+
+	function inferredCapabilities() {
+		const capabilities = new Set( baseCapabilities() );
+		const text = collectPlanInferenceText();
+		const hasPlan = !! ( state.flow.sitePlan || state.flow.blueprintCandidate || state.flow.previewDiff );
+
+		if ( ! hasPlan ) {
+			return Array.from( capabilities );
+		}
+
+		if ( /(contact form|contact-form|request viewing|request a viewing|book viewing|book a viewing|inquiry form|lead form|schedule viewing|schedule a viewing)/.test( text ) ) {
+			capabilities.add( 'contact_form' );
+		}
+
+		if ( /(ecommerce|e-commerce|payments|payment|cart|checkout|shop|store|woocommerce)/.test( text ) ) {
+			capabilities.add( 'ecommerce' );
+		}
+
+		if ( /(elementor|template builder|builder templates|elementor templates)/.test( text ) ) {
+			capabilities.add( 'elementor_templates' );
+		}
+
+		return Array.from( capabilities );
+	}
+
+	function visibleDependencies() {
+		const dependencies = Array.isArray( state.dependencyStatus?.dependencies ) ? state.dependencyStatus.dependencies : [];
+		const capabilities = inferredCapabilities();
+
+		return dependencies.filter( function ( item ) {
+			const dependencyCapabilities = Array.isArray( item?.capabilities ) ? item.capabilities : [];
+
+			if ( ! dependencyCapabilities.length ) {
+				return !! item?.required_for_real_estate;
+			}
+
+			return dependencyCapabilities.some( function ( capability ) {
+				return capabilities.includes( capability );
+			} );
+		} );
+	}
+
+	function dependencyScopeLabel() {
+		const hasPlan = !! ( state.flow.sitePlan || state.flow.blueprintCandidate || state.flow.previewDiff );
+
+		return hasPlan ? 'Estimated dependencies for this plan' : 'Base Real Estate dependencies';
+	}
+
+	function capabilityLabel( capability ) {
+		const labels = dependencyCapabilityModel().capabilities || {};
+
+		return labels[ capability ] || capability;
+	}
+
+	function activeCapabilityLabels() {
+		return inferredCapabilities().map( capabilityLabel );
+	}
+
+	function helperStatusSummary() {
+		const wizard = state.dependencyStatus?.setup_helper?.wizard || {};
+
+		if ( wizard.active ) {
+			return 'Wizard available';
+		}
+
+		if ( wizard.installed ) {
+			return 'Wizard inactive';
+		}
+
+		return 'Wizard optional';
+	}
+
+	function renderTabRail() {
+		return [
+			'<nav class="factory-console-tab-rail" aria-label="Factory Console sections">',
+				availableTabs().map( function ( tab ) {
+					const active = tab.key === state.activeTab;
+					return '<button type="button" class="factory-console-tab' + ( active ? ' factory-console-tab-active' : '' ) + '" data-factory-console-tab="' + escapeHtml( tab.key ) + '">' + escapeHtml( tab.label ) + '</button>';
+				} ).join( '' ),
+			'</nav>',
+		].join( '' );
+	}
+
+	function renderDependencySection() {
+		const status = state.dependencyStatus || {};
+		const dependencies = visibleDependencies();
+		const license = status.license || {};
+		const setupHelper = status.setup_helper || {};
+		const wizard = setupHelper.wizard || {};
+		const overallReady = ! dependencyNeedsAttention();
+		const overallLabel = overallReady ? 'Ready' : 'Needs attention';
+		const overallTone = overallReady ? 'ok' : 'warning';
+		const licenseTone = license.state === 'license_configured_locally' ? 'ok' : 'neutral';
+		const licenseAction = actionHintMeta( license.action_hint );
+		const capabilitySummary = activeCapabilityLabels();
+
+		return [
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
+				'<div class="factory-console-card__header">',
+					'<div>',
+						'<div class="factory-console-kicker">Setup</div>',
+						'<h2>Dependencies</h2>',
+						'<p>Show only the dependencies required for the current site type and the current read-only plan. Installation stays outside this alpha slice.</p>',
+					'</div>',
+					badge( overallLabel, overallTone ),
+				'</div>',
+				'<div class="factory-console-summary-strip">',
+					'<div class="factory-console-summary-pill"><strong>Scope</strong><span>' + escapeHtml( dependencyScopeLabel() ) + '</span></div>',
+					'<div class="factory-console-summary-pill"><strong>Visible dependencies</strong><span>' + escapeHtml( String( dependencies.length ) ) + '</span></div>',
+					'<div class="factory-console-summary-pill"><strong>Wizard helper</strong><span>' + escapeHtml( helperStatusSummary() ) + '</span></div>',
+				'</div>',
+				'<div class="factory-console-muted-callout">Capabilities in view: ' + escapeHtml( capabilitySummary.join( ', ' ) ) + '</div>',
+				'<div class="factory-console-dependency-table" role="table" aria-label="Dependency status">',
+					'<div class="factory-console-dependency-table__head" role="row">',
+						'<span>Dependency</span>',
+						'<span>Installed</span>',
+						'<span>Active</span>',
+						'<span>Version</span>',
+						'<span>Status</span>',
+						'<span>Next step</span>',
+					'</div>',
+					dependencies.map( function ( item ) {
+						const action = actionHintMeta( item.action_hint );
+						const nextStep = action
+							? '<a class="factory-console-link" href="' + escapeHtml( action.href ) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml( action.label ) + '</a>'
+							: '<span class="factory-console-note">None</span>';
+
+						return [
+							'<div class="factory-console-dependency-table__row" role="row">',
+								'<div><strong>' + escapeHtml( item.name || item.slug || 'Dependency' ) + '</strong><span>' + escapeHtml( item.type === 'theme' ? 'Theme' : 'Plugin' ) + ' - ' + escapeHtml( item.capabilities.map( capabilityLabel ).join( ', ' ) || 'Required' ) + '</span></div>',
+								'<span>' + escapeHtml( item.installed ? 'Yes' : 'No' ) + '</span>',
+								'<span>' + escapeHtml( item.active ? 'Yes' : 'No' ) + '</span>',
+								'<span>' + escapeHtml( item.version || '-' ) + '</span>',
+								'<span>' + badge( dependencyStatusLabel( item ), dependencyTone( item.status ) ) + '</span>',
+								'<span>' + nextStep + '</span>',
+							'</div>',
+						].join( '' );
+					} ).join( '' ),
+				'</div>',
+				'<section class="factory-console-subcard factory-console-subcard-helper">',
+					'<div class="factory-console-subcard__header"><h3>Official Crocoblock setup helper</h3>' + badge( wizard.active ? 'available' : ( wizard.installed ? 'installed' : 'optional' ), 'neutral' ) + '</div>',
+					'<p class="factory-console-note">' + escapeHtml( license.message || 'Wizard is optional here and only used for official Crocoblock onboarding.' ) + '</p>',
+					'<div class="factory-console-note-list">',
+						'<p>Wizard is not a generated-site dependency.</p>',
+						'<p>No install, download, activation, or license validation happens from this Console slice.</p>',
+					'</div>',
+					'<div class="factory-console-actions factory-console-actions-compact">',
+						'<a class="factory-console-button" href="' + escapeHtml( ( config.siteLinks || {} ).plugins || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Plugins</a>',
+						'<a class="factory-console-button" href="' + escapeHtml( ( config.siteLinks || {} ).themes || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Themes</a>',
+						( wizardLinkAvailable()
+							? '<a class="factory-console-button" href="' + escapeHtml( config.siteLinks.wizard ) + '" target="_blank" rel="noopener noreferrer">Open Crocoblock Wizard</a>'
+							: '<span class="factory-console-note">Wizard is not installed. Use Plugins, Themes, or the official ZIP/manual path if needed.</span>' ),
+					'</div>',
+					'<div class="factory-console-helper-license"><strong>Local license status</strong><span>' + escapeHtml( license.state || 'wizard_missing' ) + ( license.has_license ? ' · detected locally' : ' · not detected' ) + '</span></div>',
+				'</section>',
 			'</section>',
 		].join( '' );
 	}
@@ -516,7 +795,7 @@
 		const keySource = settings.key_source || 'none';
 
 		return [
-			'<section class="factory-console-card">',
+			'<section class="factory-console-card factory-console-card-compact">',
 				'<div class="factory-console-card__header"><h2>AI model control</h2>' + badge( settings.provider || 'openai', 'neutral' ) + '</div>',
 				'<dl class="factory-console-definition-list">',
 					'<dt>Current provider</dt><dd>' + escapeHtml( settings.provider || 'openai' ) + '</dd>',
@@ -542,7 +821,7 @@
 		const recommendation = state.recommendation || {};
 
 		return [
-			'<section class="factory-console-card">',
+			'<section class="factory-console-card factory-console-card-compact">',
 				'<div class="factory-console-card__header"><h2>Recommended model</h2>' + badge( recommendation.risk_level || 'neutral', statusTone( recommendation.risk_level === 'high' ? 'warning' : recommendation.risk_level === 'low' ? 'ok' : 'neutral' ) ) + '</div>',
 				'<div class="factory-console-recommendation-value">' + escapeHtml( modelLabel( recommendation.recommended_model || 'balanced' ) ) + '</div>',
 				'<p>' + escapeHtml( recommendation.reason || 'Balanced is recommended for multi-stage planning and preview review.' ) + '</p>',
@@ -560,7 +839,7 @@
 		const total = estimate ? estimate.estimated_total_tokens : null;
 
 		return [
-			'<section class="factory-console-card">',
+			'<section class="factory-console-card factory-console-card-compact">',
 				'<div class="factory-console-card__header"><h2>Token and cost estimate</h2>' + badge( state.estimating ? 'refreshing' : 'local', state.estimating ? 'warning' : 'ok' ) + '</div>',
 				estimate
 					? [
@@ -573,7 +852,7 @@
 						'</dl>',
 					].join( '' )
 					: '<p class="factory-console-empty">Type a prompt to see a local token estimate. No provider call is made.</p>',
-				'<div class="factory-console-placeholder-list">',
+				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
 					'<div><strong>Actual usage</strong><span>Available after provider-backed runs in a later phase.</span></div>',
 					'<div><strong>Usage history</strong><span>Per-run history will appear here once usage recording exists.</span></div>',
 				'</div>',
@@ -583,7 +862,7 @@
 
 	function renderStageRail() {
 		return [
-			'<section class="factory-console-card factory-console-card-wide">',
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
 				'<div class="factory-console-card__header"><h2>Read-only planning chain</h2>' + badge( latestStageKey(), 'neutral' ) + '</div>',
 				'<div class="factory-console-stage-rail">',
 					readOnlyStages.map( function ( stage ) {
@@ -611,18 +890,18 @@
 		].join( '' );
 	}
 
-	function renderStageSummaryCard(key, title, renderer) {
+	function renderStageSummaryCard( key, title, renderer ) {
 		const response = stageResponse( key );
 
 		return [
-			'<section class="factory-console-card">',
+			'<section class="factory-console-card factory-console-card-compact">',
 				'<div class="factory-console-card__header"><h2>' + escapeHtml( title ) + '</h2>' + badge( response ? ( response.status || 'ok' ) : 'pending', response ? statusTone( response.status ) : 'neutral' ) + '</div>',
 				response ? renderer( response ) : '<p class="factory-console-empty">No data yet.</p>',
 			'</section>',
 		].join( '' );
 	}
 
-	function renderSitePlan(response) {
+	function renderSitePlan( response ) {
 		return [
 			'<dl class="factory-console-definition-list">',
 				'<dt>Vertical</dt><dd>' + escapeHtml( response.vertical || '-' ) + '</dd>',
@@ -633,7 +912,7 @@
 		].join( '' );
 	}
 
-	function renderBlueprintCandidate(response) {
+	function renderBlueprintCandidate( response ) {
 		const siteName = response.candidate && response.candidate.site ? response.candidate.site.name : '';
 
 		return [
@@ -646,7 +925,7 @@
 		].join( '' );
 	}
 
-	function renderPreviewDiff(response) {
+	function renderPreviewDiff( response ) {
 		return [
 			'<dl class="factory-console-definition-list">',
 				'<dt>Summary</dt><dd>' + escapeHtml( response.preview && response.preview.summary ? response.preview.summary : '-' ) + '</dd>',
@@ -657,7 +936,7 @@
 		].join( '' );
 	}
 
-	function renderGate(response) {
+	function renderGate( response ) {
 		return [
 			'<dl class="factory-console-definition-list">',
 				'<dt>Can generate later</dt><dd>' + escapeHtml( response.can_generate ? 'Yes' : 'No' ) + '</dd>',
@@ -668,7 +947,7 @@
 		].join( '' );
 	}
 
-	function renderPreflight(response) {
+	function renderPreflight( response ) {
 		const snapshot = response.current_runtime_snapshot || {};
 		const dependencyStatus = response.dependency_status || {};
 		const ownershipStatus = response.ownership_status || {};
@@ -683,7 +962,7 @@
 		].join( '' );
 	}
 
-	function renderConfirmation(response) {
+	function renderConfirmation( response ) {
 		return [
 			'<dl class="factory-console-definition-list">',
 				'<dt>Confirmation ready</dt><dd>' + escapeHtml( response.confirmation_ready ? 'Yes' : 'No' ) + '</dd>',
@@ -696,27 +975,10 @@
 
 	function renderGenerateCard() {
 		return [
-			'<section class="factory-console-card">',
+			'<section class="factory-console-card factory-console-card-compact">',
 				'<div class="factory-console-card__header"><h2>Controlled Generate</h2>' + badge( 'disabled', 'warning' ) + '</div>',
 				'<p>Controlled Generate stays disabled in Phase 11a. This shell is read-only and stops at Confirmation.</p>',
 				'<button type="button" class="factory-console-button factory-console-button-disabled" disabled>Generate</button>',
-			'</section>',
-		].join( '' );
-	}
-
-	function renderLinksCard() {
-		const links = config.siteLinks || {};
-
-		return [
-			'<section class="factory-console-card">',
-				'<div class="factory-console-card__header"><h2>Open site and edit</h2>' + badge( 'handoff', 'ok' ) + '</div>',
-				'<div class="factory-console-link-grid">',
-					'<a class="factory-console-link-card" href="' + escapeHtml( links.home || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Home</strong><span>Open the generated homepage.</span></a>',
-					'<a class="factory-console-link-card" href="' + escapeHtml( links.properties || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Properties</strong><span>Open the catalog page.</span></a>',
-					'<a class="factory-console-link-card" href="' + escapeHtml( links.contact || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Contact</strong><span>Open the contact page.</span></a>',
-					'<a class="factory-console-link-card" href="' + escapeHtml( links.frontend_edit || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Frontend Edit</strong><span>Open Home as admin to use Frontend Safe Edit.</span></a>',
-					'<a class="factory-console-link-card" href="' + escapeHtml( links.manage_properties || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Manage Properties</strong><span>Open the Property CPT list in WordPress.</span></a>',
-				'</div>',
 			'</section>',
 		].join( '' );
 	}
@@ -725,13 +987,64 @@
 		const links = config.siteLinks || {};
 
 		return [
-			'<section class="factory-console-card">',
-				'<div class="factory-console-card__header"><h2>Manage and status</h2>' + badge( 'placeholder', 'neutral' ) + '</div>',
-				'<div class="factory-console-placeholder-list">',
-					'<div><strong>Install / apply proof</strong><span>Moves here after generate is wired into the independent console.</span></div>',
-					'<div><strong>Rollback</strong><span>Remains a later phase and is not exposed from this shell yet.</span></div>',
-					'<div><strong>Usage history</strong><span>Will attach to provider-backed runs later.</span></div>',
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
+				'<div class="factory-console-card__header"><h2>Manage site</h2>' + badge( 'links', 'ok' ) + '</div>',
+				'<div class="factory-console-link-grid factory-console-link-grid-manage">',
+					'<a class="factory-console-link-card" href="' + escapeHtml( links.home || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Home</strong><span>Open the generated homepage.</span></a>',
+					'<a class="factory-console-link-card" href="' + escapeHtml( links.properties || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Properties</strong><span>Open the catalog page.</span></a>',
+					'<a class="factory-console-link-card" href="' + escapeHtml( links.contact || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Contact</strong><span>Open the contact page.</span></a>',
+					'<a class="factory-console-link-card" href="' + escapeHtml( links.manage_properties || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Manage Properties</strong><span>Open the Property CPT list in WordPress.</span></a>',
 				'</div>',
+				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
+					'<div><strong>Latest proof</strong><span>Latest install and validation proof will surface here in a later slice.</span></div>',
+					'<div><strong>Site status</strong><span>Health and dependency rollups will move here as the console grows.</span></div>',
+				'</div>',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderEditCard() {
+		const links = config.siteLinks || {};
+
+		return [
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
+				'<div class="factory-console-card__header"><h2>Frontend safe edit</h2>' + badge( 'handoff', 'ok' ) + '</div>',
+				'<p class="factory-console-note">Open the generated frontend as an admin to use the current safe editing controls.</p>',
+				'<div class="factory-console-actions factory-console-actions-compact">',
+					'<a class="factory-console-button" href="' + escapeHtml( links.frontend_edit || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Frontend Edit</a>',
+				'</div>',
+				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
+					'<div><strong>Hero title</strong><span>Save-enabled</span></div>',
+					'<div><strong>Hero subtitle</strong><span>Save-enabled</span></div>',
+					'<div><strong>Hero CTA text</strong><span>Save-enabled</span></div>',
+					'<div><strong>Hero CTA destination</strong><span>Save-enabled</span></div>',
+				'</div>',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderHistoryCard() {
+		return [
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
+				'<div class="factory-console-card__header"><h2>Run history and rollback</h2>' + badge( 'coming later', 'neutral' ) + '</div>',
+				'<p class="factory-console-note">Rollback is not enabled in this alpha slice.</p>',
+				'<div class="factory-console-actions factory-console-actions-compact">',
+					'<button type="button" class="factory-console-button factory-console-button-disabled" disabled>Rollback last step</button>',
+				'</div>',
+				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
+					'<div><strong>Run history</strong><span>Timeline and rollback proof will live here later.</span></div>',
+				'</div>',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderDeveloperCard() {
+		const links = config.siteLinks || {};
+
+		return [
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
+				'<div class="factory-console-card__header"><h2>Developer tools</h2>' + badge( 'fallback', 'neutral' ) + '</div>',
+				'<p class="factory-console-note">Diagnostics stay outside the main alpha flow, but they remain available as a fallback.</p>',
 				'<div class="factory-console-actions factory-console-actions-compact">',
 					'<a class="factory-console-button" href="' + escapeHtml( links.dashboard || '#' ) + '" target="_blank" rel="noopener noreferrer">Open beta diagnostics</a>',
 					'<a class="factory-console-button" href="' + escapeHtml( links.ai_settings || '#' ) + '" target="_blank" rel="noopener noreferrer">Open AI Settings</a>',
@@ -742,13 +1055,14 @@
 
 	function renderDeveloperProof() {
 		const data = {
+			dependencyStatus: state.dependencyStatus,
 			recommendation: state.recommendation,
 			estimate: state.estimate,
 			flow: state.flow,
 		};
 
 		return [
-			'<section class="factory-console-card factory-console-card-wide">',
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
 				'<details class="factory-console-details">',
 					'<summary>Developer details</summary>',
 					'<pre>' + escapeHtml( JSON.stringify( data, null, 2 ) ) + '</pre>',
@@ -775,6 +1089,53 @@
 		} );
 
 		return messages.join( '' );
+	}
+
+	function renderCreateTab() {
+		return [
+			'<div class="factory-console-grid factory-console-grid-top">',
+				renderModelCard(),
+				renderRecommendationCard(),
+				renderEstimateCard(),
+			'</div>',
+			renderStageRail(),
+			'<div class="factory-console-grid">',
+				renderStageSummaryCard( 'sitePlan', 'Site Plan', renderSitePlan ),
+				renderStageSummaryCard( 'blueprintCandidate', 'Blueprint Candidate', renderBlueprintCandidate ),
+				renderStageSummaryCard( 'previewDiff', 'Preview/Diff', renderPreviewDiff ),
+				renderStageSummaryCard( 'generateGate', 'Generate Gate', renderGate ),
+				renderStageSummaryCard( 'generatePreflight', 'Preflight', renderPreflight ),
+				renderStageSummaryCard( 'generateConfirmation', 'Confirmation', renderConfirmation ),
+				renderGenerateCard(),
+			'</div>',
+		].join( '' );
+	}
+
+	function renderActiveTab() {
+		if ( state.activeTab === 'setup' ) {
+			return renderDependencySection();
+		}
+
+		if ( state.activeTab === 'create' ) {
+			return renderCreateTab();
+		}
+
+		if ( state.activeTab === 'manage' ) {
+			return renderManageCard();
+		}
+
+		if ( state.activeTab === 'edit' ) {
+			return renderEditCard();
+		}
+
+		if ( state.activeTab === 'history' ) {
+			return renderHistoryCard();
+		}
+
+		return [
+			renderDeveloperCard(),
+			renderDeveloperProof(),
+		].join( '' );
 	}
 
 	function captureFocusState() {
@@ -820,36 +1181,26 @@
 
 		element.focus();
 
-		if ( snapshot.selector === '[data-factory-console-prompt]' && typeof snapshot.selectionStart === 'number' && typeof snapshot.selectionEnd === 'number' && typeof element.setSelectionRange === 'function' ) {
+		if (
+			snapshot.selector === '[data-factory-console-prompt]'
+			&& typeof snapshot.selectionStart === 'number'
+			&& typeof snapshot.selectionEnd === 'number'
+			&& typeof element.setSelectionRange === 'function'
+		) {
 			element.setSelectionRange( snapshot.selectionStart, snapshot.selectionEnd );
 		}
 	}
 
 	function render() {
 		const focusState = captureFocusState();
+		ensureActiveTab();
 
 		root.innerHTML = [
 			'<div class="factory-console-shell">',
 				renderPromptCard(),
 				renderBanner(),
-				'<div class="factory-console-grid factory-console-grid-top">',
-					renderModelCard(),
-					renderRecommendationCard(),
-					renderEstimateCard(),
-				'</div>',
-				renderStageRail(),
-				'<div class="factory-console-grid">',
-					renderStageSummaryCard( 'sitePlan', 'Site Plan', renderSitePlan ),
-					renderStageSummaryCard( 'blueprintCandidate', 'Blueprint Candidate', renderBlueprintCandidate ),
-					renderStageSummaryCard( 'previewDiff', 'Preview/Diff', renderPreviewDiff ),
-					renderStageSummaryCard( 'generateGate', 'Generate Gate', renderGate ),
-					renderStageSummaryCard( 'generatePreflight', 'Preflight', renderPreflight ),
-					renderStageSummaryCard( 'generateConfirmation', 'Confirmation', renderConfirmation ),
-					renderGenerateCard(),
-					renderManageCard(),
-				'</div>',
-				renderLinksCard(),
-				renderDeveloperProof(),
+				renderTabRail(),
+				renderActiveTab(),
 			'</div>',
 		].join( '' );
 
@@ -863,6 +1214,7 @@
 		const operationField = root.querySelector( '[data-factory-console-operation]' );
 		const planButton = root.querySelector( '[data-factory-console-plan]' );
 		const estimateButton = root.querySelector( '[data-factory-console-estimate]' );
+		const tabButtons = root.querySelectorAll( '[data-factory-console-tab]' );
 
 		if ( promptField ) {
 			promptField.addEventListener( 'input', function () {
@@ -889,6 +1241,13 @@
 				render();
 			} );
 		}
+
+		tabButtons.forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				state.activeTab = button.getAttribute( 'data-factory-console-tab' ) || 'setup';
+				render();
+			} );
+		} );
 
 		if ( planButton ) {
 			planButton.addEventListener( 'click', runPlanChain );
