@@ -24,6 +24,7 @@
 		{ value: 'review_debug', label: 'Review / Debug' },
 	];
 	const defaultPrompt = 'Create a Kyiv real estate agency website with a homepage, property catalog, contact page, validation proof, deterministic style tokens, and guided safe editing.';
+	const themeStorageKey = 'factoryConsoleTheme';
 	const aiSettingsSeed = config.aiSettings || {};
 	const dependencyStatusSeed = config.dependencyStatus || {};
 	const models = Array.isArray( aiSettingsSeed.available_models ) && aiSettingsSeed.available_models.length
@@ -38,6 +39,7 @@
 		siteType: 'real_estate',
 		operationType: 'planning',
 		activeTab: '',
+		theme: 'light',
 		selectedModel: aiSettingsSeed.selected_model || 'balanced',
 		settings: aiSettingsSeed,
 		estimate: null,
@@ -68,6 +70,48 @@
 		}
 
 		return String( config.restBase || '' ).replace( /\/$/, '' ) + path;
+	}
+
+	function readStoredTheme() {
+		try {
+			return window.localStorage ? window.localStorage.getItem( themeStorageKey ) : '';
+		} catch ( error ) {
+			return '';
+		}
+	}
+
+	function preferredTheme() {
+		const stored = readStoredTheme();
+
+		if ( stored === 'light' || stored === 'dark' ) {
+			return stored;
+		}
+
+		const prefersDark = window.matchMedia && window.matchMedia( '(prefers-color-scheme: dark)' ).matches;
+
+		return prefersDark ? 'dark' : 'light';
+	}
+
+	function applyTheme() {
+		const theme = state.theme === 'dark' ? 'dark' : 'light';
+		document.body.setAttribute( 'data-factory-console-theme', theme );
+
+		if ( root ) {
+			root.setAttribute( 'data-factory-console-theme', theme );
+		}
+	}
+
+	function setTheme( theme ) {
+		state.theme = theme === 'dark' ? 'dark' : 'light';
+		applyTheme();
+
+		try {
+			if ( window.localStorage ) {
+				window.localStorage.setItem( themeStorageKey, state.theme );
+			}
+		} catch ( error ) {
+			// Ignore storage failures and keep the current in-memory theme.
+		}
 	}
 
 	function request( path, options ) {
@@ -174,15 +218,17 @@
 		return [
 			{ key: 'setup', label: 'Setup' },
 			{ key: 'create', label: 'Create' },
-			{ key: 'manage', label: 'Manage' },
-			{ key: 'edit', label: 'Edit' },
-			{ key: 'history', label: 'History' },
-			{ key: 'developer', label: 'Developer' },
+			{ key: 'review', label: 'Review' },
+			{ key: 'manage', label: 'Manage/Edit' },
 		];
 	}
 
 	function ensureActiveTab() {
-		if ( state.activeTab ) {
+		const validTabs = availableTabs().map( function ( tab ) {
+			return tab.key;
+		} );
+
+		if ( state.activeTab && validTabs.indexOf( state.activeTab ) !== -1 ) {
 			return;
 		}
 
@@ -433,7 +479,7 @@
 
 		state.error = '';
 		state.notice = '';
-		state.activeTab = 'create';
+		state.activeTab = 'review';
 		state.isPlanning = true;
 		state.currentStage = 'sitePlan';
 		resetFlow();
@@ -510,6 +556,8 @@
 	}
 
 	function renderPromptCard() {
+		const nextAction = nextRecommendedAction();
+
 		return [
 			'<section class="factory-console-card factory-console-card-hero factory-console-card-compact">',
 				'<div class="factory-console-card__header">',
@@ -518,8 +566,13 @@
 						'<h1>Prompt-first control plane</h1>',
 						'<p>Plan the site, inspect the chain, and hand off to generated frontend editing without touching the old dashboard.</p>',
 					'</div>',
-					badge( 'Alpha read-only', 'ok' ),
+					'<div class="factory-console-header-actions">',
+						badge( 'Alpha read-only', 'ok' ),
+						renderThemeSwitcher(),
+					'</div>',
 				'</div>',
+				renderGuidedStepper(),
+				renderNextActionCard( nextAction ),
 				'<div class="factory-console-field-grid">',
 					'<label class="factory-console-field">',
 						'<span>Site type</span>',
@@ -532,9 +585,163 @@
 					'<textarea rows="5" data-factory-console-prompt>' + escapeHtml( state.prompt ) + '</textarea>',
 				'</label>',
 				'<div class="factory-console-actions">',
-					'<button type="button" class="factory-console-button factory-console-button-primary" data-factory-console-plan' + ( state.isPlanning ? ' disabled' : '' ) + '>' + escapeHtml( state.isPlanning ? 'Planning...' : 'Plan' ) + '</button>',
+					'<button type="button" class="factory-console-button factory-console-button-primary" data-factory-console-plan' + ( state.isPlanning ? ' disabled' : '' ) + '>' + escapeHtml( state.isPlanning ? 'Planning...' : 'Plan Site' ) + '</button>',
 					'<button type="button" class="factory-console-button" data-factory-console-estimate' + ( state.estimating ? ' disabled' : '' ) + '>' + escapeHtml( state.estimating ? 'Estimating...' : 'Refresh estimate' ) + '</button>',
-					'<span class="factory-console-inline-note">No provider call. No mutation. Generate stays disabled in 11a.</span>',
+					'<span class="factory-console-inline-note">No provider call. No mutation. Generate, rollback, and install remain disabled in this alpha slice.</span>',
+				'</div>',
+			'</section>',
+		].join( '' );
+	}
+
+	function renderThemeSwitcher() {
+		return [
+			'<div class="factory-console-theme-switcher" role="group" aria-label="Console theme">',
+				'<button type="button" class="factory-console-theme-option' + ( state.theme === 'light' ? ' factory-console-theme-option-active' : '' ) + '" data-factory-console-theme="light" aria-pressed="' + escapeHtml( state.theme === 'light' ? 'true' : 'false' ) + '">Light</button>',
+				'<button type="button" class="factory-console-theme-option' + ( state.theme === 'dark' ? ' factory-console-theme-option-active' : '' ) + '" data-factory-console-theme="dark" aria-pressed="' + escapeHtml( state.theme === 'dark' ? 'true' : 'false' ) + '">Dark</button>',
+			'</div>',
+		].join( '' );
+	}
+
+	function guidedSteps() {
+		const hasPrompt = promptLength() > 0;
+		const hasPlan = !! stageResponse( 'sitePlan' );
+		const hasReview = !! stageResponse( 'generateConfirmation' );
+		const reviewBlocked = !! state.error && ( hasPlan || state.isPlanning );
+
+		return [
+			{
+				label: 'Setup',
+				tab: 'setup',
+				status: dependencyNeedsAttention() ? 'blocked' : 'ready',
+				active: state.activeTab === 'setup',
+			},
+			{
+				label: 'Create',
+				tab: 'create',
+				status: state.isPlanning ? 'running' : ( hasPrompt ? 'ready' : 'pending' ),
+				active: state.activeTab === 'create',
+			},
+			{
+				label: 'Review',
+				tab: 'review',
+				status: reviewBlocked ? 'blocked' : ( hasReview ? 'ready' : ( state.isPlanning || hasPlan ? 'running' : 'pending' ) ),
+				active: state.activeTab === 'review',
+			},
+			{
+				label: 'Manage/Edit',
+				tab: 'manage',
+				status: hasReview ? 'ready' : 'pending',
+				active: state.activeTab === 'manage',
+			},
+		];
+	}
+
+	function renderGuidedStepper() {
+		return [
+			'<nav class="factory-console-stepper" aria-label="Guided creation flow">',
+				guidedSteps().map( function ( step, index ) {
+					return [
+						'<button type="button" class="factory-console-step factory-console-step-' + escapeHtml( step.status ) + ( step.active ? ' factory-console-step-active' : '' ) + '" data-factory-console-tab="' + escapeHtml( step.tab ) + '">',
+							'<span class="factory-console-step-index">' + escapeHtml( String( index + 1 ) ) + '</span>',
+							'<span class="factory-console-step-copy"><strong>' + escapeHtml( step.label ) + '</strong><em>' + escapeHtml( step.status ) + '</em></span>',
+						'</button>',
+					].join( '' );
+				} ).join( '' ),
+			'</nav>',
+		].join( '' );
+	}
+
+	function nextRecommendedAction() {
+		const hasPrompt = promptLength() > 0;
+		const hasPlan = !! stageResponse( 'sitePlan' );
+		const hasReview = !! stageResponse( 'generateConfirmation' );
+
+		if ( dependencyNeedsAttention() ) {
+			return {
+				title: 'Review setup dependencies',
+				description: 'Check the dependency list first so the console starts from a sane baseline.',
+				ctaLabel: state.activeTab === 'setup' ? '' : 'Review Setup',
+				action: state.activeTab === 'setup' ? 'none' : 'tab',
+				target: 'setup',
+				tone: 'warning',
+				passiveHint: 'Review the dependency table below.',
+				disabledReason: 'Generate stays disabled until later phases, and setup still needs attention.',
+			};
+		}
+
+		if ( ! hasPrompt ) {
+			return {
+				title: 'Describe your site and create a plan',
+				description: 'Start with a clear prompt in the Create step. The console stays read-only and stops at confirmation.',
+				ctaLabel: state.activeTab === 'create' ? '' : 'Go to Create',
+				action: state.activeTab === 'create' ? 'none' : 'tab',
+				target: 'create',
+				tone: 'ok',
+				passiveHint: 'Start with the prompt field below.',
+				disabledReason: 'Generate is disabled in this alpha slice.',
+			};
+		}
+
+		if ( ! hasPlan ) {
+			return {
+				title: 'Run the read-only plan',
+				description: state.activeTab === 'create'
+					? 'Use the primary Plan Site button above. The console will switch into Review while the chain runs.'
+					: 'Go to Create, confirm the prompt, then use Plan Site to run the read-only chain.',
+				ctaLabel: state.activeTab === 'create' ? '' : 'Go to Create',
+				action: state.activeTab === 'create' ? 'none' : 'tab',
+				target: 'create',
+				tone: 'ok',
+				passiveHint: 'Use the Plan Site button above.',
+				disabledReason: 'Generate is still disabled here even after planning.',
+			};
+		}
+
+		if ( ! hasReview ) {
+			return {
+				title: 'Finish review through confirmation',
+				description: state.activeTab === 'review'
+					? 'Review the read-only chain below. Gate, Preflight, and Confirmation must complete before handoff.'
+					: 'Open Review to inspect Gate, Preflight, and Confirmation before handoff.',
+				ctaLabel: state.activeTab === 'review' ? '' : 'Go to Review',
+				action: 'tab',
+				target: 'review',
+				tone: 'ok',
+				passiveHint: 'Keep reviewing the stage summaries below.',
+				disabledReason: 'Generate remains disabled in this alpha slice.',
+			};
+		}
+
+		return {
+			title: 'Review the plan and hand off to site management',
+			description: state.activeTab === 'manage'
+				? 'Open the generated site, move into frontend edit, or check the low-emphasis history placeholder below.'
+				: 'Move into Manage/Edit to open the site and hand off to frontend editing.',
+			ctaLabel: state.activeTab === 'manage' ? '' : 'Go to Manage/Edit',
+			action: 'tab',
+			target: 'manage',
+			tone: 'ok',
+			passiveHint: 'Use the site and edit links below.',
+			disabledReason: 'Generate is intentionally disabled in this alpha slice.',
+		};
+	}
+
+	function renderNextActionCard( action ) {
+		const hasAction = action && action.action && action.action !== 'none' && action.ctaLabel;
+		const actionButton = hasAction
+			? '<button type="button" class="factory-console-button' + ( action.action === 'plan' ? ' factory-console-button-primary' : '' ) + '" data-factory-console-next-action="' + escapeHtml( action.action || 'tab' ) + '" data-factory-console-next-target="' + escapeHtml( action.target || 'create' ) + '"' + ( action.disabled ? ' disabled' : '' ) + '>' + escapeHtml( action.ctaLabel || 'Continue' ) + '</button>'
+			: '<span class="factory-console-inline-note">' + escapeHtml( action.passiveHint || 'Continue in the main flow below.' ) + '</span>';
+
+		return [
+			'<section class="factory-console-next-action factory-console-next-action-' + escapeHtml( action.tone || 'ok' ) + '">',
+				'<div class="factory-console-next-action__copy">',
+					'<span class="factory-console-kicker">Next recommended action</span>',
+					'<strong>' + escapeHtml( action.title || 'Continue' ) + '</strong>',
+					'<p>' + escapeHtml( action.description || '' ) + '</p>',
+				'</div>',
+				'<div class="factory-console-next-action__actions">',
+					actionButton,
+					'<span class="factory-console-inline-note">' + escapeHtml( action.disabledReason || 'Generate is disabled in this alpha slice.' ) + '</span>',
 				'</div>',
 			'</section>',
 		].join( '' );
@@ -701,17 +908,6 @@
 		return 'Wizard optional';
 	}
 
-	function renderTabRail() {
-		return [
-			'<nav class="factory-console-tab-rail" aria-label="Factory Console sections">',
-				availableTabs().map( function ( tab ) {
-					const active = tab.key === state.activeTab;
-					return '<button type="button" class="factory-console-tab' + ( active ? ' factory-console-tab-active' : '' ) + '" data-factory-console-tab="' + escapeHtml( tab.key ) + '">' + escapeHtml( tab.label ) + '</button>';
-				} ).join( '' ),
-			'</nav>',
-		].join( '' );
-	}
-
 	function renderDependencySection() {
 		const status = state.dependencyStatus || {};
 		const dependencies = visibleDependencies();
@@ -768,22 +964,24 @@
 						].join( '' );
 					} ).join( '' ),
 				'</div>',
-				'<section class="factory-console-subcard factory-console-subcard-helper">',
-					'<div class="factory-console-subcard__header"><h3>Official Crocoblock setup helper</h3>' + badge( wizard.active ? 'available' : ( wizard.installed ? 'installed' : 'optional' ), 'neutral' ) + '</div>',
-					'<p class="factory-console-note">' + escapeHtml( license.message || 'Wizard is optional here and only used for official Crocoblock onboarding.' ) + '</p>',
-					'<div class="factory-console-note-list">',
-						'<p>Wizard is not a generated-site dependency.</p>',
-						'<p>No install, download, activation, or license validation happens from this Console slice.</p>',
+				'<div class="factory-console-helper-license"><strong>Local license status</strong><span>' + escapeHtml( license.state || 'wizard_missing' ) + ( license.has_license ? ' - detected locally' : ' - not detected' ) + '</span></div>',
+				'<details class="factory-console-details factory-console-secondary-details">',
+					'<summary>Need help with setup?</summary>',
+					'<div class="factory-console-secondary-stack">',
+						'<p class="factory-console-note">' + escapeHtml( license.message || 'Wizard is optional here and only used for official Crocoblock onboarding.' ) + '</p>',
+						'<div class="factory-console-note-list">',
+							'<p>Wizard is not a generated-site dependency.</p>',
+							'<p>Installation, activation, downloads, and license validation stay outside this Console slice.</p>',
+						'</div>',
+						'<div class="factory-console-actions factory-console-actions-compact">',
+							'<a class="factory-console-button" href="' + escapeHtml( ( config.siteLinks || {} ).plugins || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Plugins</a>',
+							'<a class="factory-console-button" href="' + escapeHtml( ( config.siteLinks || {} ).themes || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Themes</a>',
+							( wizardLinkAvailable()
+								? '<a class="factory-console-button" href="' + escapeHtml( config.siteLinks.wizard ) + '" target="_blank" rel="noopener noreferrer">Open Crocoblock Wizard</a>'
+								: '<span class="factory-console-note">Wizard is not installed. Use Plugins, Themes, or the official ZIP/manual path if needed.</span>' ),
+						'</div>',
 					'</div>',
-					'<div class="factory-console-actions factory-console-actions-compact">',
-						'<a class="factory-console-button" href="' + escapeHtml( ( config.siteLinks || {} ).plugins || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Plugins</a>',
-						'<a class="factory-console-button" href="' + escapeHtml( ( config.siteLinks || {} ).themes || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Themes</a>',
-						( wizardLinkAvailable()
-							? '<a class="factory-console-button" href="' + escapeHtml( config.siteLinks.wizard ) + '" target="_blank" rel="noopener noreferrer">Open Crocoblock Wizard</a>'
-							: '<span class="factory-console-note">Wizard is not installed. Use Plugins, Themes, or the official ZIP/manual path if needed.</span>' ),
-					'</div>',
-					'<div class="factory-console-helper-license"><strong>Local license status</strong><span>' + escapeHtml( license.state || 'wizard_missing' ) + ( license.has_license ? ' · detected locally' : ' · not detected' ) + '</span></div>',
-				'</section>',
+				'</details>',
 			'</section>',
 		].join( '' );
 	}
@@ -811,8 +1009,7 @@
 						} ).join( '' ),
 					'</select>',
 				'</label>',
-				'<p class="factory-console-note">Model selection is local to this console in 11a. Saved provider settings still live in AI Settings.</p>',
-				'<a class="factory-console-link" href="' + escapeHtml( config.siteLinks.ai_settings || '#' ) + '">Open AI Settings fallback</a>',
+				'<p class="factory-console-note">Model selection is local to this console in 11a. Configured from saved settings. Console-side editing coming later.</p>',
 			'</section>',
 		].join( '' );
 	}
@@ -874,9 +1071,11 @@
 								: 'neutral';
 						const stateLabel = state.isPlanning && state.currentStage === stage.key
 							? 'running'
-							: response
-								? ( response.status || 'ready' )
-								: 'pending';
+							: response && response.status === 'blocked'
+								? 'blocked'
+								: response
+									? 'ready'
+									: 'pending';
 
 						return [
 							'<div class="factory-console-stage factory-console-stage-' + escapeHtml( tone ) + '">',
@@ -977,23 +1176,28 @@
 		return [
 			'<section class="factory-console-card factory-console-card-compact">',
 				'<div class="factory-console-card__header"><h2>Controlled Generate</h2>' + badge( 'disabled', 'warning' ) + '</div>',
-				'<p>Controlled Generate stays disabled in Phase 11a. This shell is read-only and stops at Confirmation.</p>',
+				'<p>Generate is disabled in this alpha slice. The console remains read-only and stops at Confirmation.</p>',
 				'<button type="button" class="factory-console-button factory-console-button-disabled" disabled>Generate</button>',
 			'</section>',
 		].join( '' );
 	}
 
-	function renderManageCard() {
+	function renderManageEditCard() {
 		const links = config.siteLinks || {};
 
 		return [
 			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
-				'<div class="factory-console-card__header"><h2>Manage site</h2>' + badge( 'links', 'ok' ) + '</div>',
+				'<div class="factory-console-card__header"><h2>Manage and edit</h2>' + badge( 'handoff', 'ok' ) + '</div>',
+				'<p class="factory-console-note">Open the generated site, hand off to frontend editing, or use the temporary admin fallback only when needed.</p>',
 				'<div class="factory-console-link-grid factory-console-link-grid-manage">',
 					'<a class="factory-console-link-card" href="' + escapeHtml( links.home || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Home</strong><span>Open the generated homepage.</span></a>',
 					'<a class="factory-console-link-card" href="' + escapeHtml( links.properties || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Properties</strong><span>Open the catalog page.</span></a>',
 					'<a class="factory-console-link-card" href="' + escapeHtml( links.contact || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Contact</strong><span>Open the contact page.</span></a>',
-					'<a class="factory-console-link-card" href="' + escapeHtml( links.manage_properties || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Manage Properties</strong><span>Open the Property CPT list in WordPress.</span></a>',
+					'<a class="factory-console-link-card" href="' + escapeHtml( links.frontend_edit || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Open Frontend Edit</strong><span>Edit supported safe fields from the generated frontend.</span></a>',
+					'<a class="factory-console-link-card" href="' + escapeHtml( links.manage_properties || '#' ) + '" target="_blank" rel="noopener noreferrer"><strong>Manage Properties</strong><span>Temporary wp-admin fallback for the Property CPT list.</span></a>',
+				'</div>',
+				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
+					'<div><strong>Supported frontend fields</strong><span>Hero title, Hero subtitle, Hero CTA text, and Hero CTA destination.</span></div>',
 				'</div>',
 				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
 					'<div><strong>Latest proof</strong><span>Latest install and validation proof will surface here in a later slice.</span></div>',
@@ -1003,53 +1207,40 @@
 		].join( '' );
 	}
 
-	function renderEditCard() {
-		const links = config.siteLinks || {};
-
-		return [
-			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
-				'<div class="factory-console-card__header"><h2>Frontend safe edit</h2>' + badge( 'handoff', 'ok' ) + '</div>',
-				'<p class="factory-console-note">Open the generated frontend as an admin to use the current safe editing controls.</p>',
-				'<div class="factory-console-actions factory-console-actions-compact">',
-					'<a class="factory-console-button" href="' + escapeHtml( links.frontend_edit || '#' ) + '" target="_blank" rel="noopener noreferrer">Open Frontend Edit</a>',
-				'</div>',
-				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
-					'<div><strong>Hero title</strong><span>Save-enabled</span></div>',
-					'<div><strong>Hero subtitle</strong><span>Save-enabled</span></div>',
-					'<div><strong>Hero CTA text</strong><span>Save-enabled</span></div>',
-					'<div><strong>Hero CTA destination</strong><span>Save-enabled</span></div>',
-				'</div>',
-			'</section>',
-		].join( '' );
-	}
-
 	function renderHistoryCard() {
 		return [
-			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
-				'<div class="factory-console-card__header"><h2>Run history and rollback</h2>' + badge( 'coming later', 'neutral' ) + '</div>',
-				'<p class="factory-console-note">Rollback is not enabled in this alpha slice.</p>',
-				'<div class="factory-console-actions factory-console-actions-compact">',
-					'<button type="button" class="factory-console-button factory-console-button-disabled" disabled>Rollback last step</button>',
-				'</div>',
-				'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
-					'<div><strong>Run history</strong><span>Timeline and rollback proof will live here later.</span></div>',
-				'</div>',
-			'</section>',
+			'<details class="factory-console-details factory-console-secondary-details">',
+				'<summary>Run history &amp; rollback</summary>',
+				'<section class="factory-console-card factory-console-card-wide factory-console-card-compact factory-console-card-secondary">',
+					'<div class="factory-console-card__header"><h2>Run history &amp; rollback</h2>' + badge( 'coming later', 'neutral' ) + '</div>',
+					'<p class="factory-console-note">Rollback is not enabled in this alpha slice.</p>',
+					'<div class="factory-console-actions factory-console-actions-compact">',
+						'<button type="button" class="factory-console-button factory-console-button-disabled" disabled>Rollback last step</button>',
+					'</div>',
+					'<div class="factory-console-placeholder-list factory-console-placeholder-list-compact">',
+						'<div><strong>Run history</strong><span>Timeline and rollback proof will live here later.</span></div>',
+					'</div>',
+				'</section>',
+			'</details>',
 		].join( '' );
 	}
 
-	function renderDeveloperCard() {
+	function renderAdvancedSection() {
 		const links = config.siteLinks || {};
 
 		return [
-			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
-				'<div class="factory-console-card__header"><h2>Developer tools</h2>' + badge( 'fallback', 'neutral' ) + '</div>',
-				'<p class="factory-console-note">Diagnostics stay outside the main alpha flow, but they remain available as a fallback.</p>',
-				'<div class="factory-console-actions factory-console-actions-compact">',
-					'<a class="factory-console-button" href="' + escapeHtml( links.dashboard || '#' ) + '" target="_blank" rel="noopener noreferrer">Open beta diagnostics</a>',
-					'<a class="factory-console-button" href="' + escapeHtml( links.ai_settings || '#' ) + '" target="_blank" rel="noopener noreferrer">Open AI Settings</a>',
-				'</div>',
-			'</section>',
+			'<details class="factory-console-details factory-console-secondary-details">',
+				'<summary>Advanced</summary>',
+				'<section class="factory-console-card factory-console-card-wide factory-console-card-compact factory-console-card-secondary">',
+					'<div class="factory-console-card__header"><h2>Advanced</h2>' + badge( 'fallback', 'neutral' ) + '</div>',
+					'<p class="factory-console-note">Diagnostics and wp-admin fallback links stay outside the main alpha path.</p>',
+					'<div class="factory-console-actions factory-console-actions-compact">',
+						'<a class="factory-console-button" href="' + escapeHtml( links.dashboard || '#' ) + '" target="_blank" rel="noopener noreferrer">Open beta diagnostics</a>',
+						'<a class="factory-console-button" href="' + escapeHtml( links.ai_settings || '#' ) + '" target="_blank" rel="noopener noreferrer">Advanced WP admin AI settings</a>',
+					'</div>',
+					renderDeveloperProof(),
+				'</section>',
+			'</details>',
 		].join( '' );
 	}
 
@@ -1062,12 +1253,10 @@
 		};
 
 		return [
-			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
-				'<details class="factory-console-details">',
-					'<summary>Developer details</summary>',
-					'<pre>' + escapeHtml( JSON.stringify( data, null, 2 ) ) + '</pre>',
-				'</details>',
-			'</section>',
+			'<details class="factory-console-details factory-console-developer-details">',
+				'<summary>Developer details</summary>',
+				'<pre>' + escapeHtml( JSON.stringify( data, null, 2 ) ) + '</pre>',
+			'</details>',
 		].join( '' );
 	}
 
@@ -1093,11 +1282,23 @@
 
 	function renderCreateTab() {
 		return [
-			'<div class="factory-console-grid factory-console-grid-top">',
-				renderModelCard(),
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
+				'<div class="factory-console-card__header"><div><div class="factory-console-kicker">Create</div><h2>Describe the site</h2><p>Keep the prompt clear and outcome-focused. Plan Site is the only primary action in this step.</p></div>' + badge( promptLength() > 0 ? 'ready' : 'pending', promptLength() > 0 ? 'ok' : 'neutral' ) + '</div>',
+				'<div class="factory-console-muted-callout">The prompt and Plan Site button stay at the top of the page so you can iterate without leaving the main flow.</div>',
+			'</section>',
+			'<div class="factory-console-grid factory-console-grid-top factory-console-grid-top-compact">',
 				renderRecommendationCard(),
+				renderModelCard(),
 				renderEstimateCard(),
 			'</div>',
+		].join( '' );
+	}
+
+	function renderReviewSection() {
+		return [
+			'<section class="factory-console-card factory-console-card-wide factory-console-card-compact">',
+				'<div class="factory-console-card__header"><div><div class="factory-console-kicker">Review</div><h2>Inspect the read-only plan</h2><p>Check the chain through Confirmation, then hand off to Manage/Edit. Generate stays unavailable here on purpose.</p></div>' + badge( stageResponse( 'generateConfirmation' ) ? 'ready' : ( state.isPlanning ? 'running' : 'pending' ), stageResponse( 'generateConfirmation' ) ? 'ok' : ( state.isPlanning ? 'warning' : 'neutral' ) ) + '</div>',
+			'</section>',
 			renderStageRail(),
 			'<div class="factory-console-grid">',
 				renderStageSummaryCard( 'sitePlan', 'Site Plan', renderSitePlan ),
@@ -1120,21 +1321,19 @@
 			return renderCreateTab();
 		}
 
-		if ( state.activeTab === 'manage' ) {
-			return renderManageCard();
+		if ( state.activeTab === 'review' ) {
+			return renderReviewSection();
 		}
 
-		if ( state.activeTab === 'edit' ) {
-			return renderEditCard();
-		}
+		return renderManageEditCard();
+	}
 
-		if ( state.activeTab === 'history' ) {
-			return renderHistoryCard();
-		}
-
+	function renderSecondarySections() {
 		return [
-			renderDeveloperCard(),
-			renderDeveloperProof(),
+			'<div class="factory-console-secondary-sections">',
+				renderHistoryCard(),
+				renderAdvancedSection(),
+			'</div>',
 		].join( '' );
 	}
 
@@ -1194,13 +1393,14 @@
 	function render() {
 		const focusState = captureFocusState();
 		ensureActiveTab();
+		applyTheme();
 
 		root.innerHTML = [
 			'<div class="factory-console-shell">',
 				renderPromptCard(),
 				renderBanner(),
-				renderTabRail(),
 				renderActiveTab(),
+				renderSecondarySections(),
 			'</div>',
 		].join( '' );
 
@@ -1215,6 +1415,8 @@
 		const planButton = root.querySelector( '[data-factory-console-plan]' );
 		const estimateButton = root.querySelector( '[data-factory-console-estimate]' );
 		const tabButtons = root.querySelectorAll( '[data-factory-console-tab]' );
+		const themeButtons = root.querySelectorAll( '[data-factory-console-theme]' );
+		const nextActionButtons = root.querySelectorAll( '[data-factory-console-next-action]' );
 
 		if ( promptField ) {
 			promptField.addEventListener( 'input', function () {
@@ -1249,6 +1451,30 @@
 			} );
 		} );
 
+		themeButtons.forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				setTheme( button.getAttribute( 'data-factory-console-theme' ) || 'light' );
+				render();
+			} );
+		} );
+
+		nextActionButtons.forEach( function ( button ) {
+			button.addEventListener( 'click', function () {
+				const action = button.getAttribute( 'data-factory-console-next-action' ) || 'tab';
+				const target = button.getAttribute( 'data-factory-console-next-target' ) || 'create';
+
+				if ( action === 'plan' ) {
+					state.activeTab = target;
+					render();
+					runPlanChain();
+					return;
+				}
+
+				state.activeTab = target;
+				render();
+			} );
+		} );
+
 		if ( planButton ) {
 			planButton.addEventListener( 'click', runPlanChain );
 		}
@@ -1277,5 +1503,7 @@
 			} );
 	}
 
+	state.theme = preferredTheme();
+	applyTheme();
 	loadSettings();
 }() );

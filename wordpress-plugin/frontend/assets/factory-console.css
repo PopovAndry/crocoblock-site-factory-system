@@ -1,11 +1,117 @@
 .factory-console-page {
-	background:
+	--factory-console-bg:
 		radial-gradient(circle at top left, rgba(20, 184, 166, 0.15), transparent 34%),
 		linear-gradient(180deg, #f6fbfa 0%, #edf5f3 100%);
-	color: #12302a;
+	--factory-console-text: #12302a;
+	--factory-console-muted: #4f6c65;
+	--factory-console-muted-strong: #3e625a;
+	--factory-console-card: rgba(255, 255, 255, 0.9);
+	--factory-console-card-hero:
+		linear-gradient(145deg, rgba(255, 255, 255, 0.97) 0%, rgba(233, 249, 246, 0.95) 100%);
+	--factory-console-border: rgba(18, 48, 42, 0.08);
+	--factory-console-border-strong: #d7e5e1;
+	--factory-console-border-soft: #e6efec;
+	--factory-console-surface: #ffffff;
+	--factory-console-surface-soft: #f8fcfb;
+	--factory-console-surface-muted: #f8fafc;
+	--factory-console-surface-head: #eff7f5;
+	--factory-console-primary: #0f766e;
+	--factory-console-primary-hover: #0c5f59;
+	--factory-console-primary-contrast: #ffffff;
+	--factory-console-link: #0f766e;
+	--factory-console-link-hover: #0c5f59;
+	--factory-console-shadow: 0 24px 60px rgba(18, 48, 42, 0.08);
+	--factory-console-focus: 0 0 0 3px rgba(20, 184, 166, 0.18);
+	--factory-console-disabled-bg: #eef2f1;
+	--factory-console-disabled-border: #d6e1de;
+	--factory-console-disabled-text: #7b8e89;
+	--factory-console-ok-bg: #dcfce7;
+	--factory-console-ok-text: #166534;
+	--factory-console-warning-bg: #fef3c7;
+	--factory-console-warning-text: #92400e;
+	--factory-console-error-bg: #fee2e2;
+	--factory-console-error-text: #b91c1c;
+	--factory-console-neutral-bg: #e2e8f0;
+	--factory-console-neutral-text: #334155;
+	--factory-console-message-ok-bg: #ecfdf5;
+	--factory-console-message-ok-border: #bbf7d0;
+	--factory-console-message-warning-bg: #fffbeb;
+	--factory-console-message-warning-border: #fde68a;
+	--factory-console-message-error-bg: #fef2f2;
+	--factory-console-message-error-border: #fecaca;
+	--factory-console-code-bg: #0f172a;
+	--factory-console-code-text: #d9f7f1;
+	--factory-console-step-pending-bg: #f8fafc;
+	--factory-console-step-pending-border: #d7e5e1;
+	--factory-console-step-running-bg: #fffbeb;
+	--factory-console-step-running-border: #fde68a;
+	--factory-console-step-ready-bg: #ecfdf5;
+	--factory-console-step-ready-border: #bbf7d0;
+	--factory-console-step-blocked-bg: #fef2f2;
+	--factory-console-step-blocked-border: #fecaca;
+	background: var(--factory-console-bg);
+	color: var(--factory-console-text);
 	font-family: "Segoe UI", "Helvetica Neue", sans-serif;
 	margin: 0;
 	min-height: 100vh;
+}
+
+.factory-console-page[data-factory-console-theme="dark"] {
+	--factory-console-bg:
+		radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 32%),
+		linear-gradient(180deg, #071311 0%, #0d1f1b 100%);
+	--factory-console-text: #e7f5f1;
+	--factory-console-muted: #b7d2ca;
+	--factory-console-muted-strong: #c8dfd8;
+	--factory-console-card: rgba(9, 24, 21, 0.94);
+	--factory-console-card-hero:
+		linear-gradient(145deg, rgba(10, 27, 23, 0.98) 0%, rgba(13, 34, 29, 0.96) 100%);
+	--factory-console-border: rgba(164, 214, 200, 0.16);
+	--factory-console-border-strong: #23423a;
+	--factory-console-border-soft: #18342d;
+	--factory-console-surface: #112723;
+	--factory-console-surface-soft: #10211d;
+	--factory-console-surface-muted: #132a25;
+	--factory-console-surface-head: #16332d;
+	--factory-console-primary: #3bc8b6;
+	--factory-console-primary-hover: #59d8c7;
+	--factory-console-primary-contrast: #07221c;
+	--factory-console-link: #7fe8da;
+	--factory-console-link-hover: #a3f2e8;
+	--factory-console-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+	--factory-console-focus: 0 0 0 3px rgba(59, 200, 182, 0.26);
+	--factory-console-disabled-bg: #172d29;
+	--factory-console-disabled-border: #294841;
+	--factory-console-disabled-text: #7fa199;
+	--factory-console-ok-bg: #123323;
+	--factory-console-ok-text: #86efac;
+	--factory-console-warning-bg: #35290d;
+	--factory-console-warning-text: #fcd34d;
+	--factory-console-error-bg: #351517;
+	--factory-console-error-text: #fca5a5;
+	--factory-console-neutral-bg: #1b2b35;
+	--factory-console-neutral-text: #cbd5e1;
+	--factory-console-message-ok-bg: #11281f;
+	--factory-console-message-ok-border: #1f5135;
+	--factory-console-message-warning-bg: #33280f;
+	--factory-console-message-warning-border: #6b5717;
+	--factory-console-message-error-bg: #341518;
+	--factory-console-message-error-border: #7f1d1d;
+	--factory-console-code-bg: #020617;
+	--factory-console-code-text: #d9f7f1;
+	--factory-console-step-pending-bg: #132a25;
+	--factory-console-step-pending-border: #27433c;
+	--factory-console-step-running-bg: #35290d;
+	--factory-console-step-running-border: #6b5717;
+	--factory-console-step-ready-bg: #11281f;
+	--factory-console-step-ready-border: #1f5135;
+	--factory-console-step-blocked-bg: #341518;
+	--factory-console-step-blocked-border: #7f1d1d;
+}
+
+.factory-console-page {
+	background: var(--factory-console-bg);
+	color: var(--factory-console-text);
 }
 
 .factory-console-root,
@@ -20,7 +126,7 @@
 
 .factory-console-loading {
 	align-items: center;
-	color: #3e625a;
+	color: var(--factory-console-muted-strong);
 	display: flex;
 	font-size: 15px;
 	justify-content: center;
@@ -34,10 +140,10 @@
 }
 
 .factory-console-card {
-	background: rgba(255, 255, 255, 0.9);
-	border: 1px solid rgba(18, 48, 42, 0.08);
+	background: var(--factory-console-card);
+	border: 1px solid var(--factory-console-border);
 	border-radius: 8px;
-	box-shadow: 0 24px 60px rgba(18, 48, 42, 0.08);
+	box-shadow: var(--factory-console-shadow);
 	padding: 22px;
 }
 
@@ -50,8 +156,8 @@
 }
 
 .factory-console-subcard {
-	background: #f8fcfb;
-	border: 1px solid #d7e5e1;
+	background: var(--factory-console-surface-soft);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
 	padding: 18px;
 }
@@ -74,8 +180,7 @@
 }
 
 .factory-console-card-hero {
-	background:
-		linear-gradient(145deg, rgba(255, 255, 255, 0.97) 0%, rgba(233, 249, 246, 0.95) 100%);
+	background: var(--factory-console-card-hero);
 	margin-bottom: 14px;
 }
 
@@ -87,13 +192,21 @@
 	margin-bottom: 16px;
 }
 
+.factory-console-header-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	justify-content: flex-end;
+}
+
 .factory-console-card__header h1,
 .factory-console-card__header h2 {
 	margin: 0;
 }
 
 .factory-console-card__header h1 {
-	color: #102a24;
+	color: var(--factory-console-text);
 	font-size: clamp(30px, 4vw, 44px);
 	line-height: 1.02;
 }
@@ -104,7 +217,7 @@
 }
 
 .factory-console-card__header p {
-	color: #4b6e66;
+	color: var(--factory-console-muted);
 	font-size: 14px;
 	line-height: 1.6;
 	margin: 10px 0 0;
@@ -112,7 +225,7 @@
 }
 
 .factory-console-kicker {
-	color: #0f766e;
+	color: var(--factory-console-primary);
 	font-size: 12px;
 	font-weight: 800;
 	letter-spacing: 0.08em;
@@ -132,30 +245,30 @@
 }
 
 .factory-console-badge-ok {
-	background: #dcfce7;
-	color: #166534;
+	background: var(--factory-console-ok-bg);
+	color: var(--factory-console-ok-text);
 }
 
 .factory-console-badge-warning {
-	background: #fef3c7;
-	color: #92400e;
+	background: var(--factory-console-warning-bg);
+	color: var(--factory-console-warning-text);
 }
 
 .factory-console-badge-error {
-	background: #fee2e2;
-	color: #b91c1c;
+	background: var(--factory-console-error-bg);
+	color: var(--factory-console-error-text);
 }
 
 .factory-console-badge-neutral {
-	background: #e2e8f0;
-	color: #334155;
+	background: var(--factory-console-neutral-bg);
+	color: var(--factory-console-neutral-text);
 }
 
 .factory-console-field-grid,
 .factory-console-grid,
 .factory-console-grid-top {
 	display: grid;
-	gap: 18px;
+	gap: 16px;
 }
 
 .factory-console-field-grid {
@@ -166,6 +279,10 @@
 .factory-console-grid-top {
 	grid-template-columns: 1.1fr 1fr 1fr;
 	margin-bottom: 14px;
+}
+
+.factory-console-grid-top-compact {
+	align-items: start;
 }
 
 .factory-console-grid {
@@ -185,11 +302,175 @@
 	margin-bottom: 14px;
 }
 
-.factory-console-tab {
-	background: rgba(255, 255, 255, 0.8);
-	border: 1px solid #c9d8d4;
+.factory-console-theme-switcher {
+	align-items: center;
+	background: var(--factory-console-surface-soft);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 999px;
-	color: #294941;
+	display: inline-flex;
+	gap: 4px;
+	padding: 4px;
+}
+
+.factory-console-theme-option {
+	background: transparent;
+	border: 0;
+	border-radius: 999px;
+	color: var(--factory-console-muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: 12px;
+	font-weight: 700;
+	padding: 8px 12px;
+}
+
+.factory-console-theme-option:hover,
+.factory-console-theme-option:focus {
+	box-shadow: var(--factory-console-focus);
+	outline: none;
+}
+
+.factory-console-theme-option-active {
+	background: var(--factory-console-primary);
+	color: var(--factory-console-primary-contrast);
+}
+
+.factory-console-stepper {
+	display: grid;
+	gap: 10px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin: 0 0 16px;
+}
+
+.factory-console-step {
+	align-items: center;
+	background: var(--factory-console-step-pending-bg);
+	border: 1px solid var(--factory-console-step-pending-border);
+	border-radius: 8px;
+	color: var(--factory-console-text);
+	cursor: pointer;
+	display: flex;
+	gap: 10px;
+	min-height: 64px;
+	padding: 10px 12px;
+	text-align: left;
+}
+
+.factory-console-step:hover,
+.factory-console-step:focus {
+	border-color: var(--factory-console-primary);
+	box-shadow: var(--factory-console-focus);
+	outline: none;
+}
+
+.factory-console-step-active {
+	border-color: var(--factory-console-primary);
+	box-shadow: inset 0 0 0 1px var(--factory-console-primary);
+}
+
+.factory-console-step-pending {
+	background: var(--factory-console-step-pending-bg);
+	border-color: var(--factory-console-step-pending-border);
+}
+
+.factory-console-step-running {
+	background: var(--factory-console-step-running-bg);
+	border-color: var(--factory-console-step-running-border);
+}
+
+.factory-console-step-ready {
+	background: var(--factory-console-step-ready-bg);
+	border-color: var(--factory-console-step-ready-border);
+}
+
+.factory-console-step-blocked {
+	background: var(--factory-console-step-blocked-bg);
+	border-color: var(--factory-console-step-blocked-border);
+}
+
+.factory-console-step-index {
+	align-items: center;
+	background: var(--factory-console-surface);
+	border: 1px solid var(--factory-console-border-strong);
+	border-radius: 999px;
+	display: inline-flex;
+	font-size: 12px;
+	font-weight: 800;
+	height: 28px;
+	justify-content: center;
+	min-width: 28px;
+}
+
+.factory-console-step-copy {
+	display: grid;
+	gap: 3px;
+}
+
+.factory-console-step-copy strong {
+	font-size: 13px;
+}
+
+.factory-console-step-copy em {
+	color: var(--factory-console-muted);
+	font-size: 11px;
+	font-style: normal;
+	font-weight: 800;
+	text-transform: uppercase;
+}
+
+.factory-console-next-action {
+	align-items: center;
+	background: var(--factory-console-surface-soft);
+	border: 1px solid var(--factory-console-border-strong);
+	border-radius: 8px;
+	display: grid;
+	gap: 14px;
+	grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+	margin-bottom: 14px;
+	padding: 14px 16px;
+}
+
+.factory-console-next-action-warning {
+	border-color: var(--factory-console-step-running-border);
+}
+
+.factory-console-next-action__copy {
+	display: grid;
+	gap: 6px;
+}
+
+.factory-console-next-action__copy strong {
+	font-size: 18px;
+}
+
+.factory-console-next-action__copy p {
+	color: var(--factory-console-muted);
+	line-height: 1.5;
+	margin: 0;
+}
+
+.factory-console-next-action__actions {
+	align-items: flex-start;
+	display: grid;
+	gap: 8px;
+	justify-items: end;
+}
+
+.factory-console-create-intro {
+	margin-bottom: 12px;
+}
+
+.factory-console-secondary-sections {
+	display: grid;
+	gap: 12px;
+	margin-top: 14px;
+}
+
+.factory-console-tab {
+	background: var(--factory-console-surface);
+	border: 1px solid var(--factory-console-border-strong);
+	border-radius: 999px;
+	color: var(--factory-console-text);
 	cursor: pointer;
 	font: inherit;
 	font-size: 13px;
@@ -199,14 +480,15 @@
 
 .factory-console-tab:hover,
 .factory-console-tab:focus {
-	border-color: #0f766e;
+	border-color: var(--factory-console-primary);
+	box-shadow: var(--factory-console-focus);
 	outline: none;
 }
 
 .factory-console-tab-active {
-	background: #0f766e;
-	border-color: #0f766e;
-	color: #ffffff;
+	background: var(--factory-console-primary);
+	border-color: var(--factory-console-primary);
+	color: var(--factory-console-primary-contrast);
 }
 
 .factory-console-field {
@@ -219,7 +501,7 @@
 }
 
 .factory-console-field span {
-	color: #3e625a;
+	color: var(--factory-console-muted-strong);
 	font-size: 12px;
 	font-weight: 800;
 	letter-spacing: 0.03em;
@@ -228,11 +510,11 @@
 
 .factory-console-field textarea,
 .factory-console-field select {
-	background: #ffffff;
-	border: 1px solid #c8d7d3;
+	background: var(--factory-console-surface);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
 	box-sizing: border-box;
-	color: #102a24;
+	color: var(--factory-console-text);
 	font: inherit;
 	padding: 12px 14px;
 	width: 100%;
@@ -246,8 +528,8 @@
 
 .factory-console-field textarea:focus,
 .factory-console-field select:focus {
-	border-color: #14b8a6;
-	box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.14);
+	border-color: var(--factory-console-primary);
+	box-shadow: var(--factory-console-focus);
 	outline: none;
 }
 
@@ -263,10 +545,10 @@
 }
 
 .factory-console-button {
-	background: #ffffff;
-	border: 1px solid #b8ccc7;
+	background: var(--factory-console-surface);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
-	color: #12302a;
+	color: var(--factory-console-text);
 	cursor: pointer;
 	display: inline-flex;
 	font: inherit;
@@ -279,33 +561,35 @@
 
 .factory-console-button:hover,
 .factory-console-button:focus {
-	border-color: #0f766e;
+	border-color: var(--factory-console-primary);
+	box-shadow: var(--factory-console-focus);
 	outline: none;
 }
 
 .factory-console-button-primary {
-	background: #0f766e;
-	border-color: #0f766e;
-	color: #ffffff;
+	background: var(--factory-console-primary);
+	border-color: var(--factory-console-primary);
+	color: var(--factory-console-primary-contrast);
 }
 
 .factory-console-button-primary:hover,
 .factory-console-button-primary:focus {
-	background: #0c5f59;
+	background: var(--factory-console-primary-hover);
 }
 
 .factory-console-button-disabled,
 .factory-console-button:disabled {
-	background: #eef2f1;
-	border-color: #d6e1de;
-	color: #7b8e89;
+	background: var(--factory-console-disabled-bg);
+	border-color: var(--factory-console-disabled-border);
+	color: var(--factory-console-disabled-text);
 	cursor: not-allowed;
+	box-shadow: none;
 }
 
 .factory-console-inline-note,
 .factory-console-note,
 .factory-console-empty {
-	color: #4f6c65;
+	color: var(--factory-console-muted);
 	font-size: 13px;
 	line-height: 1.5;
 }
@@ -317,21 +601,21 @@
 }
 
 .factory-console-message-ok {
-	background: #ecfdf5;
-	border: 1px solid #bbf7d0;
-	color: #166534;
+	background: var(--factory-console-message-ok-bg);
+	border: 1px solid var(--factory-console-message-ok-border);
+	color: var(--factory-console-ok-text);
 }
 
 .factory-console-message-warning {
-	background: #fffbeb;
-	border: 1px solid #fde68a;
-	color: #92400e;
+	background: var(--factory-console-message-warning-bg);
+	border: 1px solid var(--factory-console-message-warning-border);
+	color: var(--factory-console-warning-text);
 }
 
 .factory-console-message-error {
-	background: #fef2f2;
-	border: 1px solid #fecaca;
-	color: #b91c1c;
+	background: var(--factory-console-message-error-bg);
+	border: 1px solid var(--factory-console-message-error-border);
+	color: var(--factory-console-error-text);
 }
 
 .factory-console-definition-list {
@@ -342,7 +626,7 @@
 }
 
 .factory-console-definition-list dt {
-	color: #5b756f;
+	color: var(--factory-console-muted);
 	font-size: 12px;
 	font-weight: 800;
 	margin: 0;
@@ -350,12 +634,12 @@
 }
 
 .factory-console-definition-list dd {
-	color: #12302a;
+	color: var(--factory-console-text);
 	margin: 0;
 }
 
 .factory-console-recommendation-value {
-	color: #102a24;
+	color: var(--factory-console-text);
 	font-size: 22px;
 	font-weight: 800;
 	line-height: 1.1;
@@ -369,7 +653,7 @@
 }
 
 .factory-console-stage {
-	border: 1px solid #d9e4e1;
+	border: 1px solid var(--factory-console-step-pending-border);
 	border-radius: 8px;
 	display: grid;
 	gap: 5px;
@@ -388,23 +672,23 @@
 }
 
 .factory-console-stage-ok {
-	background: #f0fdf4;
-	border-color: #bbf7d0;
+	background: var(--factory-console-step-ready-bg);
+	border-color: var(--factory-console-step-ready-border);
 }
 
 .factory-console-stage-warning {
-	background: #fffbeb;
-	border-color: #fde68a;
+	background: var(--factory-console-step-running-bg);
+	border-color: var(--factory-console-step-running-border);
 }
 
 .factory-console-stage-error {
-	background: #fef2f2;
-	border-color: #fecaca;
+	background: var(--factory-console-step-blocked-bg);
+	border-color: var(--factory-console-step-blocked-border);
 }
 
 .factory-console-stage-neutral {
-	background: #f8fafc;
-	border-color: #e2e8f0;
+	background: var(--factory-console-step-pending-bg);
+	border-color: var(--factory-console-step-pending-border);
 }
 
 .factory-console-summary-strip {
@@ -415,8 +699,8 @@
 }
 
 .factory-console-summary-pill {
-	background: #f8fcfb;
-	border: 1px solid #d7e5e1;
+	background: var(--factory-console-surface-soft);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
 	display: grid;
 	gap: 4px;
@@ -439,17 +723,17 @@
 }
 
 .factory-console-note-list p {
-	color: #4f6c65;
+	color: var(--factory-console-muted);
 	font-size: 13px;
 	line-height: 1.5;
 	margin: 0;
 }
 
 .factory-console-muted-callout {
-	background: #f8fafc;
-	border: 1px dashed #cbd5e1;
+	background: var(--factory-console-surface-muted);
+	border: 1px dashed var(--factory-console-border-strong);
 	border-radius: 8px;
-	color: #475569;
+	color: var(--factory-console-muted);
 	font-size: 13px;
 	line-height: 1.5;
 	margin-top: 12px;
@@ -458,8 +742,8 @@
 
 .factory-console-helper-license {
 	align-items: center;
-	border-top: 1px solid #d7e5e1;
-	color: #4f6c65;
+	border-top: 1px solid var(--factory-console-border-strong);
+	color: var(--factory-console-muted);
 	display: flex;
 	flex-wrap: wrap;
 	font-size: 13px;
@@ -469,13 +753,13 @@
 }
 
 .factory-console-helper-license strong {
-	color: #12302a;
+	color: var(--factory-console-text);
 	font-size: 12px;
 	text-transform: uppercase;
 }
 
 .factory-console-dependency-table {
-	border: 1px solid #d7e5e1;
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
 	overflow: hidden;
 }
@@ -490,9 +774,9 @@
 }
 
 .factory-console-dependency-table__head {
-	background: #eff7f5;
-	border-bottom: 1px solid #d7e5e1;
-	color: #526a64;
+	background: var(--factory-console-surface-head);
+	border-bottom: 1px solid var(--factory-console-border-strong);
+	color: var(--factory-console-muted);
 	font-size: 11px;
 	font-weight: 800;
 	letter-spacing: 0.05em;
@@ -500,8 +784,8 @@
 }
 
 .factory-console-dependency-table__row {
-	background: #ffffff;
-	border-bottom: 1px solid #e6efec;
+	background: var(--factory-console-surface);
+	border-bottom: 1px solid var(--factory-console-border-soft);
 	font-size: 13px;
 }
 
@@ -523,7 +807,7 @@
 }
 
 .factory-console-dependency-table__row > div span {
-	color: #4f6c65;
+	color: var(--factory-console-muted);
 	font-size: 12px;
 }
 
@@ -537,8 +821,8 @@
 }
 
 .factory-console-placeholder-list div {
-	background: #f6fbfa;
-	border: 1px solid #d7e5e1;
+	background: var(--factory-console-surface-soft);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
 	display: grid;
 	gap: 4px;
@@ -550,7 +834,7 @@
 }
 
 .factory-console-placeholder-list span {
-	color: #4f6c65;
+	color: var(--factory-console-muted);
 	font-size: 13px;
 	line-height: 1.5;
 }
@@ -562,14 +846,14 @@
 }
 
 .factory-console-link-grid-manage {
-	grid-template-columns: repeat(4, minmax(0, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .factory-console-link-card {
-	background: #ffffff;
-	border: 1px solid #d7e5e1;
+	background: var(--factory-console-surface);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
-	color: #12302a;
+	color: var(--factory-console-text);
 	display: grid;
 	gap: 6px;
 	min-height: 82px;
@@ -579,19 +863,20 @@
 
 .factory-console-link-card:hover,
 .factory-console-link-card:focus {
-	border-color: #0f766e;
+	border-color: var(--factory-console-primary);
+	box-shadow: var(--factory-console-focus);
 	outline: none;
 	transform: translateY(-1px);
 }
 
 .factory-console-link-card span {
-	color: #4f6c65;
+	color: var(--factory-console-muted);
 	font-size: 13px;
 	line-height: 1.5;
 }
 
 .factory-console-link {
-	color: #0f766e;
+	color: var(--factory-console-link);
 	font-size: 13px;
 	font-weight: 700;
 	text-decoration: none;
@@ -599,7 +884,8 @@
 
 .factory-console-link:hover,
 .factory-console-link:focus {
-	color: #0c5f59;
+	color: var(--factory-console-link-hover);
+	box-shadow: none;
 	outline: none;
 }
 
@@ -608,10 +894,50 @@
 	font-weight: 700;
 }
 
-.factory-console-details pre {
-	background: #0f172a;
+.factory-console-secondary-details {
+	background: var(--factory-console-surface-soft);
+	border: 1px solid var(--factory-console-border-strong);
 	border-radius: 8px;
-	color: #d9f7f1;
+	padding: 0 14px 14px;
+}
+
+.factory-console-secondary-details summary {
+	align-items: center;
+	color: var(--factory-console-text);
+	display: flex;
+	font-size: 14px;
+	min-height: 46px;
+}
+
+.factory-console-secondary-details[open] summary {
+	margin-bottom: 8px;
+}
+
+.factory-console-secondary-stack {
+	display: grid;
+	gap: 10px;
+}
+
+.factory-console-card-secondary {
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	padding: 4px 0 0;
+}
+
+.factory-console-developer-details {
+	margin-top: 10px;
+}
+
+.factory-console-page ::placeholder {
+	color: var(--factory-console-muted);
+	opacity: 1;
+}
+
+.factory-console-details pre {
+	background: var(--factory-console-code-bg);
+	border-radius: 8px;
+	color: var(--factory-console-code-text);
 	font-size: 12px;
 	line-height: 1.55;
 	margin: 14px 0 0;
@@ -628,17 +954,17 @@
 }
 
 .factory-console-static__panel {
-	background: rgba(255, 255, 255, 0.94);
-	border: 1px solid rgba(18, 48, 42, 0.1);
+	background: var(--factory-console-card);
+	border: 1px solid var(--factory-console-border);
 	border-radius: 8px;
-	box-shadow: 0 24px 60px rgba(18, 48, 42, 0.08);
+	box-shadow: var(--factory-console-shadow);
 	max-width: 540px;
 	padding: 32px;
 	text-align: center;
 }
 
 .factory-console-static__eyebrow {
-	color: #0f766e;
+	color: var(--factory-console-primary);
 	font-size: 12px;
 	font-weight: 800;
 	letter-spacing: 0.08em;
@@ -653,7 +979,7 @@
 }
 
 .factory-console-static__panel p {
-	color: #4f6c65;
+	color: var(--factory-console-muted);
 	line-height: 1.6;
 	margin: 0 0 20px;
 }
@@ -666,10 +992,10 @@
 }
 
 .factory-console-static__button {
-	background: #0f766e;
-	border: 1px solid #0f766e;
+	background: var(--factory-console-primary);
+	border: 1px solid var(--factory-console-primary);
 	border-radius: 8px;
-	color: #ffffff;
+	color: var(--factory-console-primary-contrast);
 	display: inline-flex;
 	font-weight: 700;
 	padding: 11px 16px;
@@ -677,14 +1003,18 @@
 }
 
 .factory-console-static__button-secondary {
-	background: #ffffff;
-	border-color: #b8ccc7;
-	color: #12302a;
+	background: var(--factory-console-surface);
+	border-color: var(--factory-console-border-strong);
+	color: var(--factory-console-text);
 }
 
 @media (max-width: 1100px) {
 	.factory-console-grid-top {
 		grid-template-columns: 1fr;
+	}
+
+	.factory-console-stepper {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
 	.factory-console-summary-strip,
@@ -704,6 +1034,14 @@
 	.factory-console-link-grid {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
+
+	.factory-console-next-action {
+		grid-template-columns: 1fr;
+	}
+
+	.factory-console-next-action__actions {
+		justify-items: start;
+	}
 }
 
 @media (max-width: 760px) {
@@ -717,7 +1055,8 @@
 	}
 
 	.factory-console-stage-rail,
-	.factory-console-link-grid {
+	.factory-console-link-grid,
+	.factory-console-stepper {
 		grid-template-columns: 1fr;
 	}
 
@@ -751,13 +1090,26 @@
 		flex-direction: column;
 	}
 
+	.factory-console-header-actions {
+		justify-content: flex-start;
+	}
+
 	.factory-console-actions,
-	.factory-console-static__actions {
+	.factory-console-static__actions,
+	.factory-console-next-action__actions {
 		flex-direction: column;
 	}
 
 	.factory-console-button,
 	.factory-console-static__button {
 		width: 100%;
+	}
+
+	.factory-console-theme-switcher {
+		width: 100%;
+	}
+
+	.factory-console-theme-option {
+		flex: 1 1 0;
 	}
 }
