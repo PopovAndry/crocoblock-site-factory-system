@@ -70,6 +70,7 @@ require_once __DIR__ . '/api/ai-generate-preflight-rest.php';
 require_once __DIR__ . '/api/ai-generate-confirmation-rest.php';
 require_once __DIR__ . '/api/ai-controlled-generate-rest.php';
 require_once __DIR__ . '/api/frontend-safe-edit-rest.php';
+require_once __DIR__ . '/console/factory-console.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/dashboard.php';
 require_once FACTORY_PLUGIN_DIR . 'admin/ai-settings.php';
 
