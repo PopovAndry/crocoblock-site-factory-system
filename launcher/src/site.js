@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { URL } = require("url");
 const {
   assertSafeRuntimePath,
   defaultGeneratedSiteMetadata,
@@ -113,6 +114,26 @@ function deriveFrontendEditStatus(project, generatedUrls) {
   };
 }
 
+function buildFrontendEditLoginUrl(frontendEditUrl) {
+  const resolvedUrl = asString(frontendEditUrl);
+  if (!resolvedUrl) {
+    return null;
+  }
+
+  const loginUrl = new URL("/wp-login.php", resolvedUrl);
+  loginUrl.searchParams.set("redirect_to", resolvedUrl);
+  return loginUrl.toString();
+}
+
+function hasFrontendSafeEditCapability(project) {
+  return Boolean(
+    project.agent
+      && project.agent.capabilities
+      && project.agent.capabilities.capabilities
+      && project.agent.capabilities.capabilities.frontend_safe_edit === true
+  );
+}
+
 function buildCountsSummary(proof) {
   if (!proof) {
     return null;
@@ -172,7 +193,7 @@ function nextSuggestedAction(status) {
   }
 
   if (status.frontend_edit_available) {
-    return "Open Home or Frontend Edit to review the generated site.";
+    return "Login to Edit or open Home to review the generated site.";
   }
 
   return "Open Home to review the generated site.";
@@ -213,6 +234,7 @@ async function getSiteStatus(options) {
   const latestProof = latestProofEntry ? latestProofEntry.proof : null;
   const generatedUrls = deriveGeneratedUrls(projectState.project, latestProof);
   const frontendEdit = deriveFrontendEditStatus(projectState.project, generatedUrls);
+  const frontendEditLoginUrl = frontendEdit.available ? buildFrontendEditLoginUrl(frontendEdit.url) : null;
   const warnings = [];
   const countsSummary = buildCountsSummary(latestProof);
 
@@ -240,7 +262,13 @@ async function getSiteStatus(options) {
     latest_generate_proof_path: latestProofEntry ? latestProofEntry.proofPath : null,
     generated_urls: generatedUrls,
     frontend_edit_url: frontendEdit.available ? frontendEdit.url : null,
+    frontend_edit_login_url: frontendEditLoginUrl,
     frontend_edit_available: frontendEdit.available,
+    frontend_edit_auth_required: frontendEdit.available,
+    frontend_edit_note: frontendEdit.available
+      ? "Login as a WordPress admin, then you will return to the generated page for safe frontend editing."
+      : frontendEdit.reason,
+    agent_frontend_safe_edit_capability: hasFrontendSafeEditCapability(projectState.project),
     frontend_edit_reason: frontendEdit.reason,
     counts_summary: countsSummary,
     controlled_generate_status: latestProof ? latestProof.controlled_generate_status || null : null,
@@ -274,7 +302,10 @@ async function writeSiteSurfaceProof(options) {
     latest_generate_proof_id: statusResult.site.latest_generate_proof_id,
     generated_urls: statusResult.site.generated_urls,
     frontend_edit_url: statusResult.site.frontend_edit_url,
+    frontend_edit_login_url: statusResult.site.frontend_edit_login_url,
     frontend_edit_available: statusResult.site.frontend_edit_available,
+    frontend_edit_auth_required: statusResult.site.frontend_edit_auth_required,
+    agent_frontend_safe_edit_capability: statusResult.site.agent_frontend_safe_edit_capability,
     counts_summary: statusResult.site.counts_summary,
     applies_changes: false,
     mutation_scope: "launcher_project_metadata_only",

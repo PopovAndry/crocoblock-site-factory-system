@@ -61,7 +61,8 @@ function printUsage() {
     "  node launcher/src/cli.js ai --slug kyiv-realty estimate --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js generate --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -390,6 +391,10 @@ function printSiteStatus(result) {
   console.log("  Properties: " + String(urls.properties || "Unavailable"));
   console.log("  Contact: " + String(urls.contact || "Unavailable"));
   console.log("  Frontend Edit: " + (site.frontend_edit_available ? String(site.frontend_edit_url) : "Unavailable"));
+  console.log("  Frontend Edit login: " + (site.frontend_edit_login_url ? String(site.frontend_edit_login_url) : "Unavailable"));
+  console.log("  Frontend Edit available: " + String(site.frontend_edit_available));
+  console.log("  Frontend Edit auth required: " + String(site.frontend_edit_auth_required));
+  console.log("  Frontend Edit note: " + String(site.frontend_edit_note || "Unavailable"));
   console.log("  Page count: " + formatCountChange(beforeCounts.pages, afterCounts.pages));
   console.log("  Property count: " + formatCountChange(beforeCounts.properties, afterCounts.properties));
   console.log("  Attachment count: " + formatCountChange(beforeCounts.attachments, afterCounts.attachments));
@@ -405,6 +410,9 @@ function normalizeSiteTarget(value) {
   const normalized = String(value || "home").trim().toLowerCase().replace(/_/g, "-");
   if (normalized === "frontendedit") {
     return "frontend-edit";
+  }
+  if (normalized === "frontendeditlogin") {
+    return "frontend-edit-login";
   }
   return normalized;
 }
@@ -434,7 +442,8 @@ async function runSite(parsed) {
       home: urls.home || urls.root || result.project.wp_url,
       properties: urls.properties || null,
       contact: urls.contact || null,
-      "frontend-edit": result.site.frontend_edit_available ? result.site.frontend_edit_url : null
+      "frontend-edit": result.site.frontend_edit_available ? result.site.frontend_edit_url : null,
+      "frontend-edit-login": result.site.frontend_edit_available ? result.site.frontend_edit_login_url : null
     };
     const targetUrl = targetUrlMap[target];
 

@@ -208,6 +208,19 @@ function serveAsset(response, assetName) {
   sendText(response, 200, fs.readFileSync(assetPath, "utf8"), contentType);
 }
 
+function summarizeProjectForSite(project) {
+  return {
+    project_id: project.project_id,
+    site_name: project.site_name,
+    slug: project.slug,
+    runtime_path: project.runtime_path,
+    wp_url: project.wp_url,
+    wp_port: project.wp_port,
+    generation: project.generation || null,
+    generated_site: project.generated_site || null
+  };
+}
+
 function createLauncherServer(options) {
   const host = options.host || "127.0.0.1";
   const port = Number(options.port || 3847);
@@ -327,7 +340,7 @@ function createLauncherServer(options) {
 
         sendJson(response, 200, {
           ok: true,
-          project: result.project,
+          project: summarizeProjectForSite(result.project),
           site: result.site
         });
         return;
@@ -343,7 +356,7 @@ function createLauncherServer(options) {
 
         sendJson(response, 200, {
           ok: true,
-          project: result.project,
+          project: summarizeProjectForSite(result.project),
           site: result.site,
           proof: result.proof,
           proof_path: result.proofPath
