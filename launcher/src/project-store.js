@@ -12,11 +12,20 @@ const BLOCKED_ROOTS = [
   "C:\\sf-slate-visual-smoke",
   "C:\\sf-controlled-generate-smoke"
 ];
-const PROJECT_SUBDIRECTORIES = ["runs", "proofs", "snapshots", "logs", "exports"];
+const PROJECT_SUBDIRECTORIES = ["runs", "proofs", "snapshots", "logs", "exports", "wordpress", "mysql"];
 
 function resolveProjectsRoot(projectsRoot) {
-  const target = projectsRoot || DEFAULT_PROJECTS_ROOT;
-  return path.resolve(target);
+  return path.resolve(projectsRoot || DEFAULT_PROJECTS_ROOT);
+}
+
+function normalizePath(inputPath) {
+  return path.resolve(inputPath);
+}
+
+function isPathInside(parentPath, childPath) {
+  const normalizedParent = normalizePath(parentPath);
+  const normalizedChild = normalizePath(childPath);
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(normalizedParent + path.sep);
 }
 
 function slugifyProjectName(name) {
@@ -32,13 +41,30 @@ function ensureSafeProjectsRoot(projectsRoot) {
   const resolved = resolveProjectsRoot(projectsRoot);
 
   for (const blockedRoot of BLOCKED_ROOTS) {
-    const normalizedBlocked = path.resolve(blockedRoot);
-    if (resolved === normalizedBlocked || resolved.startsWith(normalizedBlocked + path.sep)) {
-      throw new Error("Refusing to create project scaffolds inside blocked path: " + normalizedBlocked);
+    if (isPathInside(blockedRoot, resolved)) {
+      throw new Error("Refusing to create project scaffolds inside blocked path: " + normalizePath(blockedRoot));
     }
   }
 
   return resolved;
+}
+
+function assertSafeRuntimePath(runtimePath, projectsRoot) {
+  const resolvedRuntimePath = normalizePath(runtimePath);
+  const resolvedProjectsRoot = resolveProjectsRoot(projectsRoot);
+
+  if (!isPathInside(resolvedProjectsRoot, resolvedRuntimePath)) {
+    throw new Error("Runtime path is outside the allowed projects root: " + resolvedRuntimePath);
+  }
+
+  for (const blockedRoot of BLOCKED_ROOTS) {
+    const normalizedBlockedRoot = normalizePath(blockedRoot);
+    if (resolvedRuntimePath === normalizedBlockedRoot) {
+      throw new Error("Runtime path points to a blocked location: " + resolvedRuntimePath);
+    }
+  }
+
+  return resolvedRuntimePath;
 }
 
 function randomSuffix(length) {
@@ -53,9 +79,39 @@ function timestampIso() {
   return new Date().toISOString();
 }
 
+function ensureDirectory(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function writeJsonFile(filePath, value) {
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2) + "\n", "utf8");
+}
+
+function parseEnvFile(filePath) {
+  const content = fs.readFileSync(filePath, "utf8");
+  const result = {};
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+    result[key] = value;
+  }
+
+  return result;
+}
+
 function createProjectRecord(siteName, slug, runtimePath, wpPort) {
   const now = timestampIso();
-  const dbName = "factory_" + slug.replace(/-/g, "_");
 
   return {
     project_id: crypto.randomUUID(),
@@ -64,12 +120,18 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
     runtime_path: runtimePath,
     wp_url: "http://127.0.0.1:" + String(wpPort),
     wp_port: wpPort,
-    db_name: dbName,
+    db_name: "factory_" + slug.replace(/-/g, "_"),
     db_user: "factory_" + randomSuffix(8),
     db_password: randomPassword("db_"),
     db_root_password: randomPassword("root_"),
     admin_user: "factory_admin",
     admin_password: randomPassword("wp_"),
+    runtime: {
+      status: "not_provisioned",
+      provisioned_at: null,
+      wp_json_ok: false,
+      last_proof_id: null
+    },
     agent: {
       status: "not_installed",
       health: null,
@@ -90,12 +152,52 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
   };
 }
 
-function writeJsonFile(filePath, value) {
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2) + "\n", "utf8");
+function toStoredProject(project) {
+  return {
+    project_id: project.project_id,
+    site_name: project.site_name,
+    slug: project.slug,
+    runtime_path: project.runtime_path,
+    wp_url: project.wp_url,
+    wp_port: project.wp_port,
+    db_name: project.db_name,
+    admin_user: project.admin_user,
+    runtime: project.runtime || {
+      status: "not_provisioned",
+      provisioned_at: null,
+      wp_json_ok: false,
+      last_proof_id: null
+    },
+    agent: project.agent,
+    current_run_id: project.current_run_id,
+    dependency_state: project.dependency_state,
+    ai: project.ai,
+    usage: project.usage,
+    created_at: project.created_at,
+    updated_at: project.updated_at
+  };
 }
 
-function ensureDirectory(dirPath) {
-  fs.mkdirSync(dirPath, { recursive: true });
+function sanitizeProject(project) {
+  const stored = toStoredProject(project);
+  return {
+    project_id: stored.project_id,
+    site_name: stored.site_name,
+    slug: stored.slug,
+    runtime_path: stored.runtime_path,
+    wp_url: stored.wp_url,
+    wp_port: stored.wp_port,
+    db_name: stored.db_name,
+    admin_user: stored.admin_user,
+    runtime: stored.runtime,
+    agent: stored.agent,
+    current_run_id: stored.current_run_id,
+    dependency_state: stored.dependency_state,
+    ai: stored.ai,
+    usage: stored.usage,
+    created_at: stored.created_at,
+    updated_at: stored.updated_at
+  };
 }
 
 function createProjectScaffold(options) {
@@ -124,35 +226,18 @@ function createProjectScaffold(options) {
   }
 
   const project = createProjectRecord(siteName, slug, runtimePath, requestedPort);
-
-  ensureDirectory(runtimePath);
-  for (const subdirectory of PROJECT_SUBDIRECTORIES) {
-    ensureDirectory(path.join(runtimePath, subdirectory));
-  }
-
   const filesWritten = [
     path.join(runtimePath, "factory-project.json"),
     path.join(runtimePath, ".env"),
     path.join(runtimePath, "docker-compose.yml")
   ];
 
-  writeJsonFile(filesWritten[0], {
-    project_id: project.project_id,
-    site_name: project.site_name,
-    slug: project.slug,
-    runtime_path: project.runtime_path,
-    wp_url: project.wp_url,
-    wp_port: project.wp_port,
-    db_name: project.db_name,
-    admin_user: project.admin_user,
-    agent: project.agent,
-    current_run_id: project.current_run_id,
-    dependency_state: project.dependency_state,
-    ai: project.ai,
-    usage: project.usage,
-    created_at: project.created_at,
-    updated_at: project.updated_at
-  });
+  ensureDirectory(runtimePath);
+  for (const subdirectory of PROJECT_SUBDIRECTORIES) {
+    ensureDirectory(path.join(runtimePath, subdirectory));
+  }
+
+  writeJsonFile(filesWritten[0], toStoredProject(project));
   fs.writeFileSync(filesWritten[1], createEnvFile(project), "utf8");
   fs.writeFileSync(filesWritten[2], createDockerCompose(project), "utf8");
 
@@ -171,6 +256,14 @@ function readProjectRecord(runtimePath) {
 
   try {
     const data = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (!data.runtime) {
+      data.runtime = {
+        status: "not_provisioned",
+        provisioned_at: null,
+        wp_json_ok: false,
+        last_proof_id: null
+      };
+    }
     return sanitizeProject(data);
   } catch (error) {
     return {
@@ -182,45 +275,73 @@ function readProjectRecord(runtimePath) {
   }
 }
 
+function readProjectBySlug(slug, projectsRoot) {
+  const safeSlug = slugifyProjectName(slug);
+  if (!safeSlug) {
+    throw new Error("A valid project slug is required.");
+  }
+
+  const resolvedProjectsRoot = resolveProjectsRoot(projectsRoot);
+  const runtimePath = path.join(resolvedProjectsRoot, safeSlug);
+  const manifestPath = path.join(runtimePath, "factory-project.json");
+
+  assertSafeRuntimePath(runtimePath, resolvedProjectsRoot);
+
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error("Factory project not found: " + runtimePath);
+  }
+
+  const project = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (!project.runtime) {
+    project.runtime = {
+      status: "not_provisioned",
+      provisioned_at: null,
+      wp_json_ok: false,
+      last_proof_id: null
+    };
+  }
+
+  return {
+    project,
+    manifestPath,
+    runtimePath,
+    envPath: path.join(runtimePath, ".env"),
+    composePath: path.join(runtimePath, "docker-compose.yml"),
+    env: parseEnvFile(path.join(runtimePath, ".env"))
+  };
+}
+
+function saveProjectRecord(projectState, project) {
+  project.updated_at = timestampIso();
+  writeJsonFile(projectState.manifestPath, toStoredProject(project));
+}
+
 function listProjects(projectsRoot) {
   const resolvedRoot = resolveProjectsRoot(projectsRoot);
   if (!fs.existsSync(resolvedRoot)) {
     return [];
   }
 
-  const entries = fs.readdirSync(resolvedRoot, { withFileTypes: true });
-  return entries
+  return fs.readdirSync(resolvedRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => readProjectRecord(path.join(resolvedRoot, entry.name)))
     .filter(Boolean)
     .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")));
 }
 
-function sanitizeProject(project) {
-  return {
-    project_id: project.project_id,
-    site_name: project.site_name,
-    slug: project.slug,
-    runtime_path: project.runtime_path,
-    wp_url: project.wp_url,
-    wp_port: project.wp_port,
-    db_name: project.db_name,
-    admin_user: project.admin_user,
-    agent: project.agent,
-    current_run_id: project.current_run_id,
-    dependency_state: project.dependency_state,
-    ai: project.ai,
-    usage: project.usage,
-    created_at: project.created_at,
-    updated_at: project.updated_at
-  };
-}
-
 module.exports = {
+  BLOCKED_ROOTS,
   DEFAULT_PROJECTS_ROOT,
+  PROJECT_SUBDIRECTORIES,
+  assertSafeRuntimePath,
   createProjectScaffold,
+  ensureDirectory,
   ensureSafeProjectsRoot,
   listProjects,
+  parseEnvFile,
+  readProjectBySlug,
   resolveProjectsRoot,
-  slugifyProjectName
+  saveProjectRecord,
+  slugifyProjectName,
+  writeJsonFile
 };

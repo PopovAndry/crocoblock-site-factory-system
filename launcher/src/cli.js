@@ -7,6 +7,7 @@ const {
   listProjects,
   resolveProjectsRoot
 } = require("./project-store");
+const { provisionProject } = require("./provision");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -29,10 +30,7 @@ function parseArguments(argv) {
     index += 1;
   }
 
-  return {
-    command,
-    flags
-  };
+  return { command, flags };
 }
 
 function printUsage() {
@@ -42,7 +40,8 @@ function printUsage() {
     "Commands:",
     "  node launcher/src/cli.js start [--port 3847] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js create --name \"Kyiv Realty\" --port 8120 [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js list [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js list [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js provision --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -92,10 +91,32 @@ function runList(flags) {
       "- " + project.site_name,
       "  slug: " + project.slug,
       "  wp_port: " + String(project.wp_port),
+      "  runtime.status: " + String(project.runtime && project.runtime.status),
       "  agent.status: " + String(project.agent && project.agent.status),
       "  created_at: " + String(project.created_at)
     ].join("\n"));
   }
+}
+
+async function runProvision(flags) {
+  if (!flags.slug) {
+    throw new Error("Provision requires --slug <slug>.");
+  }
+
+  const result = await provisionProject({
+    slug: flags.slug,
+    projectsRoot: flags["projects-root"]
+  });
+
+  console.log("Provisioned WordPress runtime:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  Runtime path: " + result.safeRuntimePath);
+  console.log("  WordPress URL: " + result.project.wp_url);
+  console.log("  Root HTTP status: " + String(result.rootHttpStatus));
+  console.log("  /wp-json/ status: " + String(result.wpJsonStatus));
+  console.log("  Docker services started: " + result.proof.docker_services_started.join(", "));
+  console.log("  Proof file: " + result.proofPath);
 }
 
 async function main() {
@@ -110,6 +131,9 @@ async function main() {
       return;
     case "list":
       runList(parsed.flags);
+      return;
+    case "provision":
+      await runProvision(parsed.flags);
       return;
     default:
       printUsage();

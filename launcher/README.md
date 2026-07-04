@@ -14,6 +14,7 @@ node launcher/src/cli.js start
 node launcher/src/cli.js start --port 3847
 node launcher/src/cli.js create --name "Kyiv Realty" --port 8120
 node launcher/src/cli.js list
+node launcher/src/cli.js provision --slug kyiv-realty
 ```
 
 Optional flags:
@@ -25,18 +26,18 @@ What this does today:
 - writes `docker-compose.yml`
 - creates `runs`, `proofs`, `snapshots`, `logs`, and `exports` directories
 - serves a local UI at `127.0.0.1`
+- provisions Docker WordPress inside a launcher project runtime
+- verifies `/wp-json/`
+- writes provisioning proof JSON under `proofs/`
 
 What it does not do yet:
-- start Docker
-- install WordPress
 - install or pair the Site Factory Agent plugin
 - call WordPress
 - call OpenAI
 - generate a site
 
 Next milestones:
-1. provision Docker WordPress
-2. install Site Factory Agent
-3. pair Launcher with Agent
-4. run prompt to read-only plan
-5. run controlled generate to proof
+1. install Site Factory Agent
+2. pair Launcher with Agent
+3. run prompt to read-only plan
+4. run controlled generate to proof

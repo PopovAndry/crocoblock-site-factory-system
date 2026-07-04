@@ -71,7 +71,7 @@ function renderHomePage(config) {
     "      <div class=\"hero-row\">",
     "        <div>",
     "          <h1>Factory Launcher</h1>",
-    "          <p class=\"hero-copy\">Project scaffolding first. Provisioning, Agent pairing, planning, and proof come next.</p>",
+    "          <p class=\"hero-copy\">Project scaffolding and local WordPress provisioning live here. Agent pairing, planning, and proof come next.</p>",
     "        </div>",
     "        <div class=\"hero-status\">",
     "          <div><span>Runtime</span><strong>Not provisioned</strong></div>",
@@ -178,7 +178,7 @@ function createLauncherServer(options) {
         sendJson(response, 200, {
           ok: true,
           service: "factory-launcher",
-          mode: "alpha_scaffold_only",
+          mode: "alpha_scaffold_and_provisioning",
           host,
           port,
           projects_root: projectsRoot

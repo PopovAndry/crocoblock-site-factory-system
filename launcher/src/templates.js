@@ -15,23 +15,9 @@ function createEnvFile(project) {
   ].join("\n");
 }
 
-function createDockerCompose(project) {
+function createDockerCompose() {
   return [
     "services:",
-    "  wordpress:",
-    "    image: wordpress:php8.2-apache",
-    "    restart: unless-stopped",
-    "    depends_on:",
-    "      - mysql",
-    "    ports:",
-    "      - \"${WP_PORT}:80\"",
-    "    environment:",
-    "      WORDPRESS_DB_HOST: mysql:3306",
-    "      WORDPRESS_DB_NAME: ${DB_NAME}",
-    "      WORDPRESS_DB_USER: ${DB_USER}",
-    "      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}",
-    "    volumes:",
-    "      - ./wp:/var/www/html",
     "  mysql:",
     "    image: mysql:8.0",
     "    restart: unless-stopped",
@@ -43,12 +29,26 @@ function createDockerCompose(project) {
     "    command: --default-authentication-plugin=mysql_native_password",
     "    volumes:",
     "      - ./mysql:/var/lib/mysql",
+    "  wordpress:",
+    "    image: wordpress:php8.2-apache",
+    "    command: bash -lc \"sed -ri -e 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf && a2enmod rewrite >/dev/null 2>&1 && apache2-foreground\"",
+    "    restart: unless-stopped",
+    "    depends_on:",
+    "      - mysql",
+    "    ports:",
+    "      - \"${WP_PORT}:80\"",
+    "    environment:",
+    "      WORDPRESS_DB_HOST: mysql:3306",
+    "      WORDPRESS_DB_NAME: ${DB_NAME}",
+    "      WORDPRESS_DB_USER: ${DB_USER}",
+    "      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}",
+    "    volumes:",
+    "      - ./wordpress:/var/www/html",
     "  wpcli:",
     "    image: wordpress:cli-php8.2",
     "    depends_on:",
-    "      - wordpress",
     "      - mysql",
-    "    user: \"33:33\"",
+    "    user: \"0:0\"",
     "    working_dir: /var/www/html",
     "    environment:",
     "      WORDPRESS_DB_HOST: mysql:3306",
@@ -56,7 +56,7 @@ function createDockerCompose(project) {
     "      WORDPRESS_DB_USER: ${DB_USER}",
     "      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}",
     "    volumes:",
-    "      - ./wp:/var/www/html",
+    "      - ./wordpress:/var/www/html",
     ""
   ].join("\n");
 }

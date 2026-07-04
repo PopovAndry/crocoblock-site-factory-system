@@ -22,15 +22,17 @@
     }
 
     projectList.innerHTML = projects.map((project) => {
+      const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
       return [
         "<article class=\"project-card\">",
         "  <div class=\"project-card__header\">",
         "    <h3>" + escapeHtml(project.site_name) + "</h3>",
-        "    <span class=\"status-pill\">Runtime not provisioned</span>",
+        "    <span class=\"status-pill\">Runtime " + escapeHtml(runtimeStatus.replace(/_/g, " ")) + "</span>",
         "  </div>",
         "  <dl>",
         "    <div><dt>Slug</dt><dd>" + escapeHtml(project.slug) + "</dd></div>",
         "    <div><dt>WordPress URL</dt><dd>" + escapeHtml(project.wp_url) + "</dd></div>",
+        "    <div><dt>Runtime</dt><dd>" + escapeHtml(runtimeStatus) + "</dd></div>",
         "    <div><dt>Agent</dt><dd>" + escapeHtml(project.agent && project.agent.status || "unknown") + "</dd></div>",
         "    <div><dt>Created</dt><dd>" + escapeHtml(project.created_at || "") + "</dd></div>",
         "  </dl>",
