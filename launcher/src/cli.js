@@ -8,6 +8,7 @@ const {
   resolveProjectsRoot
 } = require("./project-store");
 const { provisionProject } = require("./provision");
+const { installAgent } = require("./install-agent");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -41,7 +42,8 @@ function printUsage() {
     "  node launcher/src/cli.js start [--port 3847] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js create --name \"Kyiv Realty\" --port 8120 [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js list [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js provision --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js provision --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js install-agent --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -119,6 +121,27 @@ async function runProvision(flags) {
   console.log("  Proof file: " + result.proofPath);
 }
 
+async function runInstallAgent(flags) {
+  if (!flags.slug) {
+    throw new Error("install-agent requires --slug <slug>.");
+  }
+
+  const result = await installAgent({
+    slug: flags.slug,
+    projectsRoot: flags["projects-root"]
+  });
+
+  console.log("Installed Site Factory Agent:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  WordPress URL: " + result.project.wp_url);
+  console.log("  Plugin active: true");
+  console.log("  REST base: " + result.restBase);
+  console.log("  Health status: " + String(result.health.status));
+  console.log("  Capabilities status: " + String(result.capabilities.status));
+  console.log("  Proof file: " + result.proofPath);
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -134,6 +157,9 @@ async function main() {
       return;
     case "provision":
       await runProvision(parsed.flags);
+      return;
+    case "install-agent":
+      await runInstallAgent(parsed.flags);
       return;
     default:
       printUsage();

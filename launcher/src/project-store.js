@@ -89,9 +89,13 @@ function writeJsonFile(filePath, value) {
 
 function parseEnvFile(filePath) {
   const content = fs.readFileSync(filePath, "utf8");
+  return parseEnvContent(content);
+}
+
+function parseEnvContent(content) {
   const result = {};
 
-  for (const rawLine of content.split(/\r?\n/)) {
+  for (const rawLine of String(content || "").split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) {
       continue;
@@ -108,6 +112,37 @@ function parseEnvFile(filePath) {
   }
 
   return result;
+}
+
+function serializeEnvFile(env) {
+  const orderedKeys = [
+    "PROJECT_SLUG",
+    "WP_PORT",
+    "DB_NAME",
+    "DB_USER",
+    "DB_PASSWORD",
+    "DB_ROOT_PASSWORD",
+    "WP_ADMIN_USER",
+    "WP_ADMIN_PASSWORD",
+    "WP_APP_PASSWORD_NAME",
+    "WP_APP_PASSWORD"
+  ];
+  const remainingKeys = Object.keys(env).filter((key) => !orderedKeys.includes(key)).sort();
+  const lines = ["# Alpha local runtime credentials. Do not use for production."];
+
+  for (const key of orderedKeys.concat(remainingKeys)) {
+    if (!Object.prototype.hasOwnProperty.call(env, key)) {
+      continue;
+    }
+    lines.push(key + "=" + String(env[key]));
+  }
+
+  lines.push("");
+  return lines.join("\n");
+}
+
+function writeEnvFile(filePath, env) {
+  fs.writeFileSync(filePath, serializeEnvFile(env), "utf8");
 }
 
 function createProjectRecord(siteName, slug, runtimePath, wpPort) {
@@ -130,7 +165,8 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
       status: "not_provisioned",
       provisioned_at: null,
       wp_json_ok: false,
-      last_proof_id: null
+      last_proof_id: null,
+      last_agent_proof_id: null
     },
     agent: {
       status: "not_installed",
@@ -166,7 +202,8 @@ function toStoredProject(project) {
       status: "not_provisioned",
       provisioned_at: null,
       wp_json_ok: false,
-      last_proof_id: null
+      last_proof_id: null,
+      last_agent_proof_id: null
     },
     agent: project.agent,
     current_run_id: project.current_run_id,
@@ -238,7 +275,7 @@ function createProjectScaffold(options) {
   }
 
   writeJsonFile(filesWritten[0], toStoredProject(project));
-  fs.writeFileSync(filesWritten[1], createEnvFile(project), "utf8");
+  writeEnvFile(filesWritten[1], parseEnvContent(createEnvFile(project)));
   fs.writeFileSync(filesWritten[2], createDockerCompose(project), "utf8");
 
   return {
@@ -261,7 +298,8 @@ function readProjectRecord(runtimePath) {
         status: "not_provisioned",
         provisioned_at: null,
         wp_json_ok: false,
-        last_proof_id: null
+        last_proof_id: null,
+        last_agent_proof_id: null
       };
     }
     return sanitizeProject(data);
@@ -297,7 +335,8 @@ function readProjectBySlug(slug, projectsRoot) {
       status: "not_provisioned",
       provisioned_at: null,
       wp_json_ok: false,
-      last_proof_id: null
+      last_proof_id: null,
+      last_agent_proof_id: null
     };
   }
 
@@ -339,6 +378,7 @@ module.exports = {
   ensureSafeProjectsRoot,
   listProjects,
   parseEnvFile,
+  writeEnvFile,
   readProjectBySlug,
   resolveProjectsRoot,
   saveProjectRecord,
