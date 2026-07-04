@@ -11,6 +11,7 @@ const { provisionProject } = require("./provision");
 const { installAgent } = require("./install-agent");
 const { planProject } = require("./plan");
 const { readDependencies } = require("./dependencies");
+const { installDependency } = require("./install-dependency");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -47,7 +48,8 @@ function printUsage() {
     "  node launcher/src/cli.js provision --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js install-agent --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js plan --slug kyiv-realty --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js dependencies --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js dependencies --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js install-dependency --slug kyiv-realty --dependency jet-engine --zip \"C:\\sf-vendor\\jet-engine.zip\" [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -193,6 +195,39 @@ async function runDependencies(flags) {
   console.log("  Proof file: " + result.proofPath);
 }
 
+async function runInstallDependency(flags) {
+  if (!flags.slug) {
+    throw new Error("install-dependency requires --slug <slug>.");
+  }
+
+  if (!flags.dependency) {
+    throw new Error("install-dependency requires --dependency <dependency-slug>.");
+  }
+
+  if (!flags.zip) {
+    throw new Error("install-dependency requires --zip \"<absolute-zip-path>\".");
+  }
+
+  const result = await installDependency({
+    slug: flags.slug,
+    dependency: flags.dependency,
+    zip: flags.zip,
+    projectsRoot: flags["projects-root"]
+  });
+
+  console.log("Installed dependency from local ZIP:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  Dependency: " + result.dependency.slug);
+  console.log("  ZIP source: " + result.proof.zip_source_path);
+  console.log("  ZIP copied: " + result.proof.zip_copied_path);
+  console.log("  Installed: " + String(result.proof.installed));
+  console.log("  Active: " + String(result.proof.active));
+  console.log("  Can generate after: " + String(result.proof.can_generate_after));
+  console.log("  Blockers after: " + (result.proof.blockers_after.length ? result.proof.blockers_after.join(" | ") : "None"));
+  console.log("  Proof file: " + result.proofPath);
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -217,6 +252,9 @@ async function main() {
       return;
     case "dependencies":
       await runDependencies(parsed.flags);
+      return;
+    case "install-dependency":
+      await runInstallDependency(parsed.flags);
       return;
     default:
       printUsage();

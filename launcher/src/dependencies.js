@@ -60,6 +60,43 @@ function summarizeDependencies(payload) {
   };
 }
 
+function buildDependencyStateRecord(payload, summary, proofId, createdAt) {
+  return {
+    status: String(payload.status || "ok"),
+    code: String(payload.code || "dependencies_ready"),
+    site_type: summary.site_type,
+    blockers: summary.blockers,
+    can_generate: summary.can_generate,
+    legal_handoff_required: summary.legal_handoff_required,
+    dependencies: summary.dependencies,
+    last_proof_id: proofId,
+    checked_at: createdAt,
+    next_action: summary.blockers.length
+      ? "Install required dependencies via official/manual flow"
+      : "Dependencies ready for future generate gate"
+  };
+}
+
+async function fetchDependencyStatus(projectState, warnings) {
+  const restBase = String(projectState.project.agent && projectState.project.agent.rest_base || "");
+  if (!restBase) {
+    throw new Error("Launcher project is missing agent.rest_base.");
+  }
+
+  await waitForUrl(projectState.project.wp_url);
+
+  const response = await getAgentJson(projectState, restBase + "/agent/dependencies", warnings);
+  const payload = response.json || {};
+  const summary = summarizeDependencies(payload);
+
+  return {
+    restBase,
+    response,
+    payload,
+    summary
+  };
+}
+
 async function readDependencies(options) {
   const projectsRoot = resolveProjectsRoot(options.projectsRoot);
   const projectState = readProjectBySlug(options.slug, projectsRoot);
@@ -76,16 +113,9 @@ async function readDependencies(options) {
     throw new Error("Site Factory Agent must be installed before dependency checks.");
   }
 
-  const restBase = String(projectState.project.agent && projectState.project.agent.rest_base || "");
-  if (!restBase) {
-    throw new Error("Launcher project is missing agent.rest_base.");
-  }
-
-  await waitForUrl(projectState.project.wp_url);
-
-  const response = await getAgentJson(projectState, restBase + "/agent/dependencies", warnings);
-  const payload = response.json || {};
-  const summary = summarizeDependencies(payload);
+  const dependencyStatus = await fetchDependencyStatus(projectState, warnings);
+  const payload = dependencyStatus.payload;
+  const summary = dependencyStatus.summary;
   const proof = {
     proof_id: proofId,
     project_id: projectState.project.project_id,
@@ -104,20 +134,7 @@ async function readDependencies(options) {
 
   writeJsonFile(proofPath, proof);
 
-  projectState.project.dependency_state = {
-    status: String(payload.status || "ok"),
-    code: String(payload.code || "dependencies_ready"),
-    site_type: summary.site_type,
-    blockers: summary.blockers,
-    can_generate: summary.can_generate,
-    legal_handoff_required: summary.legal_handoff_required,
-    dependencies: summary.dependencies,
-    last_proof_id: proofId,
-    checked_at: createdAt,
-    next_action: summary.blockers.length
-      ? "Install required dependencies via official/manual flow"
-      : "Dependencies ready for future generate gate"
-  };
+  projectState.project.dependency_state = buildDependencyStateRecord(payload, summary, proofId, createdAt);
   saveProjectRecord(projectState, projectState.project);
 
   return {
@@ -130,5 +147,7 @@ async function readDependencies(options) {
 }
 
 module.exports = {
+  buildDependencyStateRecord,
+  fetchDependencyStatus,
   readDependencies
 };
