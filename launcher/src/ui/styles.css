@@ -150,7 +150,9 @@ body {
   font-weight: 600;
 }
 
-.project-form input {
+.project-form input,
+.project-form select,
+.project-form textarea {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--border);
@@ -158,6 +160,11 @@ body {
   background: #fff;
   color: var(--text);
   font: inherit;
+}
+
+.project-form textarea {
+  resize: vertical;
+  min-height: 132px;
 }
 
 .button {

@@ -10,6 +10,7 @@ const {
   listProjects,
   resolveProjectsRoot
 } = require("./project-store");
+const { planProject } = require("./plan");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -71,18 +72,18 @@ function renderHomePage(config) {
     "      <div class=\"hero-row\">",
     "        <div>",
     "          <h1>Factory Launcher</h1>",
-    "          <p class=\"hero-copy\">Project scaffolding and local WordPress provisioning live here. Agent pairing, planning, and proof come next.</p>",
+    "          <p class=\"hero-copy\">Project scaffolding, local WordPress provisioning, Agent pairing, and read-only planning live here. Controlled generate still stays off in this slice.</p>",
     "        </div>",
     "        <div class=\"hero-status\">",
     "          <div><span>Runtime</span><strong>Not provisioned</strong></div>",
-    "          <div><span>Agent</span><strong>Not paired</strong></div>",
-    "          <div><span>AI</span><strong>Placeholder only</strong></div>",
+    "          <div><span>Agent</span><strong>Paired per project</strong></div>",
+    "          <div><span>AI</span><strong>Read-only planning</strong></div>",
     "        </div>",
     "      </div>",
     "    </header>",
     "    <section class=\"milestone-card\">",
     "      <h2>Next milestone</h2>",
-    "      <p>Provision WordPress</p>",
+    "      <p>Controlled generate and proof</p>",
     "      <button type=\"button\" class=\"button button-disabled\" disabled>Generate disabled</button>",
     "    </section>",
     "    <section class=\"panel-grid\">",
@@ -116,6 +117,33 @@ function renderHomePage(config) {
     "        <div id=\"project-list\" class=\"project-list\"></div>",
     "      </section>",
     "    </section>",
+    "    <section class=\"panel-grid\">",
+    "      <section class=\"panel\">",
+    "        <div class=\"panel-header\">",
+    "          <h2>Read-only planning</h2>",
+    "          <p>Send a prompt to the paired Site Factory Agent and capture plan proof without mutating WordPress.</p>",
+    "        </div>",
+    "        <form id=\"plan-project-form\" class=\"project-form\">",
+    "          <label>",
+    "            <span>Project</span>",
+    "            <select name=\"slug\" id=\"plan-project-slug\"></select>",
+    "          </label>",
+    "          <label>",
+    "            <span>Prompt</span>",
+    "            <textarea name=\"prompt\" rows=\"5\" required placeholder=\"Create a real estate site for Kyiv apartments\"></textarea>",
+    "          </label>",
+    "          <button type=\"submit\" class=\"button\">Run read-only plan</button>",
+    "        </form>",
+    "        <div id=\"plan-result\" class=\"result-box\" hidden></div>",
+    "      </section>",
+    "      <section class=\"panel\">",
+    "        <div class=\"panel-header\">",
+    "          <h2>Latest run</h2>",
+    "          <p>Launcher-only run metadata and stage summaries.</p>",
+    "        </div>",
+    "        <div id=\"latest-run\" class=\"project-list\"></div>",
+    "      </section>",
+    "    </section>",
     "    <section class=\"panel single-panel\">",
     "      <div class=\"panel-header\">",
     "        <h2>AI / model / tokens</h2>",
@@ -124,8 +152,8 @@ function renderHomePage(config) {
     "      <div class=\"placeholder-grid\">",
     "        <div><span>Provider</span><strong>Not configured here yet</strong></div>",
     "        <div><span>Model profile</span><strong>Balanced</strong></div>",
-    "        <div><span>Total tokens</span><strong>0</strong></div>",
-    "      </div>",
+    "        <div><span>Total tokens</span><strong id=\"launcher-total-tokens\">0</strong></div>",
+      "      </div>",
     "    </section>",
     "  </main>",
     "  <script>window.FactoryLauncherConfig = " + JSON.stringify({
@@ -214,9 +242,31 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await planProject({
+          slug,
+          prompt: payload.prompt,
+          projectsRoot: payload.projectsRoot || projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          status: result.run.status,
+          run: result.run,
+          proof: result.proof,
+          run_path: result.runPath,
+          proof_path: result.proofPath,
+          project: result.project
+        });
+        return;
+      }
+
       sendText(response, 404, "Not found");
     } catch (error) {
-      const statusCode = request.method === "POST" && requestUrl.pathname === "/api/projects" ? 400 : 500;
+      const statusCode = request.method === "POST" && (requestUrl.pathname === "/api/projects" || /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname)) ? 400 : 500;
       sendJson(response, statusCode, {
         ok: false,
         error: error.message

@@ -3,7 +3,6 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const http = require("http");
 const {
   assertSafeRuntimePath,
   ensureDirectory,
@@ -14,88 +13,24 @@ const {
   writeJsonFile
 } = require("./project-store");
 const { runCommand } = require("./runtime-tools");
+const {
+  fetchJsonWithBasicAuth,
+  fetchJsonWithCookie,
+  requestJson,
+  waitForUrl
+} = require("./agent-client");
 
 const PLUGIN_SLUG = "crocoblock-site-factory";
 const APP_PASSWORD_NAME = "Factory Launcher";
 const DOCKER_TIMEOUT_MS = 120000;
-const HTTP_WAIT_TIMEOUT_MS = 120000;
-const HTTP_WAIT_INTERVAL_MS = 3000;
-
 function timestampCompact() {
   return new Date().toISOString().replace(/[:.]/g, "-");
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getPluginSourcePath() {
   return path.resolve(__dirname, "..", "..", "wordpress-plugin");
 }
 
-function requestJson(targetUrl, options) {
-  return new Promise((resolve, reject) => {
-    const request = http.request(targetUrl, {
-      method: options && options.method ? options.method : "GET",
-      headers: options && options.headers ? options.headers : {}
-    }, (response) => {
-      const chunks = [];
-      response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => {
-        const body = Buffer.concat(chunks).toString("utf8");
-        let parsed = null;
-
-        try {
-          parsed = body ? JSON.parse(body) : null;
-        } catch (error) {
-          parsed = null;
-        }
-
-        resolve({
-          statusCode: response.statusCode || 0,
-          body,
-          json: parsed,
-          headers: response.headers
-        });
-      });
-    });
-
-    request.setTimeout(10000, () => {
-      request.destroy(new Error("HTTP request timed out: " + targetUrl));
-    });
-
-    request.on("error", reject);
-    if (options && options.body) {
-      request.write(options.body);
-    }
-    request.end();
-  });
-}
-
-async function waitForUrl(targetUrl) {
-  const deadline = Date.now() + HTTP_WAIT_TIMEOUT_MS;
-  let lastError = "HTTP readiness check did not start.";
-
-  while (Date.now() < deadline) {
-    try {
-      const response = await requestJson(targetUrl);
-      if (response.statusCode >= 200 && response.statusCode < 500) {
-        return response;
-      }
-      lastError = "HTTP " + String(response.statusCode) + " from " + targetUrl;
-    } catch (error) {
-      lastError = error.message;
-    }
-
-    await delay(HTTP_WAIT_INTERVAL_MS);
-  }
-
-  throw new Error("Timed out waiting for " + targetUrl + ". Last error: " + lastError);
-}
-
-function createBasicAuthHeader(username, password) {
-  return "Basic " + Buffer.from(String(username) + ":" + String(password), "utf8").toString("base64");
-}
 
 function getPluginDestinationPath(projectState) {
   return path.join(projectState.runtimePath, "wordpress", "wp-content", "plugins", PLUGIN_SLUG);
@@ -192,20 +127,6 @@ async function ensureAgentApplicationPassword(projectState, proofStem, warnings)
   };
 }
 
-async function fetchAgentEndpointJson(targetUrl, username, password) {
-  const response = await requestJson(targetUrl, {
-    headers: {
-      Authorization: createBasicAuthHeader(username, password)
-    }
-  });
-
-  if (response.statusCode !== 200 || !response.json) {
-    throw new Error("Agent endpoint request failed: " + targetUrl + " (HTTP " + String(response.statusCode) + ")");
-  }
-
-  return response.json;
-}
-
 async function loginWithAdminCookie(projectState) {
   const body = [
     "log=" + encodeURIComponent(projectState.env.WP_ADMIN_USER),
@@ -256,21 +177,6 @@ async function createRestNonce(projectState, proofStem) {
   }
 
   return nonce;
-}
-
-async function fetchAgentEndpointJsonWithCookie(targetUrl, cookieHeader, restNonce) {
-  const response = await requestJson(targetUrl, {
-    headers: {
-      "Cookie": cookieHeader,
-      "X-WP-Nonce": restNonce
-    }
-  });
-
-  if (response.statusCode !== 200 || !response.json) {
-    throw new Error("Agent endpoint request failed: " + targetUrl + " (HTTP " + String(response.statusCode) + ")");
-  }
-
-  return response.json;
 }
 
 async function installAgent(options) {
@@ -324,14 +230,14 @@ async function installAgent(options) {
 
   try {
     const auth = await ensureAgentApplicationPassword(projectState, proofId, warnings);
-    health = await fetchAgentEndpointJson(restBase + "/agent/health", auth.username, auth.password);
-    capabilities = await fetchAgentEndpointJson(restBase + "/agent/capabilities", auth.username, auth.password);
+    health = (await fetchJsonWithBasicAuth(restBase + "/agent/health", auth.username, auth.password)).json;
+    capabilities = (await fetchJsonWithBasicAuth(restBase + "/agent/capabilities", auth.username, auth.password)).json;
   } catch (error) {
     const cookieHeader = await loginWithAdminCookie(projectState);
     const restNonce = await createRestNonce(projectState, proofId);
     warnings.push("Agent endpoint auth fell back to admin cookie context.");
-    health = await fetchAgentEndpointJsonWithCookie(restBase + "/agent/health", cookieHeader, restNonce);
-    capabilities = await fetchAgentEndpointJsonWithCookie(restBase + "/agent/capabilities", cookieHeader, restNonce);
+    health = (await fetchJsonWithCookie(restBase + "/agent/health", cookieHeader, restNonce)).json;
+    capabilities = (await fetchJsonWithCookie(restBase + "/agent/capabilities", cookieHeader, restNonce)).json;
   }
 
   const proof = {
@@ -400,5 +306,8 @@ async function installAgent(options) {
 }
 
 module.exports = {
-  installAgent
+  installAgent,
+  createRestNonce,
+  ensureAgentApplicationPassword,
+  loginWithAdminCookie
 };

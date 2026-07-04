@@ -16,6 +16,7 @@ node launcher/src/cli.js create --name "Kyiv Realty" --port 8120
 node launcher/src/cli.js list
 node launcher/src/cli.js provision --slug kyiv-realty
 node launcher/src/cli.js install-agent --slug kyiv-realty
+node launcher/src/cli.js plan --slug kyiv-realty --prompt "Create a real estate site for Kyiv apartments"
 ```
 
 Optional flags:
@@ -33,12 +34,15 @@ What this does today:
 - installs and activates the local Site Factory Agent plugin
 - reads Agent health and capabilities
 - writes Agent install proof JSON under `proofs/`
+- runs the read-only Agent planning chain
+- writes Launcher run metadata under `runs/`
+- writes read-only planning proof JSON under `proofs/`
 
 What it does not do yet:
-- call WordPress
 - call OpenAI
 - generate a site
+- mutate WordPress content during planning
 
 Next milestones:
-1. run prompt to read-only plan
-2. run controlled generate to proof
+1. run controlled generate to proof
+2. track iterative runs and rollback
