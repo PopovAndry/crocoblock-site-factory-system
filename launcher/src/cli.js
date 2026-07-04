@@ -13,6 +13,7 @@ const { planProject } = require("./plan");
 const { readDependencies } = require("./dependencies");
 const { installDependency } = require("./install-dependency");
 const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
+const { generateProject } = require("./generate");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -56,7 +57,8 @@ function printUsage() {
     "  node launcher/src/cli.js ai --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --mode mock --model-profile balanced [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --provider openai --model-profile balanced --key-env FACTORY_OPENAI_API_KEY [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js ai --slug kyiv-realty estimate --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js ai --slug kyiv-realty estimate --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js generate --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -326,6 +328,30 @@ async function runAi(parsed) {
   }
 }
 
+async function runGenerate(flags) {
+  if (!flags.slug) {
+    throw new Error("generate requires --slug <slug>.");
+  }
+
+  const result = await generateProject({
+    slug: flags.slug,
+    projectsRoot: flags["projects-root"]
+  });
+
+  console.log("Completed controlled generate:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  WordPress URL: " + result.project.wp_url);
+  console.log("  Status: " + String(result.executeData.status || "unknown"));
+  console.log("  Code: " + String(result.executeData.code || "unknown"));
+  console.log("  Applies changes: " + String(result.proof.applies_changes));
+  console.log("  Mutation status: " + String(result.proof.mutation_status || "unknown"));
+  console.log("  Proof file: " + result.proofPath);
+  console.log("  Home: " + String(result.generatedUrls.home || result.generatedUrls.root || result.project.wp_url));
+  console.log("  Properties: " + String(result.generatedUrls.properties || "Unavailable"));
+  console.log("  Contact: " + String(result.generatedUrls.contact || "Unavailable"));
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -356,6 +382,9 @@ async function main() {
       return;
     case "ai":
       await runAi(parsed);
+      return;
+    case "generate":
+      await runGenerate(parsed.flags);
       return;
     default:
       printUsage();

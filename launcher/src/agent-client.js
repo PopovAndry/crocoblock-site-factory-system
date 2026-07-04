@@ -29,7 +29,7 @@ function requestJson(targetUrl, options) {
       });
     });
 
-    request.setTimeout(10000, () => {
+    request.setTimeout(options && options.timeoutMs ? options.timeoutMs : 10000, () => {
       request.destroy(new Error("HTTP request timed out: " + targetUrl));
     });
 

@@ -96,6 +96,22 @@ function defaultAiMetadata() {
   };
 }
 
+function defaultGenerationMetadata() {
+  return {
+    status: "not_generated",
+    last_generate_run_id: null,
+    last_proof_id: null,
+    generated_at: null
+  };
+}
+
+function defaultGeneratedSiteMetadata() {
+  return {
+    present: false,
+    urls: {}
+  };
+}
+
 function ensureDirectory(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -193,6 +209,8 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
     current_run_id: null,
     dependency_state: null,
     ai: defaultAiMetadata(),
+    generation: defaultGenerationMetadata(),
+    generated_site: defaultGeneratedSiteMetadata(),
     usage: {
       total_tokens: 0,
       total_cost_estimate: null
@@ -223,6 +241,8 @@ function toStoredProject(project) {
     current_run_id: project.current_run_id,
     dependency_state: project.dependency_state,
     ai: Object.assign(defaultAiMetadata(), project.ai || {}),
+    generation: Object.assign(defaultGenerationMetadata(), project.generation || {}),
+    generated_site: Object.assign(defaultGeneratedSiteMetadata(), project.generated_site || {}),
     usage: project.usage,
     created_at: project.created_at,
     updated_at: project.updated_at
@@ -245,6 +265,8 @@ function sanitizeProject(project) {
     current_run_id: stored.current_run_id,
     dependency_state: stored.dependency_state,
     ai: Object.assign(defaultAiMetadata(), stored.ai || {}),
+    generation: Object.assign(defaultGenerationMetadata(), stored.generation || {}),
+    generated_site: Object.assign(defaultGeneratedSiteMetadata(), stored.generated_site || {}),
     usage: stored.usage,
     created_at: stored.created_at,
     updated_at: stored.updated_at
@@ -317,6 +339,8 @@ function readProjectRecord(runtimePath) {
       };
     }
     data.ai = Object.assign(defaultAiMetadata(), data.ai || {});
+    data.generation = Object.assign(defaultGenerationMetadata(), data.generation || {});
+    data.generated_site = Object.assign(defaultGeneratedSiteMetadata(), data.generated_site || {});
     return sanitizeProject(data);
   } catch (error) {
     return {
@@ -355,6 +379,8 @@ function readProjectBySlug(slug, projectsRoot) {
     };
   }
   project.ai = Object.assign(defaultAiMetadata(), project.ai || {});
+  project.generation = Object.assign(defaultGenerationMetadata(), project.generation || {});
+  project.generated_site = Object.assign(defaultGeneratedSiteMetadata(), project.generated_site || {});
 
   return {
     project,
@@ -400,5 +426,7 @@ module.exports = {
   saveProjectRecord,
   slugifyProjectName,
   defaultAiMetadata,
+  defaultGeneratedSiteMetadata,
+  defaultGenerationMetadata,
   writeJsonFile
 };

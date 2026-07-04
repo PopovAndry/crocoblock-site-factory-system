@@ -12,6 +12,7 @@ const {
 } = require("./project-store");
 const { planProject } = require("./plan");
 const { configureAi, estimateAi, getAiStatus } = require("./ai");
+const { generateProject } = require("./generate");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -73,7 +74,7 @@ function renderHomePage(config) {
     "      <div class=\"hero-row\">",
     "        <div>",
     "          <h1>Factory Launcher</h1>",
-    "          <p class=\"hero-copy\">Project scaffolding, local WordPress provisioning, Agent pairing, and read-only planning live here. Controlled generate still stays off in this slice.</p>",
+    "          <p class=\"hero-copy\">Project scaffolding, local WordPress provisioning, Agent pairing, read-only planning, and controlled generate all run here from the launcher.</p>",
     "        </div>",
     "        <div class=\"hero-status\">",
     "          <div><span>Runtime</span><strong>Not provisioned</strong></div>",
@@ -85,7 +86,7 @@ function renderHomePage(config) {
     "    <section class=\"milestone-card\">",
     "      <h2>Next milestone</h2>",
     "      <p>Controlled generate and proof</p>",
-    "      <button type=\"button\" class=\"button button-disabled\" disabled>Generate disabled</button>",
+    "      <button type=\"button\" class=\"button\" id=\"launcher-milestone-generate\" disabled>Generate from launcher</button>",
     "    </section>",
     "    <section class=\"panel-grid\">",
     "      <section class=\"panel\">",
@@ -159,6 +160,29 @@ function renderHomePage(config) {
     "        <div><span>Total tokens</span><strong id=\"launcher-total-tokens\">0</strong></div>",
     "      </div>",
     "      <p class=\"project-note\">Live AI calls are disabled in this alpha slice.</p>",
+    "    </section>",
+    "    <section class=\"panel-grid\">",
+    "      <section class=\"panel\">",
+    "        <div class=\"panel-header\">",
+    "          <h2>Controlled generate</h2>",
+    "          <p>Runs the paired Agent controlled-generate contract only after launcher-side and server-side checks pass.</p>",
+    "        </div>",
+    "        <form id=\"generate-project-form\" class=\"project-form\">",
+    "          <label>",
+    "            <span>Project</span>",
+    "            <select name=\"slug\" id=\"generate-project-slug\"></select>",
+    "          </label>",
+    "          <button type=\"submit\" class=\"button\">Run controlled generate</button>",
+    "        </form>",
+    "        <div id=\"generate-result\" class=\"result-box\" hidden></div>",
+    "      </section>",
+    "      <section class=\"panel\">",
+    "        <div class=\"panel-header\">",
+    "          <h2>Latest generate</h2>",
+    "          <p>Launcher proof and generated site links.</p>",
+    "        </div>",
+    "        <div id=\"latest-generate\" class=\"project-list\"></div>",
+    "      </section>",
     "    </section>",
     "  </main>",
     "  <script>window.FactoryLauncherConfig = " + JSON.stringify({
@@ -269,6 +293,28 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await generateProject({
+          slug,
+          projectsRoot: payload.projectsRoot || projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          status: result.executeData.status,
+          code: result.executeData.code,
+          proof: result.proof,
+          proof_path: result.proofPath,
+          project: result.project,
+          generated_urls: result.generatedUrls,
+          url_status: result.urlStatus
+        });
+        return;
+      }
+
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/ai$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = getAiStatus({
@@ -334,6 +380,7 @@ function createLauncherServer(options) {
       const statusCode = request.method === "POST" && (
         requestUrl.pathname === "/api/projects" ||
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500;

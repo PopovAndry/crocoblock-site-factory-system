@@ -9,6 +9,11 @@
   const planProjectSlug = document.getElementById("plan-project-slug");
   const planResult = document.getElementById("plan-result");
   const latestRun = document.getElementById("latest-run");
+  const generateForm = document.getElementById("generate-project-form");
+  const generateProjectSlug = document.getElementById("generate-project-slug");
+  const generateResult = document.getElementById("generate-result");
+  const latestGenerate = document.getElementById("latest-generate");
+  const milestoneGenerate = document.getElementById("launcher-milestone-generate");
   const totalTokens = document.getElementById("launcher-total-tokens");
   const aiMode = document.getElementById("launcher-ai-mode");
   const aiProvider = document.getElementById("launcher-ai-provider");
@@ -30,7 +35,11 @@
       projectList.innerHTML = "<p class=\"empty-state\">No projects yet. Create the first scaffold to prepare a runtime folder.</p>";
       planProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
       planProjectSlug.disabled = true;
+      generateProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
+      generateProjectSlug.disabled = true;
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
+      latestGenerate.innerHTML = "<p class=\"empty-state\">No controlled generate proof yet.</p>";
+      milestoneGenerate.disabled = true;
       totalTokens.textContent = "0";
       aiMode.textContent = "mock";
       aiProvider.textContent = "mock";
@@ -41,9 +50,11 @@
     }
 
     planProjectSlug.disabled = false;
+    generateProjectSlug.disabled = false;
     planProjectSlug.innerHTML = projects.map((project) => {
       return "<option value=\"" + escapeHtml(project.slug) + "\">" + escapeHtml(project.site_name + " (" + project.slug + ")") + "</option>";
     }).join("");
+    generateProjectSlug.innerHTML = planProjectSlug.innerHTML;
 
     totalTokens.textContent = String(projects.reduce((sum, project) => {
       const usage = project.usage && Number(project.usage.total_tokens || 0);
@@ -60,10 +71,13 @@
     aiLastEstimate.textContent = selectedEstimate
       ? String(selectedEstimate.estimated_total_tokens || selectedEstimate.total || 0) + " tokens"
       : "Not recorded";
+    milestoneGenerate.disabled = !(selectedProject.dependency_state && selectedProject.dependency_state.can_generate && selectedProject.current_run_id);
 
     projectList.innerHTML = projects.map((project) => {
       const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
       const dependencyState = project.dependency_state || null;
+      const generationState = project.generation || null;
+      const generatedSite = project.generated_site || null;
       const blockerSummary = dependencyState && Array.isArray(dependencyState.blockers) && dependencyState.blockers.length
         ? dependencyState.blockers.join(" | ")
         : "Not checked yet";
@@ -79,10 +93,12 @@
         "    <div><dt>Runtime</dt><dd>" + escapeHtml(runtimeStatus) + "</dd></div>",
         "    <div><dt>Agent</dt><dd>" + escapeHtml(project.agent && project.agent.status || "unknown") + "</dd></div>",
         "    <div><dt>Dependencies</dt><dd>" + escapeHtml(dependencyState ? (dependencyState.can_generate ? "ready" : "blocked") : "unknown") + "</dd></div>",
+        "    <div><dt>Generate</dt><dd>" + escapeHtml(generationState && generationState.status || "not_generated") + "</dd></div>",
         "    <div><dt>Blockers</dt><dd>" + escapeHtml(blockerSummary) + "</dd></div>",
         "    <div><dt>Created</dt><dd>" + escapeHtml(project.created_at || "") + "</dd></div>",
         "  </dl>",
         dependencyState ? "  <p class=\"project-note\">" + escapeHtml(dependencyState.next_action || "") + "</p>" : "",
+        generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home ? "  <p class=\"project-note\">Open site: <a href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Home</a></p>" : "",
         "</article>"
       ].join("\n");
     }).join("\n");
@@ -108,6 +124,31 @@
       "    <div><dt>Last run</dt><dd>" + escapeHtml(latestProject.current_run_id) + "</dd></div>",
       "    <div><dt>Model</dt><dd>" + escapeHtml(latestProject.ai && latestProject.ai.model_profile || "balanced") + "</dd></div>",
       "    <div><dt>Estimate</dt><dd>" + escapeHtml(estimate ? String(estimate.total) + " tokens" : "Not recorded") + "</dd></div>",
+      "  </dl>",
+      "</article>"
+    ].join("\n");
+
+    const latestGeneratedProject = projects
+      .filter((project) => project.generation && project.generation.last_proof_id)
+      .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")))[0];
+
+    if (!latestGeneratedProject) {
+      latestGenerate.innerHTML = "<p class=\"empty-state\">No controlled generate proof yet.</p>";
+      return;
+    }
+
+    const generatedUrls = latestGeneratedProject.generated_site && latestGeneratedProject.generated_site.urls ? latestGeneratedProject.generated_site.urls : {};
+    latestGenerate.innerHTML = [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(latestGeneratedProject.site_name) + "</h3>",
+      "    <span class=\"status-pill\">Generate " + escapeHtml(latestGeneratedProject.generation.status || "unknown") + "</span>",
+      "  </div>",
+      "  <dl>",
+      "    <div><dt>Proof</dt><dd>" + escapeHtml(latestGeneratedProject.generation.last_proof_id || "unknown") + "</dd></div>",
+      "    <div><dt>Home</dt><dd>" + escapeHtml(generatedUrls.home || generatedUrls.root || "Unavailable") + "</dd></div>",
+      "    <div><dt>Properties</dt><dd>" + escapeHtml(generatedUrls.properties || "Unavailable") + "</dd></div>",
+      "    <div><dt>Contact</dt><dd>" + escapeHtml(generatedUrls.contact || "Unavailable") + "</dd></div>",
       "  </dl>",
       "</article>"
     ].join("\n");
@@ -151,6 +192,21 @@
     ].join("");
   }
 
+  function renderGenerateResult(result) {
+    const urls = result.generated_urls || {};
+    generateResult.hidden = false;
+    generateResult.className = "result-box result-box-success";
+    generateResult.innerHTML = [
+      "<strong>Controlled generate completed.</strong>",
+      "<p><span>Status:</span> " + escapeHtml(result.status || "unknown") + "</p>",
+      "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
+      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path) + "</p>",
+      "<p><span>Home:</span> " + escapeHtml(urls.home || urls.root || result.project.wp_url) + "</p>",
+      "<p><span>Properties:</span> " + escapeHtml(urls.properties || "Unavailable") + "</p>",
+      "<p><span>Contact:</span> " + escapeHtml(urls.contact || "Unavailable") + "</p>"
+    ].join("");
+  }
+
   async function loadProjects() {
     const response = await fetch("/api/projects");
     const payload = await response.json();
@@ -158,6 +214,11 @@
   }
 
   planProjectSlug.addEventListener("change", () => {
+    loadProjects().catch((error) => {
+      showResult(createResult, { error: error.message }, true);
+    });
+  });
+  generateProjectSlug.addEventListener("change", () => {
     loadProjects().catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
@@ -219,6 +280,32 @@
     }
 
     renderPlanResult(result);
+    await loadProjects();
+  });
+
+  generateForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const formData = new FormData(generateForm);
+    const slug = String(formData.get("slug") || "").trim();
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        projectsRoot: config.projectsRoot
+      })
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      showResult(generateResult, result, true);
+      return;
+    }
+
+    renderGenerateResult(result);
     await loadProjects();
   });
 

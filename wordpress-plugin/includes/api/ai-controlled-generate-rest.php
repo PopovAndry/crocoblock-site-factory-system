@@ -19,6 +19,10 @@ function factory_register_ai_controlled_generate_rest_routes(): void {
 }
 
 function factory_rest_ai_controlled_generate( WP_REST_Request $request ): WP_REST_Response {
+	if ( function_exists( 'set_time_limit' ) ) {
+		@set_time_limit( 300 );
+	}
+
 	$prompt                = $request->get_param( 'prompt' );
 	$site_plan             = $request->get_param( 'site_plan' );
 	$blueprint_candidate   = $request->get_param( 'blueprint_candidate' );
