@@ -10,6 +10,11 @@
   const planResult = document.getElementById("plan-result");
   const latestRun = document.getElementById("latest-run");
   const totalTokens = document.getElementById("launcher-total-tokens");
+  const aiMode = document.getElementById("launcher-ai-mode");
+  const aiProvider = document.getElementById("launcher-ai-provider");
+  const aiModel = document.getElementById("launcher-ai-model");
+  const aiKeyStatus = document.getElementById("launcher-ai-key-status");
+  const aiLastEstimate = document.getElementById("launcher-ai-last-estimate");
 
   function escapeHtml(value) {
     return String(value)
@@ -27,6 +32,11 @@
       planProjectSlug.disabled = true;
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
       totalTokens.textContent = "0";
+      aiMode.textContent = "mock";
+      aiProvider.textContent = "mock";
+      aiModel.textContent = "balanced";
+      aiKeyStatus.textContent = "not_required";
+      aiLastEstimate.textContent = "Not recorded";
       return;
     }
 
@@ -39,6 +49,17 @@
       const usage = project.usage && Number(project.usage.total_tokens || 0);
       return sum + (Number.isFinite(usage) ? usage : 0);
     }, 0));
+
+    const selectedProject = projects.find((project) => project.slug === planProjectSlug.value) || projects[0];
+    const selectedAi = selectedProject.ai || {};
+    const selectedEstimate = selectedAi.last_estimate || (selectedProject.usage && selectedProject.usage.last_estimate) || null;
+    aiMode.textContent = String(selectedAi.mode || "mock");
+    aiProvider.textContent = String(selectedAi.provider || "mock");
+    aiModel.textContent = String(selectedAi.model_profile || "balanced");
+    aiKeyStatus.textContent = String(selectedAi.key_status || "not_required");
+    aiLastEstimate.textContent = selectedEstimate
+      ? String(selectedEstimate.estimated_total_tokens || selectedEstimate.total || 0) + " tokens"
+      : "Not recorded";
 
     projectList.innerHTML = projects.map((project) => {
       const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
@@ -135,6 +156,12 @@
     const payload = await response.json();
     renderProjects(payload.projects || []);
   }
+
+  planProjectSlug.addEventListener("change", () => {
+    loadProjects().catch((error) => {
+      showResult(createResult, { error: error.message }, true);
+    });
+  });
 
   createForm.addEventListener("submit", async (event) => {
     event.preventDefault();

@@ -18,6 +18,11 @@ const {
   createRestNonce,
   loginWithAdminCookie
 } = require("./install-agent");
+const {
+  estimateInputTokens,
+  estimateOutputTokens,
+  normalizeAiState
+} = require("./ai");
 
 const STAGE_DEFINITIONS = [
   {
@@ -120,20 +125,6 @@ function timestampCompact() {
 
 function makeRunId() {
   return "run-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
-}
-
-function estimateInputTokens(prompt) {
-  return Math.max(1, Math.ceil(String(prompt || "").length / 4));
-}
-
-function estimateOutputTokens(modelProfile) {
-  if (modelProfile === "fast") {
-    return 600;
-  }
-  if (modelProfile === "reasoning") {
-    return 2000;
-  }
-  return 1200;
 }
 
 function createPlanningContext() {
@@ -273,7 +264,8 @@ async function planProject(options) {
 
   await waitForUrl(projectState.project.wp_url);
 
-  const modelProfile = String(projectState.project.ai && projectState.project.ai.model_profile || "balanced");
+  const aiState = normalizeAiState(projectState.project.ai);
+  const modelProfile = aiState.model_profile;
   const estimatedInputTokens = estimateInputTokens(prompt);
   const estimatedOutputTokens = estimateOutputTokens(modelProfile);
   const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens;
@@ -288,7 +280,9 @@ async function planProject(options) {
     const payload = stage.buildPayload({
       prompt,
       context,
-      modelProfile
+      modelProfile,
+      aiMode: aiState.mode,
+      provider: aiState.provider
     }, results);
     const response = await postAgentJson(projectState, endpoint, payload, proofId, warnings);
     const data = response.json || {};
@@ -315,10 +309,14 @@ async function planProject(options) {
     }
 
     if (providerCalled) {
-      status = "failed";
       anyProviderCalled = true;
-      warnings.push("Unexpected live provider call at " + stage.name + " during Launcher alpha planning.");
-      break;
+      if (aiState.live_calls_enabled === true) {
+        warnings.push("Live provider call observed at " + stage.name + ".");
+      } else {
+        status = "failed";
+        warnings.push("Unexpected live provider call at " + stage.name + " while live calls are disabled in Launcher alpha.");
+        break;
+      }
     }
 
     results[stage.name] = data;
@@ -330,6 +328,9 @@ async function planProject(options) {
     project_id: projectState.project.project_id,
     slug: projectState.project.slug,
     prompt,
+    ai_mode: aiState.mode,
+    ai_provider: aiState.provider,
+    ai_key_status: aiState.key_status,
     model_profile: modelProfile,
     estimated_input_tokens: estimatedInputTokens,
     estimated_output_tokens: estimatedOutputTokens,
@@ -347,6 +348,10 @@ async function planProject(options) {
     slug: projectState.project.slug,
     wp_url: projectState.project.wp_url,
     agent_rest_base: restBase,
+    ai_mode: aiState.mode,
+    ai_provider: aiState.provider,
+    ai_key_status: aiState.key_status,
+    model_profile: modelProfile,
     prompt_hash: hashPrompt(prompt),
     stages_completed: stagesCompleted,
     all_read_only: true,
@@ -363,6 +368,9 @@ async function planProject(options) {
   writeJsonFile(proofPath, proof);
 
   projectState.project.current_run_id = runId;
+  projectState.project.ai = Object.assign({}, aiState, {
+    updated_at: new Date().toISOString()
+  });
   projectState.project.usage = Object.assign({}, projectState.project.usage || {}, {
     total_tokens: Number(projectState.project.usage && projectState.project.usage.total_tokens || 0) + estimatedTotalTokens,
     total_cost_estimate: projectState.project.usage && Object.prototype.hasOwnProperty.call(projectState.project.usage, "total_cost_estimate")

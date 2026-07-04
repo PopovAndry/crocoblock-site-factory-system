@@ -11,6 +11,7 @@ const {
   resolveProjectsRoot
 } = require("./project-store");
 const { planProject } = require("./plan");
+const { configureAi, estimateAi, getAiStatus } = require("./ai");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -150,10 +151,14 @@ function renderHomePage(config) {
     "        <p>Placeholder only in this slice. No provider calls and no settings writes yet.</p>",
     "      </div>",
     "      <div class=\"placeholder-grid\">",
-    "        <div><span>Provider</span><strong>Not configured here yet</strong></div>",
-    "        <div><span>Model profile</span><strong>Balanced</strong></div>",
+    "        <div><span>Mode</span><strong id=\"launcher-ai-mode\">mock</strong></div>",
+    "        <div><span>Provider</span><strong id=\"launcher-ai-provider\">mock</strong></div>",
+    "        <div><span>Model profile</span><strong id=\"launcher-ai-model\">balanced</strong></div>",
+    "        <div><span>Key status</span><strong id=\"launcher-ai-key-status\">not_required</strong></div>",
+    "        <div><span>Last estimate</span><strong id=\"launcher-ai-last-estimate\">Not recorded</strong></div>",
     "        <div><span>Total tokens</span><strong id=\"launcher-total-tokens\">0</strong></div>",
-      "      </div>",
+    "      </div>",
+    "      <p class=\"project-note\">Live AI calls are disabled in this alpha slice.</p>",
     "    </section>",
     "  </main>",
     "  <script>window.FactoryLauncherConfig = " + JSON.stringify({
@@ -264,9 +269,74 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/ai$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = getAiStatus({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: result.project,
+          ai: result.ai,
+          profiles: result.profiles
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = configureAi({
+          slug,
+          projectsRoot,
+          mode: payload.mode,
+          provider: payload.provider,
+          modelProfile: payload.modelProfile,
+          keyEnv: payload.keyEnv
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: result.project,
+          ai: result.ai,
+          proof: result.proof,
+          proof_path: result.proofPath
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = estimateAi({
+          slug,
+          projectsRoot,
+          prompt: payload.prompt
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: result.project,
+          ai: result.ai,
+          estimate: result.estimate,
+          proof: result.proof,
+          proof_path: result.proofPath
+        });
+        return;
+      }
+
       sendText(response, 404, "Not found");
     } catch (error) {
-      const statusCode = request.method === "POST" && (requestUrl.pathname === "/api/projects" || /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname)) ? 400 : 500;
+      const statusCode = request.method === "POST" && (
+        requestUrl.pathname === "/api/projects" ||
+        /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
+      ) ? 400 : 500;
       sendJson(response, statusCode, {
         ok: false,
         error: error.message

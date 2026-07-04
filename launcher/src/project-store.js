@@ -12,7 +12,7 @@ const BLOCKED_ROOTS = [
   "C:\\sf-slate-visual-smoke",
   "C:\\sf-controlled-generate-smoke"
 ];
-const PROJECT_SUBDIRECTORIES = ["runs", "proofs", "snapshots", "logs", "exports", "wordpress", "mysql"];
+const PROJECT_SUBDIRECTORIES = ["runs", "proofs", "snapshots", "logs", "exports", "secrets", "wordpress", "mysql"];
 
 function resolveProjectsRoot(projectsRoot) {
   return path.resolve(projectsRoot || DEFAULT_PROJECTS_ROOT);
@@ -77,6 +77,23 @@ function randomPassword(prefix) {
 
 function timestampIso() {
   return new Date().toISOString();
+}
+
+function defaultAiMetadata() {
+  return {
+    mode: "mock",
+    provider: "mock",
+    model_profile: "balanced",
+    key_status: "not_required",
+    key_source: null,
+    key_env_name: null,
+    key_masked: "",
+    key_tested: false,
+    key_tested_at: null,
+    live_calls_enabled: false,
+    last_estimate: null,
+    updated_at: timestampIso()
+  };
 }
 
 function ensureDirectory(dirPath) {
@@ -175,10 +192,7 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
     },
     current_run_id: null,
     dependency_state: null,
-    ai: {
-      provider: null,
-      model_profile: "balanced"
-    },
+    ai: defaultAiMetadata(),
     usage: {
       total_tokens: 0,
       total_cost_estimate: null
@@ -208,7 +222,7 @@ function toStoredProject(project) {
     agent: project.agent,
     current_run_id: project.current_run_id,
     dependency_state: project.dependency_state,
-    ai: project.ai,
+    ai: Object.assign(defaultAiMetadata(), project.ai || {}),
     usage: project.usage,
     created_at: project.created_at,
     updated_at: project.updated_at
@@ -230,7 +244,7 @@ function sanitizeProject(project) {
     agent: stored.agent,
     current_run_id: stored.current_run_id,
     dependency_state: stored.dependency_state,
-    ai: stored.ai,
+    ai: Object.assign(defaultAiMetadata(), stored.ai || {}),
     usage: stored.usage,
     created_at: stored.created_at,
     updated_at: stored.updated_at
@@ -302,6 +316,7 @@ function readProjectRecord(runtimePath) {
         last_agent_proof_id: null
       };
     }
+    data.ai = Object.assign(defaultAiMetadata(), data.ai || {});
     return sanitizeProject(data);
   } catch (error) {
     return {
@@ -339,6 +354,7 @@ function readProjectBySlug(slug, projectsRoot) {
       last_agent_proof_id: null
     };
   }
+  project.ai = Object.assign(defaultAiMetadata(), project.ai || {});
 
   return {
     project,
@@ -383,5 +399,6 @@ module.exports = {
   resolveProjectsRoot,
   saveProjectRecord,
   slugifyProjectName,
+  defaultAiMetadata,
   writeJsonFile
 };

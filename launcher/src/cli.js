@@ -12,14 +12,17 @@ const { installAgent } = require("./install-agent");
 const { planProject } = require("./plan");
 const { readDependencies } = require("./dependencies");
 const { installDependency } = require("./install-dependency");
+const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
   const flags = {};
+  const positionals = [];
 
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index];
     if (!token.startsWith("--")) {
+      positionals.push(token);
       continue;
     }
 
@@ -34,7 +37,7 @@ function parseArguments(argv) {
     index += 1;
   }
 
-  return { command, flags };
+  return { command, flags, positionals };
 }
 
 function printUsage() {
@@ -49,7 +52,11 @@ function printUsage() {
     "  node launcher/src/cli.js install-agent --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js plan --slug kyiv-realty --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js dependencies --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js install-dependency --slug kyiv-realty --dependency jet-engine --zip \"C:\\sf-vendor\\jet-engine.zip\" [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js install-dependency --slug kyiv-realty --dependency jet-engine --zip \"C:\\sf-vendor\\jet-engine.zip\" [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js ai --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js ai --slug kyiv-realty configure --mode mock --model-profile balanced [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js ai --slug kyiv-realty configure --provider openai --model-profile balanced --key-env FACTORY_OPENAI_API_KEY [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js ai --slug kyiv-realty estimate --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -228,6 +235,97 @@ async function runInstallDependency(flags) {
   console.log("  Proof file: " + result.proofPath);
 }
 
+function printAiStatus(result) {
+  const profile = getModelProfile(result.ai.model_profile);
+  console.log("Launcher AI status:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  Mode: " + result.ai.mode);
+  console.log("  Provider: " + result.ai.provider);
+  console.log("  Model profile: " + result.ai.model_profile + " (" + profile.label + ")");
+  console.log("  Key status: " + result.ai.key_status);
+  console.log("  Key source: " + String(result.ai.key_source || "none"));
+  console.log("  Key env name: " + String(result.ai.key_env_name || "none"));
+  console.log("  Key masked: " + String(result.ai.key_masked || "not stored"));
+  console.log("  Live calls enabled: false");
+  console.log("  Last estimate: " + (result.ai.last_estimate ? String(result.ai.last_estimate.estimated_total_tokens || result.ai.last_estimate.total || 0) + " tokens" : "Not recorded"));
+}
+
+function printAiConfigureResult(result) {
+  console.log("Configured launcher AI metadata:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  Mode: " + result.ai.mode);
+  console.log("  Provider: " + result.ai.provider);
+  console.log("  Model profile: " + result.ai.model_profile);
+  console.log("  Key status: " + result.ai.key_status);
+  console.log("  Key source: " + String(result.ai.key_source || "none"));
+  console.log("  Key env name: " + String(result.ai.key_env_name || "none"));
+  console.log("  Key masked: " + String(result.ai.key_masked || "not stored"));
+  console.log("  Live calls enabled: false");
+  console.log("  Proof file: " + result.proofPath);
+}
+
+function printAiEstimateResult(result) {
+  console.log("Estimated launcher AI tokens:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  Mode: " + result.ai.mode);
+  console.log("  Provider: " + result.ai.provider);
+  console.log("  Key status: " + result.ai.key_status);
+  console.log("  Model profile: " + result.ai.model_profile);
+  console.log("  Estimated input tokens: " + String(result.estimate.estimated_input_tokens));
+  console.log("  Estimated output tokens: " + String(result.estimate.estimated_output_tokens));
+  console.log("  Estimated total tokens: " + String(result.estimate.estimated_total_tokens));
+  console.log("  Uncertainty: " + result.estimate.uncertainty);
+  console.log("  Proof file: " + result.proofPath);
+}
+
+function parseAiSubcommand(parsed) {
+  return String(parsed.positionals[0] || "").trim().toLowerCase();
+}
+
+async function runAi(parsed) {
+  if (!parsed.flags.slug) {
+    throw new Error("ai requires --slug <slug>.");
+  }
+
+  const subcommand = parseAiSubcommand(parsed);
+  switch (subcommand) {
+    case "status": {
+      const result = getAiStatus({
+        slug: parsed.flags.slug,
+        projectsRoot: parsed.flags["projects-root"]
+      });
+      printAiStatus(result);
+      return;
+    }
+    case "configure": {
+      const result = configureAi({
+        slug: parsed.flags.slug,
+        projectsRoot: parsed.flags["projects-root"],
+        mode: parsed.flags.mode,
+        provider: parsed.flags.provider,
+        modelProfile: parsed.flags["model-profile"],
+        keyEnv: parsed.flags["key-env"]
+      });
+      printAiConfigureResult(result);
+      return;
+    }
+    case "estimate": {
+      const result = estimateAi({
+        slug: parsed.flags.slug,
+        projectsRoot: parsed.flags["projects-root"],
+        prompt: parsed.flags.prompt
+      });
+      printAiEstimateResult(result);
+      return;
+    }
+    default:
+      throw new Error("ai requires a subcommand: status | configure | estimate.");
+  }
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -255,6 +353,9 @@ async function main() {
       return;
     case "install-dependency":
       await runInstallDependency(parsed.flags);
+      return;
+    case "ai":
+      await runAi(parsed);
       return;
     default:
       printUsage();
