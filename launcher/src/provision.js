@@ -143,6 +143,10 @@ async function runWpCli(runtimePath, proofStem, wpArgs, options) {
   ].concat(wpArgs), options);
 }
 
+function getWpConfigPath(projectState) {
+  return path.join(projectState.runtimePath, "wordpress", "wp-config.php");
+}
+
 async function ensureWordPressFiles(projectState, proofStem) {
   const wordpressPath = path.join(projectState.runtimePath, "wordpress");
   ensureDirectory(wordpressPath);
@@ -178,19 +182,33 @@ async function ensureWordPressFiles(projectState, proofStem) {
     }
   }
 
-  await runWpCli(projectState.runtimePath, proofStem, [
+  if (fs.existsSync(getWpConfigPath(projectState))) {
+    return;
+  }
+
+  const configCreate = await runWpCli(projectState.runtimePath, proofStem, [
     "config", "create",
     "--path=/var/www/html",
     "--dbname=" + projectState.env.DB_NAME,
     "--dbuser=" + projectState.env.DB_USER,
     "--dbpass=" + projectState.env.DB_PASSWORD,
     "--dbhost=mysql:3306",
+    "--skip-check",
     "--force",
     "--allow-root"
   ], {
     logSuffix: "wp-config-create",
     ignoreExitCode: true
   });
+
+  if (fs.existsSync(getWpConfigPath(projectState))) {
+    return;
+  }
+
+  throw new Error(
+    "wp config create did not produce wp-config.php at " + getWpConfigPath(projectState) +
+    ".\n" + tailText(configCreate.stderr || configCreate.stdout, 1200)
+  );
 }
 
 async function ensureWordPressInstalled(projectState, proofStem, warnings) {

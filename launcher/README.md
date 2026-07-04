@@ -17,6 +17,7 @@ node launcher/src/cli.js list
 node launcher/src/cli.js provision --slug kyiv-realty
 node launcher/src/cli.js install-agent --slug kyiv-realty
 node launcher/src/cli.js plan --slug kyiv-realty --prompt "Create a real estate site for Kyiv apartments"
+node launcher/src/cli.js dependencies --slug kyiv-realty
 ```
 
 Optional flags:
@@ -35,6 +36,7 @@ What this does today:
 - reads Agent health and capabilities
 - writes Agent install proof JSON under `proofs/`
 - runs the read-only Agent planning chain
+- reads Agent dependency status and records generate blockers
 - writes Launcher run metadata under `runs/`
 - writes read-only planning proof JSON under `proofs/`
 
@@ -42,6 +44,7 @@ What it does not do yet:
 - call OpenAI
 - generate a site
 - mutate WordPress content during planning
+- install premium dependencies
 
 Next milestones:
 1. run controlled generate to proof

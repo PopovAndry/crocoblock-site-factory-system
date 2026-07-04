@@ -243,6 +243,12 @@ body {
   margin: 0;
 }
 
+.project-note {
+  margin: 14px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .result-box {
   margin-top: 16px;
   padding: 14px 16px;

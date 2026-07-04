@@ -38,6 +38,16 @@ function factory_register_agent_rest_routes(): void {
 			'permission_callback' => 'factory_rest_require_manage_options',
 		]
 	);
+
+	register_rest_route(
+		'factory/v1',
+		'/agent/dependencies',
+		[
+			'methods'             => 'GET',
+			'callback'            => 'factory_rest_agent_dependencies',
+			'permission_callback' => 'factory_rest_require_manage_options',
+		]
+	);
 }
 
 function factory_rest_agent_health(): WP_REST_Response {
@@ -92,4 +102,115 @@ function factory_rest_agent_capabilities(): WP_REST_Response {
 			'supported_verticals'       => [ 'real_estate' ],
 		]
 	);
+}
+
+function factory_rest_agent_dependencies(): WP_REST_Response {
+	$dependencies = factory_rest_agent_dependency_items( 'real_estate' );
+	$blockers = [];
+
+	foreach ( $dependencies as $dependency ) {
+		if ( ! empty( $dependency['blocking'] ) ) {
+			$blockers[] = $dependency['name'] . ': ' . ( $dependency['notes'] ?: 'Required dependency is not ready.' );
+		}
+	}
+
+	return new WP_REST_Response(
+		[
+			'status'     => 'ok',
+			'code'       => 'dependencies_ready',
+			'site_type'  => 'real_estate',
+			'dependencies' => $dependencies,
+			'blockers'   => array_values( $blockers ),
+			'can_generate' => empty( $blockers ),
+		]
+	);
+}
+
+function factory_rest_agent_dependency_items( string $site_type ): array {
+	if ( ! function_exists( 'get_plugins' ) || ! function_exists( 'is_plugin_active' ) ) {
+		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+	}
+
+	$definitions = function_exists( 'factory_console_dependency_definitions' )
+		? factory_console_dependency_definitions()
+		: [];
+	$capability_model = function_exists( 'factory_console_dependency_capability_model' )
+		? factory_console_dependency_capability_model()
+		: [
+			'site_type_capabilities' => [
+				'real_estate' => [ 'real_estate_catalog', 'property_filters' ],
+			],
+		];
+	$required_capabilities = array_values( $capability_model['site_type_capabilities'][ $site_type ] ?? [] );
+	$dependencies = [];
+
+	foreach ( $definitions as $definition ) {
+		if ( 'jet-plugins-wizard' === (string) ( $definition['slug'] ?? '' ) ) {
+			continue;
+		}
+
+		$item = 'theme' === ( $definition['type'] ?? '' )
+			? factory_console_theme_dependency_status( $definition )
+			: factory_console_plugin_dependency_status( $definition );
+		$capabilities = function_exists( 'factory_console_dependency_capabilities' )
+			? factory_console_dependency_capabilities( (string) $item['slug'] )
+			: [];
+		$capability = isset( $capabilities[0] ) ? (string) $capabilities[0] : '';
+		$required = ! empty( array_intersect( $required_capabilities, $capabilities ) );
+		$status = (string) ( $item['status'] ?? 'missing' );
+
+		$dependencies[] = [
+			'slug'            => (string) ( $item['slug'] ?? '' ),
+			'name'            => (string) ( $item['name'] ?? '' ),
+			'type'            => (string) ( $item['type'] ?? 'plugin' ),
+			'required'        => $required,
+			'capability'      => $capability ?: null,
+			'installed'       => ! empty( $item['installed'] ),
+			'active'          => ! empty( $item['active'] ),
+			'version'         => isset( $item['version'] ) ? (string) $item['version'] : null,
+			'minimum_version' => isset( $item['minimum_version'] ) ? $item['minimum_version'] : null,
+			'source_policy'   => factory_rest_agent_dependency_source_policy( (string) ( $item['slug'] ?? '' ) ),
+			'blocking'        => $required && 'ok' !== $status,
+			'notes'           => factory_rest_agent_dependency_note( (string) ( $item['slug'] ?? '' ), $required, $status ),
+		];
+	}
+
+	return $dependencies;
+}
+
+function factory_rest_agent_dependency_source_policy( string $slug ): string {
+	switch ( $slug ) {
+		case 'kava':
+		case 'jet-engine':
+		case 'jet-smart-filters':
+			return 'official_crocoblock';
+		case 'jet-form-builder':
+		case 'woocommerce':
+		case 'elementor':
+			return 'wordpress_org';
+		default:
+			return 'manual';
+	}
+}
+
+function factory_rest_agent_dependency_note( string $slug, bool $required, string $status ): string {
+	$label = str_replace( '-', ' ', $slug );
+
+	if ( 'ok' === $status ) {
+		return ucfirst( $label ) . ' is available.';
+	}
+
+	if ( $required ) {
+		if ( in_array( $slug, [ 'kava', 'jet-engine', 'jet-smart-filters' ], true ) ) {
+			return 'Install via the official Crocoblock Wizard or upload the official ZIP manually.';
+		}
+
+		return 'Required dependency is not ready yet.';
+	}
+
+	if ( in_array( $slug, [ 'woocommerce', 'elementor', 'jet-form-builder' ], true ) ) {
+		return 'Optional dependency. Install only if the project needs this capability.';
+	}
+
+	return 'Dependency is optional in the current alpha flow.';
 }

@@ -42,6 +42,10 @@
 
     projectList.innerHTML = projects.map((project) => {
       const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
+      const dependencyState = project.dependency_state || null;
+      const blockerSummary = dependencyState && Array.isArray(dependencyState.blockers) && dependencyState.blockers.length
+        ? dependencyState.blockers.join(" | ")
+        : "Not checked yet";
       return [
         "<article class=\"project-card\">",
         "  <div class=\"project-card__header\">",
@@ -53,8 +57,11 @@
         "    <div><dt>WordPress URL</dt><dd>" + escapeHtml(project.wp_url) + "</dd></div>",
         "    <div><dt>Runtime</dt><dd>" + escapeHtml(runtimeStatus) + "</dd></div>",
         "    <div><dt>Agent</dt><dd>" + escapeHtml(project.agent && project.agent.status || "unknown") + "</dd></div>",
+        "    <div><dt>Dependencies</dt><dd>" + escapeHtml(dependencyState ? (dependencyState.can_generate ? "ready" : "blocked") : "unknown") + "</dd></div>",
+        "    <div><dt>Blockers</dt><dd>" + escapeHtml(blockerSummary) + "</dd></div>",
         "    <div><dt>Created</dt><dd>" + escapeHtml(project.created_at || "") + "</dd></div>",
         "  </dl>",
+        dependencyState ? "  <p class=\"project-note\">" + escapeHtml(dependencyState.next_action || "") + "</p>" : "",
         "</article>"
       ].join("\n");
     }).join("\n");

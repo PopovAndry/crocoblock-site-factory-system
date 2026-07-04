@@ -10,6 +10,7 @@ const {
 const { provisionProject } = require("./provision");
 const { installAgent } = require("./install-agent");
 const { planProject } = require("./plan");
+const { readDependencies } = require("./dependencies");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -45,7 +46,8 @@ function printUsage() {
     "  node launcher/src/cli.js list [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js provision --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js install-agent --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js plan --slug kyiv-realty --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js plan --slug kyiv-realty --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js dependencies --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -171,6 +173,26 @@ async function runPlan(flags) {
   console.log("  Proof file: " + result.proofPath);
 }
 
+async function runDependencies(flags) {
+  if (!flags.slug) {
+    throw new Error("dependencies requires --slug <slug>.");
+  }
+
+  const result = await readDependencies({
+    slug: flags.slug,
+    projectsRoot: flags["projects-root"]
+  });
+
+  console.log("Read dependency status:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  WordPress URL: " + result.project.wp_url);
+  console.log("  Can generate: " + String(result.proof.can_generate));
+  console.log("  Legal handoff required: " + String(result.proof.legal_handoff_required));
+  console.log("  Blockers: " + (result.blockers.length ? result.blockers.join(" | ") : "None"));
+  console.log("  Proof file: " + result.proofPath);
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -192,6 +214,9 @@ async function main() {
       return;
     case "plan":
       await runPlan(parsed.flags);
+      return;
+    case "dependencies":
+      await runDependencies(parsed.flags);
       return;
     default:
       printUsage();
