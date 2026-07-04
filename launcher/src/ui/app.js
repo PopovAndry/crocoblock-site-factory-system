@@ -12,7 +12,7 @@
   const generateForm = document.getElementById("generate-project-form");
   const generateProjectSlug = document.getElementById("generate-project-slug");
   const generateResult = document.getElementById("generate-result");
-  const latestGenerate = document.getElementById("latest-generate");
+  const siteStatus = document.getElementById("site-status");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
   const totalTokens = document.getElementById("launcher-total-tokens");
   const aiMode = document.getElementById("launcher-ai-mode");
@@ -30,7 +30,15 @@
       .replace(/'/g, "&#39;");
   }
 
+  let projectsCache = [];
+
+  function setSiteStatusEmpty(message) {
+    siteStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
   function renderProjects(projects) {
+    projectsCache = projects.slice();
+
     if (!projects.length) {
       projectList.innerHTML = "<p class=\"empty-state\">No projects yet. Create the first scaffold to prepare a runtime folder.</p>";
       planProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
@@ -38,7 +46,7 @@
       generateProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
       generateProjectSlug.disabled = true;
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
-      latestGenerate.innerHTML = "<p class=\"empty-state\">No controlled generate proof yet.</p>";
+      setSiteStatusEmpty("No generated site result yet.");
       milestoneGenerate.disabled = true;
       totalTokens.textContent = "0";
       aiMode.textContent = "mock";
@@ -49,12 +57,18 @@
       return;
     }
 
+    const previousPlanSlug = planProjectSlug.value;
+    const previousGenerateSlug = generateProjectSlug.value;
     planProjectSlug.disabled = false;
     generateProjectSlug.disabled = false;
-    planProjectSlug.innerHTML = projects.map((project) => {
+    const projectOptions = projects.map((project) => {
       return "<option value=\"" + escapeHtml(project.slug) + "\">" + escapeHtml(project.site_name + " (" + project.slug + ")") + "</option>";
     }).join("");
-    generateProjectSlug.innerHTML = planProjectSlug.innerHTML;
+    planProjectSlug.innerHTML = projectOptions;
+    generateProjectSlug.innerHTML = projectOptions;
+
+    planProjectSlug.value = projects.some((project) => project.slug === previousPlanSlug) ? previousPlanSlug : projects[0].slug;
+    generateProjectSlug.value = projects.some((project) => project.slug === previousGenerateSlug) ? previousGenerateSlug : planProjectSlug.value;
 
     totalTokens.textContent = String(projects.reduce((sum, project) => {
       const usage = project.usage && Number(project.usage.total_tokens || 0);
@@ -128,30 +142,6 @@
       "</article>"
     ].join("\n");
 
-    const latestGeneratedProject = projects
-      .filter((project) => project.generation && project.generation.last_proof_id)
-      .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")))[0];
-
-    if (!latestGeneratedProject) {
-      latestGenerate.innerHTML = "<p class=\"empty-state\">No controlled generate proof yet.</p>";
-      return;
-    }
-
-    const generatedUrls = latestGeneratedProject.generated_site && latestGeneratedProject.generated_site.urls ? latestGeneratedProject.generated_site.urls : {};
-    latestGenerate.innerHTML = [
-      "<article class=\"project-card\">",
-      "  <div class=\"project-card__header\">",
-      "    <h3>" + escapeHtml(latestGeneratedProject.site_name) + "</h3>",
-      "    <span class=\"status-pill\">Generate " + escapeHtml(latestGeneratedProject.generation.status || "unknown") + "</span>",
-      "  </div>",
-      "  <dl>",
-      "    <div><dt>Proof</dt><dd>" + escapeHtml(latestGeneratedProject.generation.last_proof_id || "unknown") + "</dd></div>",
-      "    <div><dt>Home</dt><dd>" + escapeHtml(generatedUrls.home || generatedUrls.root || "Unavailable") + "</dd></div>",
-      "    <div><dt>Properties</dt><dd>" + escapeHtml(generatedUrls.properties || "Unavailable") + "</dd></div>",
-      "    <div><dt>Contact</dt><dd>" + escapeHtml(generatedUrls.contact || "Unavailable") + "</dd></div>",
-      "  </dl>",
-      "</article>"
-    ].join("\n");
   }
 
   function showResult(target, payload, isError) {
@@ -207,10 +197,92 @@
     ].join("");
   }
 
+  function formatCountChange(beforeValue, afterValue) {
+    if (beforeValue == null && afterValue == null) {
+      return "Unavailable";
+    }
+
+    if (beforeValue == null) {
+      return "? -> " + String(afterValue);
+    }
+
+    if (afterValue == null) {
+      return String(beforeValue) + " -> ?";
+    }
+
+    return String(beforeValue) + " -> " + String(afterValue);
+  }
+
+  function renderSiteStatus(payload) {
+    const site = payload.site || {};
+    const urls = site.generated_urls || {};
+    const counts = site.counts_summary || {};
+    const beforeCounts = counts.before || {};
+    const afterCounts = counts.after || {};
+    const warnings = Array.isArray(site.warnings) ? site.warnings : [];
+
+    if (!site.latest_generate_proof_id && !site.generated_site_present) {
+      setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
+      return;
+    }
+
+    const links = [
+      urls.home || urls.root ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.home || urls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Home</a>" : "",
+      urls.properties ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.properties) + "\" target=\"_blank\" rel=\"noreferrer\">Open Properties</a>" : "",
+      urls.contact ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.contact) + "\" target=\"_blank\" rel=\"noreferrer\">Open Contact</a>" : "",
+      site.frontend_edit_available && site.frontend_edit_url ? "<a class=\"site-link\" href=\"" + escapeHtml(site.frontend_edit_url) + "\" target=\"_blank\" rel=\"noreferrer\">Open Frontend Edit</a>" : ""
+    ].filter(Boolean).join("");
+
+    siteStatus.innerHTML = [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
+      "    <span class=\"status-pill\">Generate " + escapeHtml(site.generation_status || "unknown") + "</span>",
+      "  </div>",
+      "  <dl>",
+      "    <div><dt>Proof</dt><dd>" + escapeHtml(site.latest_generate_proof_id || "Unavailable") + "</dd></div>",
+      "    <div><dt>Proof path</dt><dd>" + escapeHtml(site.latest_generate_proof_path || "Unavailable") + "</dd></div>",
+      "    <div><dt>Status</dt><dd>" + escapeHtml(site.controlled_generate_status || site.generation_status || "unknown") + "</dd></div>",
+      "    <div><dt>Code</dt><dd>" + escapeHtml(site.controlled_generate_code || "Unavailable") + "</dd></div>",
+      "    <div><dt>Pages</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.pages, afterCounts.pages)) + "</dd></div>",
+      "    <div><dt>Properties</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.properties, afterCounts.properties)) + "</dd></div>",
+      "    <div><dt>Attachments</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.attachments, afterCounts.attachments)) + "</dd></div>",
+      "    <div><dt>Frontend Edit</dt><dd>" + escapeHtml(site.frontend_edit_available ? "Available" : "Unavailable") + "</dd></div>",
+      "  </dl>",
+      links ? "  <div class=\"site-links\">" + links + "</div>" : "",
+      "  <p class=\"project-note\">" + escapeHtml(site.next_suggested_action || "Review the generated site.") + "</p>",
+      warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
+      "</article>"
+    ].join("\n");
+  }
+
+  async function loadSiteStatus(slug) {
+    const selectedSlug = String(slug || "").trim();
+    if (!selectedSlug) {
+      setSiteStatusEmpty("Select a project to view generated site proof.");
+      return;
+    }
+
+    const project = projectsCache.find((entry) => entry.slug === selectedSlug);
+    if (!project || !(project.generation && project.generation.last_proof_id)) {
+      setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
+      return;
+    }
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/site");
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Unable to load generated site status.");
+    }
+
+    renderSiteStatus(payload);
+  }
+
   async function loadProjects() {
     const response = await fetch("/api/projects");
     const payload = await response.json();
     renderProjects(payload.projects || []);
+    await loadSiteStatus(generateProjectSlug.value);
   }
 
   planProjectSlug.addEventListener("change", () => {
@@ -219,7 +291,7 @@
     });
   });
   generateProjectSlug.addEventListener("change", () => {
-    loadProjects().catch((error) => {
+    loadSiteStatus(generateProjectSlug.value).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
   });

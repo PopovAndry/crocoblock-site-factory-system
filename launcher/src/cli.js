@@ -14,6 +14,7 @@ const { readDependencies } = require("./dependencies");
 const { installDependency } = require("./install-dependency");
 const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
 const { generateProject } = require("./generate");
+const { getSiteStatus } = require("./site");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -58,7 +59,9 @@ function printUsage() {
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --mode mock --model-profile balanced [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --provider openai --model-profile balanced --key-env FACTORY_OPENAI_API_KEY [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty estimate --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js generate --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js generate --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js site --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -352,6 +355,102 @@ async function runGenerate(flags) {
   console.log("  Contact: " + String(result.generatedUrls.contact || "Unavailable"));
 }
 
+function formatCountChange(beforeValue, afterValue) {
+  if (beforeValue == null && afterValue == null) {
+    return "Unavailable";
+  }
+
+  if (beforeValue == null) {
+    return "? -> " + String(afterValue);
+  }
+
+  if (afterValue == null) {
+    return String(beforeValue) + " -> ?";
+  }
+
+  return String(beforeValue) + " -> " + String(afterValue);
+}
+
+function printSiteStatus(result) {
+  const site = result.site;
+  const urls = site.generated_urls || {};
+  const counts = site.counts_summary || {};
+  const beforeCounts = counts.before || {};
+  const afterCounts = counts.after || {};
+
+  console.log("Generated site status:");
+  console.log("  Project name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  WordPress URL: " + result.project.wp_url);
+  console.log("  Generated site present: " + String(site.generated_site_present));
+  console.log("  Generation status: " + String(site.generation_status || "not_generated"));
+  console.log("  Latest generate proof ID: " + String(site.latest_generate_proof_id || "Unavailable"));
+  console.log("  Latest generate proof path: " + String(site.latest_generate_proof_path || "Unavailable"));
+  console.log("  Home: " + String(urls.home || urls.root || "Unavailable"));
+  console.log("  Properties: " + String(urls.properties || "Unavailable"));
+  console.log("  Contact: " + String(urls.contact || "Unavailable"));
+  console.log("  Frontend Edit: " + (site.frontend_edit_available ? String(site.frontend_edit_url) : "Unavailable"));
+  console.log("  Page count: " + formatCountChange(beforeCounts.pages, afterCounts.pages));
+  console.log("  Property count: " + formatCountChange(beforeCounts.properties, afterCounts.properties));
+  console.log("  Attachment count: " + formatCountChange(beforeCounts.attachments, afterCounts.attachments));
+  console.log("  URL status: home=" + String(site.url_status && site.url_status.home || "n/a") + ", properties=" + String(site.url_status && site.url_status.properties || "n/a") + ", contact=" + String(site.url_status && site.url_status.contact || "n/a"));
+  console.log("  Next suggested action: " + String(site.next_suggested_action || "Review the latest proof."));
+
+  if (site.warnings && site.warnings.length) {
+    console.log("  Warnings: " + site.warnings.join(" | "));
+  }
+}
+
+function normalizeSiteTarget(value) {
+  const normalized = String(value || "home").trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "frontendedit") {
+    return "frontend-edit";
+  }
+  return normalized;
+}
+
+async function runSite(parsed) {
+  if (!parsed.flags.slug) {
+    throw new Error("site requires --slug <slug>.");
+  }
+
+  const subcommand = String(parsed.positionals[0] || "status").trim().toLowerCase();
+  const result = await getSiteStatus({
+    slug: parsed.flags.slug,
+    projectsRoot: parsed.flags["projects-root"],
+    persistProject: true,
+    checkUrls: subcommand === "status"
+  });
+
+  if (subcommand === "status") {
+    printSiteStatus(result);
+    return;
+  }
+
+  if (subcommand === "open") {
+    const target = normalizeSiteTarget(parsed.flags.target);
+    const urls = result.site.generated_urls || {};
+    const targetUrlMap = {
+      home: urls.home || urls.root || result.project.wp_url,
+      properties: urls.properties || null,
+      contact: urls.contact || null,
+      "frontend-edit": result.site.frontend_edit_available ? result.site.frontend_edit_url : null
+    };
+    const targetUrl = targetUrlMap[target];
+
+    if (!targetUrl) {
+      throw new Error("No URL is available for site target: " + target);
+    }
+
+    console.log("Open this URL in your browser:");
+    console.log("  Target: " + target);
+    console.log("  URL: " + targetUrl);
+    return;
+  }
+
+  throw new Error("site requires a subcommand: status | open.");
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -385,6 +484,9 @@ async function main() {
       return;
     case "generate":
       await runGenerate(parsed.flags);
+      return;
+    case "site":
+      await runSite(parsed);
       return;
     default:
       printUsage();

@@ -13,6 +13,7 @@ const {
 const { planProject } = require("./plan");
 const { configureAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
+const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -178,10 +179,10 @@ function renderHomePage(config) {
     "      </section>",
     "      <section class=\"panel\">",
     "        <div class=\"panel-header\">",
-    "          <h2>Latest generate</h2>",
-    "          <p>Launcher proof and generated site links.</p>",
+    "          <h2>Generated site result</h2>",
+    "          <p>The latest generate proof, counts, and direct links to the generated site.</p>",
     "        </div>",
-    "        <div id=\"latest-generate\" class=\"project-list\"></div>",
+    "        <div id=\"site-status\" class=\"project-list\"></div>",
     "      </section>",
     "    </section>",
     "  </main>",
@@ -315,6 +316,41 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/site$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await getSiteStatus({
+          slug,
+          projectsRoot,
+          persistProject: false,
+          checkUrls: true
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: result.project,
+          site: result.site
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await writeSiteSurfaceProof({
+          slug,
+          projectsRoot,
+          checkUrls: true
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: result.project,
+          site: result.site,
+          proof: result.proof,
+          proof_path: result.proofPath
+        });
+        return;
+      }
+
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/ai$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = getAiStatus({
@@ -381,6 +417,7 @@ function createLauncherServer(options) {
         requestUrl.pathname === "/api/projects" ||
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500;
