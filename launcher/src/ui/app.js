@@ -15,6 +15,9 @@
   const siteStatus = document.getElementById("site-status");
   const managedState = document.getElementById("managed-state");
   const refreshStateButton = document.getElementById("refresh-state-button");
+  const statePlanForm = document.getElementById("state-plan-form");
+  const statePlanPrompt = document.getElementById("state-plan-prompt");
+  const statePlanResult = document.getElementById("state-plan-result");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
   const totalTokens = document.getElementById("launcher-total-tokens");
   const aiMode = document.getElementById("launcher-ai-mode");
@@ -303,6 +306,40 @@
     ].join("\n");
   }
 
+  function renderStatePlanResult(result) {
+    const plan = result.plan || {};
+    const conflicts = Array.isArray(plan.conflicts) ? plan.conflicts : [];
+    const protectedFields = Array.isArray(plan.current && plan.current.protected_fields)
+      ? plan.current.protected_fields
+      : [];
+    const changeList = Array.isArray(plan.diff && plan.diff.field_changes)
+      ? plan.diff.field_changes.map((entry) => {
+        return "<li><strong>" + escapeHtml(entry.field_key) + ":</strong> "
+          + escapeHtml(entry.change_type + " -> " + (entry.proposed_value || "(empty)"))
+          + (entry.protected ? " <em>(protected)</em>" : "")
+          + "</li>";
+      }).join("")
+      : "";
+    const conflictList = conflicts.map((conflict) => {
+      return "<li><strong>" + escapeHtml(conflict.field_key) + ":</strong> " + escapeHtml(conflict.message || "Requires confirmation") + "</li>";
+    }).join("");
+
+    statePlanResult.hidden = false;
+    statePlanResult.className = conflicts.length ? "result-box result-box-error" : "result-box result-box-success";
+    statePlanResult.innerHTML = [
+      "<strong>Managed state plan created.</strong>",
+      "<p><span>Plan ID:</span> " + escapeHtml(plan.plan_id || "unknown") + "</p>",
+      "<p><span>Plan file:</span> " + escapeHtml(result.plan_path || "Unavailable") + "</p>",
+      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
+      "<p><span>Field changes:</span> " + escapeHtml(String(plan.diff && plan.diff.field_changes ? plan.diff.field_changes.length : 0)) + "</p>",
+      "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>",
+      "<p><span>Protected fields:</span> " + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</p>",
+      "<p><span>Can apply without confirmation:</span> " + escapeHtml(String(plan.can_apply_without_confirmation === true)) + "</p>",
+      changeList ? "<p><span>Field changes:</span></p><ul>" + changeList + "</ul>" : "",
+      conflictList ? "<p><span>Conflicts:</span></p><ul>" + conflictList + "</ul>" : ""
+    ].join("");
+  }
+
   async function loadSiteStatus(slug) {
     const selectedSlug = String(slug || "").trim();
     if (!selectedSlug) {
@@ -474,6 +511,32 @@
       summary: result.summary,
       warnings: result.warnings || []
     });
+  });
+
+  statePlanForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const slug = String(generateProjectSlug.value || "").trim();
+    const prompt = String(statePlanPrompt.value || "").trim();
+
+    if (!slug) {
+      setManagedStateEmpty("Select a project before planning against managed state.");
+      return;
+    }
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/plan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ prompt })
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      showResult(statePlanResult, result, true);
+      return;
+    }
+
+    renderStatePlanResult(result);
   });
 
   loadProjects().catch((error) => {
