@@ -335,8 +335,60 @@
       "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>",
       "<p><span>Protected fields:</span> " + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</p>",
       "<p><span>Can apply without confirmation:</span> " + escapeHtml(String(plan.can_apply_without_confirmation === true)) + "</p>",
+      plan.can_apply_without_confirmation === true && !conflicts.length
+        ? "<p><button type=\"button\" class=\"button\" id=\"state-apply-button\" data-plan-path=\"" + escapeHtml(result.plan_path || "latest") + "\">Apply Plan</button></p>"
+        : "<p class=\"project-note\">Apply blocked: confirmation required.</p>",
       changeList ? "<p><span>Field changes:</span></p><ul>" + changeList + "</ul>" : "",
       conflictList ? "<p><span>Conflicts:</span></p><ul>" + conflictList + "</ul>" : ""
+    ].join("");
+
+    const applyButton = document.getElementById("state-apply-button");
+    if (applyButton) {
+      applyButton.addEventListener("click", async () => {
+        applyButton.disabled = true;
+        try {
+          const response = await fetch("/api/projects/" + encodeURIComponent(String(generateProjectSlug.value || "").trim()) + "/state/apply", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              plan_path: applyButton.getAttribute("data-plan-path") || "latest"
+            })
+          });
+          const applyResult = await response.json();
+          if (!response.ok) {
+            showResult(statePlanResult, applyResult, true);
+            return;
+          }
+
+          renderStateApplyResult(applyResult);
+          await loadProjects();
+          await loadManagedState(generateProjectSlug.value);
+          await loadSiteStatus(generateProjectSlug.value);
+        } catch (error) {
+          showResult(statePlanResult, { error: error.message }, true);
+        } finally {
+          applyButton.disabled = false;
+        }
+      });
+    }
+  }
+
+  function renderStateApplyResult(result) {
+    const apply = result.apply || {};
+    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+    statePlanResult.hidden = false;
+    statePlanResult.className = result.status === "ok" ? "result-box result-box-success" : "result-box result-box-error";
+    statePlanResult.innerHTML = [
+      "<strong>Managed state apply " + escapeHtml(result.status || "unknown") + ".</strong>",
+      "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
+      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
+      "<p><span>State path:</span> " + escapeHtml(result.state_path || "Unavailable") + "</p>",
+      "<p><span>Applied fields:</span> " + escapeHtml((apply.applied_fields || []).length ? apply.applied_fields.join(", ") : "None") + "</p>",
+      "<p><span>Ignored fields:</span> " + escapeHtml((apply.ignored_fields || []).length ? apply.ignored_fields.join(", ") : "None") + "</p>",
+      conflicts.length ? "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>" : "",
+      conflicts.length ? "<ul>" + conflicts.map((conflict) => "<li>" + escapeHtml(conflict.message || conflict.field_key || "Conflict") + "</li>").join("") + "</ul>" : ""
     ].join("");
   }
 

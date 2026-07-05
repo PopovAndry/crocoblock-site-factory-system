@@ -15,7 +15,7 @@ const { installDependency } = require("./install-dependency");
 const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus } = require("./site");
-const { refreshState, readStateStatus, planState } = require("./state");
+const { refreshState, readStateStatus, planState, applyStatePlan } = require("./state");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -66,6 +66,7 @@ function printUsage() {
     "  node launcher/src/cli.js state --slug kyiv-realty refresh [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
@@ -557,7 +558,32 @@ async function runState(parsed) {
     return;
   }
 
-  throw new Error("state requires a subcommand: refresh | status | plan.");
+  if (subcommand === "apply") {
+    const result = await applyStatePlan({
+      slug: parsed.flags.slug,
+      projectsRoot: parsed.flags["projects-root"],
+      planPath: parsed.flags.plan
+    });
+
+    console.log("Managed state apply:");
+    console.log("  Site name: " + result.project.site_name);
+    console.log("  Slug: " + result.project.slug);
+    console.log("  Status: " + String(result.status));
+    console.log("  Code: " + String(result.code));
+    if (result.status === "blocked") {
+      console.log("  Conflicts: " + String((result.conflicts || []).length));
+      console.log("  Proof path: " + result.proofPath);
+      console.log("  State path: " + result.statePath);
+      return;
+    }
+    console.log("  Applied fields: " + ((result.apply.applied_fields || []).length ? result.apply.applied_fields.join(", ") : "None"));
+    console.log("  Ignored fields: " + ((result.apply.ignored_fields || []).length ? result.apply.ignored_fields.join(", ") : "None"));
+    console.log("  Proof path: " + result.proofPath);
+    console.log("  State path: " + result.statePath);
+    return;
+  }
+
+  throw new Error("state requires a subcommand: refresh | status | plan | apply.");
 }
 
 async function main() {

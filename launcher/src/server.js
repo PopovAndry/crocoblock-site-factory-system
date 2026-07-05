@@ -14,7 +14,7 @@ const { planProject } = require("./plan");
 const { configureAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
-const { readStateStatus, refreshState, planState } = require("./state");
+const { readStateStatus, refreshState, planState, applyStatePlan } = require("./state");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -440,6 +440,30 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/apply$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await applyStatePlan({
+          slug,
+          projectsRoot,
+          planPath: payload.plan_path
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          status: result.status,
+          code: result.code,
+          apply: result.apply || result.proof,
+          proof_path: result.proofPath,
+          state_path: result.statePath,
+          conflicts: result.conflicts || [],
+          warnings: result.apply ? result.apply.warnings : (result.proof ? result.proof.warnings : [])
+        });
+        return;
+      }
+
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/ai$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = getAiStatus({
@@ -509,6 +533,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/plan$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/state\/apply$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500;

@@ -5,12 +5,26 @@ const path = require("path");
 const crypto = require("crypto");
 const {
   assertSafeRuntimePath,
+  defaultGeneratedSiteMetadata,
   ensureDirectory,
   readProjectBySlug,
   resolveProjectsRoot,
+  saveProjectRecord,
   writeJsonFile
 } = require("./project-store");
 const {
+  fetchJsonWithBasicAuth,
+  fetchJsonWithCookie,
+  requestJson,
+  waitForUrl
+} = require("./agent-client");
+const {
+  createRestNonce,
+  loginWithAdminCookie
+} = require("./install-agent");
+const { fetchDependencyStatus } = require("./dependencies");
+const {
+  buildPlanningContextFromPersonalization,
   derivePromptPersonalization,
   summarizeAppliedFieldKeys
 } = require("./prompt-personalization");
@@ -20,7 +34,98 @@ const STATE_SCHEMA = "factory_state";
 const STATE_VERSION = 1;
 const STATE_PLAN_SCHEMA = "factory_state_plan";
 const STATE_PLAN_VERSION = 1;
+const STATE_APPLY_SCHEMA = "factory_state_apply";
+const STATE_APPLY_VERSION = 1;
 const DOCKER_TIMEOUT_MS = 180000;
+const STATE_APPLY_ALLOWLIST = [ "agency_name", "hero_title", "hero_subtitle", "hero_cta_text" ];
+const STAGE_DEFINITIONS = [
+  {
+    name: "site_plan",
+    route: "/ai/site-plan",
+    buildPayload(input) {
+      return {
+        prompt: input.prompt,
+        site_type: "real_estate",
+        context: input.context
+      };
+    }
+  },
+  {
+    name: "blueprint_candidate",
+    route: "/ai/blueprint-candidate",
+    buildPayload(input, results) {
+      return {
+        prompt: input.prompt,
+        site_type: "real_estate",
+        vertical: "real_estate",
+        site_plan: results.site_plan,
+        context: input.context
+      };
+    }
+  },
+  {
+    name: "preview_diff",
+    route: "/ai/preview-diff",
+    buildPayload(input, results) {
+      return {
+        prompt: input.prompt,
+        site_type: "real_estate",
+        vertical: "real_estate",
+        site_plan: results.site_plan,
+        blueprint_candidate: results.blueprint_candidate,
+        context: input.context
+      };
+    }
+  },
+  {
+    name: "generate_gate",
+    route: "/ai/generate-gate",
+    buildPayload(input, results) {
+      return {
+        prompt: input.prompt,
+        site_type: "real_estate",
+        vertical: "real_estate",
+        site_plan: results.site_plan,
+        blueprint_candidate: results.blueprint_candidate,
+        preview_diff: results.preview_diff,
+        context: input.context
+      };
+    }
+  },
+  {
+    name: "generate_preflight",
+    route: "/ai/generate-preflight",
+    buildPayload(input, results) {
+      return {
+        prompt: input.prompt,
+        site_type: "real_estate",
+        vertical: "real_estate",
+        site_plan: results.site_plan,
+        blueprint_candidate: results.blueprint_candidate,
+        preview_diff: results.preview_diff,
+        generate_gate: results.generate_gate,
+        context: input.context
+      };
+    }
+  },
+  {
+    name: "generate_confirmation",
+    route: "/ai/generate-confirmation",
+    buildPayload(input, results) {
+      return {
+        prompt: input.prompt,
+        site_type: "real_estate",
+        vertical: "real_estate",
+        site_plan: results.site_plan,
+        blueprint_candidate: results.blueprint_candidate,
+        preview_diff: results.preview_diff,
+        generate_gate: results.generate_gate,
+        generate_preflight: results.generate_preflight,
+        context: input.context
+      };
+    }
+  }
+];
 
 function timestampCompact() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -42,13 +147,16 @@ function ensureStatePaths(runtimePath) {
   const statePath = path.join(runtimePath, "state");
   const snapshotsPath = path.join(statePath, "snapshots");
   const plansPath = path.join(statePath, "plans");
+  const appliesPath = path.join(statePath, "applies");
   ensureDirectory(statePath);
   ensureDirectory(snapshotsPath);
   ensureDirectory(plansPath);
+  ensureDirectory(appliesPath);
   return {
     statePath,
     snapshotsPath,
     plansPath,
+    appliesPath,
     currentPath: path.join(statePath, "current.json")
   };
 }
@@ -78,6 +186,62 @@ function findLatestProofFile(runtimePath, filePrefix, expectedProofId) {
         mtimeMs: fs.statSync(filePath).mtimeMs
       };
     })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  return {
+    proofPath: candidates[0].filePath,
+    proof: safeJsonRead(candidates[0].filePath)
+  };
+}
+
+function findLatestMatchingFile(directoryPath, prefix, extension) {
+  if (!fs.existsSync(directoryPath)) {
+    return null;
+  }
+
+  const candidates = fs.readdirSync(directoryPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(extension))
+    .map((entry) => {
+      const filePath = path.join(directoryPath, entry.name);
+      return {
+        filePath,
+        mtimeMs: fs.statSync(filePath).mtimeMs
+      };
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+
+  return candidates.length ? candidates[0].filePath : null;
+}
+
+function findLatestPersonalizationProof(projectState, runtimePath) {
+  const proofsPath = path.join(runtimePath, "proofs");
+  const preferredIds = [
+    asString(projectState.project.generation && projectState.project.generation.last_apply_proof_id),
+    asString(projectState.project.generation && projectState.project.generation.last_proof_id)
+  ].filter(Boolean);
+
+  for (const proofId of preferredIds) {
+    const proofPath = path.join(proofsPath, proofId + ".json");
+    if (fs.existsSync(proofPath)) {
+      return {
+        proofPath,
+        proof: safeJsonRead(proofPath)
+      };
+    }
+  }
+
+  const latestApplyPath = findLatestMatchingFile(proofsPath, "state-apply-", ".json");
+  const latestGeneratePath = findLatestMatchingFile(proofsPath, "generate-", ".json");
+  const candidates = [latestApplyPath, latestGeneratePath]
+    .filter(Boolean)
+    .map((filePath) => ({
+      filePath,
+      mtimeMs: fs.statSync(filePath).mtimeMs
+    }))
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
 
   if (!candidates.length) {
@@ -270,6 +434,27 @@ function buildOwnershipRecord(resources) {
 }
 
 function extractPersonalization(generateProof) {
+  if (generateProof && generateProof.personalization && typeof generateProof.personalization === "object") {
+    const personalization = generateProof.personalization;
+    const appliedFields = Array.isArray(personalization.applied_fields)
+      ? personalization.applied_fields
+      : summarizeAppliedFieldKeys(personalization);
+
+    return {
+      source: asString(personalization.source) || "unknown",
+      provider_called: personalization.provider_called === true,
+      fields: personalization.fields && typeof personalization.fields === "object"
+        ? personalization.fields
+        : {},
+      design_profile: personalization.design_profile && typeof personalization.design_profile === "object"
+        ? personalization.design_profile
+        : {},
+      applied_fields: appliedFields,
+      ignored_fields: Array.isArray(personalization.ignored_fields) ? personalization.ignored_fields : [],
+      warnings: Array.isArray(personalization.warnings) ? personalization.warnings : []
+    };
+  }
+
   if (generateProof && generateProof.personalization && typeof generateProof.personalization === "object") {
     return {
       source: asString(generateProof.personalization.source) || "unknown",
@@ -545,11 +730,7 @@ function proposedValueOrEmpty(value) {
 async function buildState(projectState) {
   const warnings = [];
   const runtimePath = projectState.runtimePath;
-  const generateProofEntry = findLatestProofFile(
-    runtimePath,
-    "generate-",
-    projectState.project.generation && projectState.project.generation.last_proof_id
-  );
+  const generateProofEntry = findLatestPersonalizationProof(projectState, runtimePath);
   const generateProof = generateProofEntry ? generateProofEntry.proof : null;
   const latestAgentManifest = findLatestAgentManifest(runtimePath, generateProof, warnings);
   const proofStem = "state-refresh-" + timestampCompact();
@@ -759,11 +940,613 @@ function planState(options) {
   };
 }
 
+function toBooleanTrue(value) {
+  return value === true || value === "true";
+}
+
+function resolveStatePlanPath(statePaths, runtimePath, planPathValue) {
+  const raw = asString(planPathValue);
+  if (!raw || raw === "latest") {
+    const latestPath = findLatestMatchingFile(statePaths.plansPath, "state-plan-", ".json");
+    if (!latestPath) {
+      throw new Error("No state plan files were found. Run state plan first.");
+    }
+    return latestPath;
+  }
+
+  if (path.isAbsolute(raw)) {
+    return raw;
+  }
+
+  return path.resolve(runtimePath, raw);
+}
+
+function buildBlockedApplyProof(projectState, reason, code, conflicts, statePath) {
+  const createdAt = stateNow();
+  return {
+    schema: STATE_APPLY_SCHEMA,
+    version: STATE_APPLY_VERSION,
+    apply_id: "state-apply-blocked-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex"),
+    project_slug: projectState.project.slug,
+    wp_url: projectState.project.wp_url,
+    created_at: createdAt,
+    plan_id: null,
+    plan_path: null,
+    applies_changes: false,
+    provider_called: false,
+    status: "blocked",
+    code,
+    blocked: true,
+    reason,
+    applied_fields: [],
+    ignored_fields: [],
+    preserved_protected_fields: [],
+    conflicts: Array.isArray(conflicts) ? conflicts : [],
+    before_values: {},
+    after_values: {},
+    agent_manifest: null,
+    state_before_path: statePath || null,
+    state_after_path: statePath || null,
+    warnings: [],
+    no_wp_mutation: true,
+    mutation_scope: "launcher_project_metadata_only"
+  };
+}
+
+function deriveEffectiveCurrentValues(state) {
+  const personalizationFields = state.personalization && state.personalization.fields && typeof state.personalization.fields === "object"
+    ? state.personalization.fields
+    : {};
+  const userOverrides = state.user_overrides && typeof state.user_overrides === "object"
+    ? state.user_overrides
+    : {};
+  const values = {};
+
+  for (const key of STATE_APPLY_ALLOWLIST) {
+    if (userOverrides[key] && typeof userOverrides[key] === "object" && asString(userOverrides[key].value)) {
+      values[key] = asString(userOverrides[key].value);
+      continue;
+    }
+
+    values[key] = asString(personalizationFields[key]);
+  }
+
+  return values;
+}
+
+async function getAgentJson(projectState, targetUrl, proofId, warnings) {
+  try {
+    if (!projectState.env.WP_APP_PASSWORD) {
+      throw new Error("Launcher project is missing a stored application password.");
+    }
+
+    return await fetchJsonWithBasicAuth(targetUrl, projectState.env.WP_ADMIN_USER, projectState.env.WP_APP_PASSWORD);
+  } catch (error) {
+    const cookieHeader = await loginWithAdminCookie(projectState);
+    const restNonce = await createRestNonce(projectState, proofId);
+    warnings.push("State apply auth fell back to admin cookie context.");
+    return fetchJsonWithCookie(targetUrl, cookieHeader, restNonce);
+  }
+}
+
+async function postAgentJson(projectState, targetUrl, payload, proofId, warnings) {
+  const requestBody = JSON.stringify(payload);
+  const requestTimeoutMs = payload && payload.execute ? 300000 : 120000;
+
+  try {
+    if (!projectState.env.WP_APP_PASSWORD) {
+      throw new Error("Launcher project is missing a stored application password.");
+    }
+
+    return await fetchJsonWithBasicAuth(targetUrl, projectState.env.WP_ADMIN_USER, projectState.env.WP_APP_PASSWORD, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(requestBody)
+      },
+      body: requestBody,
+      timeoutMs: requestTimeoutMs
+    });
+  } catch (error) {
+    const cookieHeader = await loginWithAdminCookie(projectState);
+    const restNonce = await createRestNonce(projectState, proofId);
+    warnings.push("State apply auth fell back to admin cookie context.");
+    return fetchJsonWithCookie(targetUrl, cookieHeader, restNonce, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(requestBody)
+      },
+      body: requestBody,
+      timeoutMs: requestTimeoutMs
+    });
+  }
+}
+
+async function readRuntimeCounts(projectState, proofStem, warnings) {
+  return {
+    pages: await countPostType(projectState.runtimePath, proofStem, "page", warnings),
+    properties: await countPostType(projectState.runtimePath, proofStem, "property", warnings),
+    attachments: await countPostType(projectState.runtimePath, proofStem, "attachment", warnings),
+    active_theme: await readWpJson(projectState.runtimePath, proofStem, "wp_get_theme()->get_stylesheet()", "state-apply-active-theme")
+  };
+}
+
+async function readHomeHtml(targetUrl) {
+  const response = await requestJson(targetUrl, {
+    method: "GET",
+    headers: {
+      Accept: "text/html"
+    },
+    timeoutMs: 30000
+  });
+
+  return {
+    statusCode: response.statusCode,
+    body: response.body
+  };
+}
+
+async function rerunPlanningChain(projectState, prompt, promptPersonalization, proofId, warnings) {
+  const restBase = String(projectState.project.agent && projectState.project.agent.rest_base || "");
+  const context = buildPlanningContextFromPersonalization(promptPersonalization);
+  const results = {};
+
+  for (const stage of STAGE_DEFINITIONS) {
+    const endpoint = restBase + stage.route;
+    const payload = stage.buildPayload({
+      prompt,
+      context
+    }, results);
+    const response = await postAgentJson(projectState, endpoint, payload, proofId, warnings);
+    const data = response.json || {};
+
+    if (toBooleanTrue(data.applies_changes)) {
+      throw new Error("Read-only contract violation at " + stage.name + ": applies_changes=true");
+    }
+
+    if (toBooleanTrue(data.provider_called)) {
+      throw new Error("Read-only planning stage " + stage.name + " unexpectedly reported provider_called=true.");
+    }
+
+    results[stage.name] = data;
+  }
+
+  return {
+    context,
+    results
+  };
+}
+
+async function validateStateApplyPreconditions(projectState, proofId, warnings) {
+  if ((projectState.project.runtime && projectState.project.runtime.status) !== "provisioned") {
+    throw new Error("Launcher project must be provisioned before state apply.");
+  }
+
+  if ((projectState.project.agent && projectState.project.agent.status) !== "installed") {
+    throw new Error("Site Factory Agent must be installed before state apply.");
+  }
+
+  await waitForUrl(projectState.project.wp_url);
+
+  const restBase = asString(projectState.project.agent && projectState.project.agent.rest_base);
+  if (!restBase) {
+    throw new Error("Launcher project is missing agent.rest_base.");
+  }
+
+  const health = (await getAgentJson(projectState, restBase + "/agent/health", proofId, warnings)).json || {};
+  if (asString(health.status) !== "ok") {
+    throw new Error("Agent health check did not return ok.");
+  }
+
+  const capabilities = (await getAgentJson(projectState, restBase + "/agent/capabilities", proofId, warnings)).json || {};
+  if (!capabilities.capabilities || capabilities.capabilities.controlled_generate !== true) {
+    throw new Error("Agent capabilities do not advertise controlled_generate=true.");
+  }
+
+  const dependencyStatus = await fetchDependencyStatus(projectState, warnings);
+  if (!dependencyStatus.summary.can_generate || dependencyStatus.summary.blockers.length > 0) {
+    throw new Error("Dependency recheck blocked state apply.");
+  }
+
+  return {
+    restBase,
+    health,
+    capabilities,
+    dependencyStatus
+  };
+}
+
+function buildPromptPersonalizationFromPlan(plan) {
+  const proposed = plan.proposed && typeof plan.proposed === "object" ? plan.proposed : {};
+  const fields = proposed.personalization && typeof proposed.personalization === "object"
+    ? proposed.personalization
+    : {};
+  const designProfile = proposed.design_profile && typeof proposed.design_profile === "object"
+    ? proposed.design_profile
+    : {};
+  const applyFields = {};
+
+  for (const key of STATE_APPLY_ALLOWLIST) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      applyFields[key] = asString(fields[key]);
+    }
+  }
+
+  return {
+    source: asString(plan.source && plan.source.prompt_personalization_source) || "local_interpreter",
+    applies_changes: true,
+    provider_called: false,
+    fields: applyFields,
+    design_profile: designProfile,
+    warnings: []
+  };
+}
+
+function validateStatePlanForApply(state, plan) {
+  if (!plan || typeof plan !== "object") {
+    throw new Error("State apply could not read the selected plan.");
+  }
+
+  if (plan.schema !== STATE_PLAN_SCHEMA) {
+    throw new Error("Selected plan is not a factory_state_plan.");
+  }
+
+  if (asString(plan.project_slug) !== asString(state.project_slug)) {
+    throw new Error("Selected plan belongs to a different project slug.");
+  }
+
+  if (toBooleanTrue(plan.applies_changes)) {
+    throw new Error("Selected plan is invalid because applies_changes=true.");
+  }
+
+  if (toBooleanTrue(plan.provider_called)) {
+    throw new Error("Selected plan is invalid because provider_called=true.");
+  }
+
+  if (plan.can_apply_without_confirmation !== true || (Array.isArray(plan.conflicts) && plan.conflicts.length > 0)) {
+    const blockedError = new Error("Plan has protected user override conflicts and requires explicit confirmation.");
+    blockedError.blockedCode = "state_plan_requires_confirmation";
+    blockedError.blockedConflicts = Array.isArray(plan.conflicts) ? plan.conflicts : [];
+    throw blockedError;
+  }
+
+  const userOverrides = state.user_overrides && typeof state.user_overrides === "object" ? state.user_overrides : {};
+  const proposed = plan.proposed && plan.proposed.personalization && typeof plan.proposed.personalization === "object"
+    ? plan.proposed.personalization
+    : {};
+  const lateConflicts = [];
+
+  for (const [fieldKey, override] of Object.entries(userOverrides)) {
+    if (!override || override.protected !== true) {
+      continue;
+    }
+
+    const currentValue = asString(override.value);
+    const proposedValue = asString(proposed[fieldKey]);
+
+    if (proposedValue && proposedValue !== currentValue) {
+      lateConflicts.push({
+        type: "protected_user_override",
+        severity: "requires_confirmation",
+        field_key: fieldKey,
+        current_user_value: currentValue,
+        proposed_value: proposedValue,
+        overwrite_policy: asString(override.overwrite_policy) || "ask_before_overwrite",
+        message: "Field " + fieldKey + " was edited on the frontend and is protected. Ask before overwrite."
+      });
+    }
+  }
+
+  if (lateConflicts.length) {
+    const blockedError = new Error("Plan has protected user override conflicts and requires explicit confirmation.");
+    blockedError.blockedCode = "state_plan_requires_confirmation";
+    blockedError.blockedConflicts = lateConflicts;
+    throw blockedError;
+  }
+}
+
+async function applyStatePlan(options) {
+  const projectsRoot = resolveProjectsRoot(options.projectsRoot);
+  const projectState = readProjectBySlug(options.slug, projectsRoot);
+  const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  const statePaths = ensureStatePaths(safeRuntimePath);
+  const createdAt = stateNow();
+  const state = fs.existsSync(statePaths.currentPath) ? safeJsonRead(statePaths.currentPath) : null;
+  const planPath = resolveStatePlanPath(statePaths, safeRuntimePath, options.planPath);
+  const plan = fs.existsSync(planPath) ? safeJsonRead(planPath) : null;
+  const warnings = [];
+  const conflicts = [];
+  const beforeCounts = state ? null : null;
+
+  if (!state) {
+    throw new Error(
+      "Managed state is missing. Run: node launcher/src/cli.js state --slug " +
+      projectState.project.slug +
+      " refresh"
+    );
+  }
+
+  const beforeStateCopyPath = path.join(statePaths.appliesPath, "state-before-" + timestampCompact() + ".json");
+  writeJsonFile(beforeStateCopyPath, state);
+
+  try {
+    validateStatePlanForApply(state, plan);
+  } catch (error) {
+    if (error.blockedCode) {
+      const blockedProof = buildBlockedApplyProof(
+        projectState,
+        error.message,
+        error.blockedCode,
+        error.blockedConflicts || [],
+        statePaths.currentPath
+      );
+      blockedProof.plan_id = plan && plan.plan_id ? plan.plan_id : null;
+      blockedProof.plan_path = planPath;
+      const blockedProofPath = path.join(safeRuntimePath, "proofs", "state-apply-blocked-" + timestampCompact() + ".json");
+      writeJsonFile(blockedProofPath, blockedProof);
+
+      return {
+        project: projectState.project,
+        status: "blocked",
+        code: blockedProof.code,
+        conflicts: blockedProof.conflicts,
+        proof: blockedProof,
+        proofPath: blockedProofPath,
+        statePath: statePaths.currentPath
+      };
+    }
+
+    throw error;
+  }
+
+  const applyTimestamp = timestampCompact();
+  const applyId = "state-apply-" + applyTimestamp + "-" + crypto.randomBytes(3).toString("hex");
+  const applyPath = path.join(statePaths.appliesPath, "state-apply-" + applyTimestamp + ".json");
+  const proofPath = path.join(safeRuntimePath, "proofs", "state-apply-" + applyTimestamp + ".json");
+  const effectiveBeforeValues = deriveEffectiveCurrentValues(state);
+  const promptPersonalization = buildPromptPersonalizationFromPlan(plan);
+  const proposedFields = promptPersonalization.fields;
+  const appliedFields = [];
+  const ignoredFields = [];
+
+  for (const [key, value] of Object.entries(plan.proposed && plan.proposed.personalization && typeof plan.proposed.personalization === "object" ? plan.proposed.personalization : {})) {
+    if (STATE_APPLY_ALLOWLIST.includes(key) && asString(value)) {
+      appliedFields.push(key);
+    } else {
+      ignoredFields.push(key);
+    }
+  }
+
+  const preservedProtectedFields = extractProtectedFields(state.user_overrides || {});
+  let enteredMutationBoundary = false;
+  let executeData = null;
+  let preconditions = null;
+  let afterCounts = null;
+  let refreshResult = null;
+  let homeHtmlBefore = null;
+  let homeHtmlAfter = null;
+
+  try {
+    preconditions = await validateStateApplyPreconditions(projectState, applyId, warnings);
+    const prompt = asString(plan.prompt);
+    if (!prompt) {
+      throw new Error("Selected state plan is missing its prompt.");
+    }
+
+    homeHtmlBefore = await readHomeHtml(projectState.project.wp_url);
+    const runtimeCountsBefore = await readRuntimeCounts(projectState, applyId + "-before", warnings);
+    const rerun = await rerunPlanningChain(projectState, prompt, promptPersonalization, applyId, warnings);
+    const gate = rerun.results.generate_gate || {};
+    const preflight = rerun.results.generate_preflight || {};
+    const confirmation = rerun.results.generate_confirmation || {};
+
+    if (!toBooleanTrue(gate.can_generate)) {
+      throw new Error("State apply gate blocked controlled apply.");
+    }
+
+    if (!toBooleanTrue(preflight.preflight_ready)) {
+      throw new Error("State apply preflight blocked controlled apply.");
+    }
+
+    if (!toBooleanTrue(confirmation.confirmation_ready)) {
+      throw new Error("State apply confirmation blocked controlled apply.");
+    }
+
+    if (Array.isArray(confirmation.blocking_reasons) && confirmation.blocking_reasons.length > 0) {
+      throw new Error("State apply confirmation returned blocking reasons.");
+    }
+
+    const previewPayload = {
+      prompt,
+      site_plan: rerun.results.site_plan,
+      blueprint_candidate: rerun.results.blueprint_candidate,
+      preview_diff: rerun.results.preview_diff,
+      generate_gate: gate,
+      generate_preflight: preflight,
+      generate_confirmation: confirmation,
+      execute: false,
+      site_type: "real_estate",
+      vertical: "real_estate",
+      context: rerun.context
+    };
+    const previewResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", previewPayload, applyId, warnings);
+    const previewData = previewResponse.json || {};
+
+    if (toBooleanTrue(previewData.applies_changes)) {
+      throw new Error("Controlled apply preview unexpectedly reported applies_changes=true.");
+    }
+
+    if (toBooleanTrue(previewData.provider_called)) {
+      throw new Error("Controlled apply preview unexpectedly reported provider_called=true.");
+    }
+
+    if (!previewData.confirmation_required_phrase) {
+      throw new Error("Controlled apply preview did not return a confirmation phrase.");
+    }
+
+    const executePayload = Object.assign({}, previewPayload, {
+      execute: true,
+      confirmation_phrase: previewData.confirmation_required_phrase
+    });
+    enteredMutationBoundary = true;
+    const executeResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", executePayload, applyId, warnings);
+    executeData = executeResponse.json || {};
+
+    afterCounts = await readRuntimeCounts(projectState, applyId + "-after", warnings);
+    homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
+
+    const mutationStarted = toBooleanTrue(executeData.applies_changes)
+      || asString(executeData.mutation_status) === "unknown_after_apply_started"
+      || asString(executeData.mutation_status) === "completed";
+
+    if (!mutationStarted) {
+      throw new Error("Controlled apply did not enter the mutation boundary: " + String(executeData.message || executeData.code || "unknown apply error"));
+    }
+
+    const baseApplyRecord = {
+      schema: STATE_APPLY_SCHEMA,
+      version: STATE_APPLY_VERSION,
+      apply_id: applyId,
+      project_slug: projectState.project.slug,
+      wp_url: projectState.project.wp_url,
+      created_at: createdAt,
+      plan_id: asString(plan.plan_id) || null,
+      plan_path: planPath,
+      applies_changes: true,
+      provider_called: false,
+      status: "ok",
+      code: "state_plan_applied",
+      applied_fields: appliedFields,
+      ignored_fields: ignoredFields,
+      preserved_protected_fields: preservedProtectedFields,
+      conflicts: [],
+      before_values: effectiveBeforeValues,
+      after_values: {},
+      before_counts: runtimeCountsBefore,
+      after_counts: afterCounts,
+      personalization: {
+        source: promptPersonalization.source,
+        provider_called: false,
+        fields: proposedFields,
+        design_profile: promptPersonalization.design_profile,
+        applied_fields: appliedFields,
+        ignored_fields: ignoredFields,
+        warnings: warnings.slice()
+      },
+      agent_manifest: asString(executeData.manifest_path) || null,
+      state_before_path: beforeStateCopyPath,
+      state_after_path: null,
+      state_current_path: null,
+      warnings
+    };
+
+    writeJsonFile(applyPath, baseApplyRecord);
+    writeJsonFile(proofPath, baseApplyRecord);
+
+    projectState.project.generation = Object.assign({}, projectState.project.generation || {}, {
+      status: asString(executeData.status) || "ok",
+      last_apply_proof_id: path.basename(proofPath, ".json")
+    });
+    projectState.project.generated_site = Object.assign({}, defaultGeneratedSiteMetadata(), projectState.project.generated_site || {}, {
+      present: true,
+      personalization_last_applied: {
+        source: promptPersonalization.source,
+        provider_called: false,
+        fields: proposedFields,
+        design_profile: promptPersonalization.design_profile,
+        applied_fields: appliedFields,
+        ignored_fields: ignoredFields,
+        warnings: warnings.slice()
+      }
+    });
+    saveProjectRecord(projectState, projectState.project);
+
+    refreshResult = await refreshState({
+      slug: projectState.project.slug,
+      projectsRoot
+    });
+
+    const refreshedState = refreshResult.state;
+    const afterValues = deriveEffectiveCurrentValues(refreshedState);
+    const applyRecord = Object.assign({}, baseApplyRecord, {
+      after_values: afterValues,
+      home_html_before_contains: {
+        agency_name: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.agency_name)),
+        hero_title: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.hero_title))
+      },
+      home_html_after_contains: {
+        agency_name: homeHtmlAfter.body.includes(asString(afterValues.agency_name)),
+        hero_title: homeHtmlAfter.body.includes(asString(afterValues.hero_title)),
+        hero_subtitle: homeHtmlAfter.body.includes(asString(afterValues.hero_subtitle)),
+        hero_cta_text: homeHtmlAfter.body.includes(asString(afterValues.hero_cta_text))
+      },
+      state_after_path: refreshResult.snapshotPath,
+      state_current_path: refreshResult.statePath,
+      warnings
+    });
+
+    writeJsonFile(applyPath, applyRecord);
+    writeJsonFile(proofPath, applyRecord);
+
+    return {
+      project: projectState.project,
+      status: "ok",
+      code: "state_plan_applied",
+      apply: applyRecord,
+      applyPath,
+      proofPath,
+      statePath: refreshResult.statePath,
+      summary: refreshResult.summary
+    };
+  } catch (error) {
+    const applyRecord = {
+      schema: STATE_APPLY_SCHEMA,
+      version: STATE_APPLY_VERSION,
+      apply_id: applyId,
+      project_slug: projectState.project.slug,
+      wp_url: projectState.project.wp_url,
+      created_at: createdAt,
+      plan_id: plan && plan.plan_id ? plan.plan_id : null,
+      plan_path: planPath,
+      applies_changes: enteredMutationBoundary,
+      provider_called: false,
+      status: enteredMutationBoundary ? "failed" : "blocked",
+      code: enteredMutationBoundary ? "state_plan_apply_failed_after_boundary" : "state_plan_apply_failed",
+      applied_fields,
+      ignored_fields,
+      preserved_protected_fields: preservedProtectedFields,
+      conflicts,
+      before_values: effectiveBeforeValues,
+      after_values: {},
+      before_counts: beforeCounts,
+      after_counts,
+      agent_manifest: executeData && executeData.manifest_path ? executeData.manifest_path : null,
+      state_before_path: beforeStateCopyPath,
+      state_after_path: statePaths.currentPath,
+      warnings: warnings.concat([error.message]),
+      mutation_status: enteredMutationBoundary
+        ? (executeData && executeData.mutation_status ? executeData.mutation_status : "unknown_after_apply_started")
+        : "not_started"
+    };
+
+    writeJsonFile(applyPath, applyRecord);
+    writeJsonFile(proofPath, applyRecord);
+
+    const enrichedError = new Error(error.message + " (proof: " + proofPath + ")");
+    enrichedError.proofPath = proofPath;
+    throw enrichedError;
+  }
+}
+
 module.exports = {
   STATE_SCHEMA,
   STATE_VERSION,
   STATE_PLAN_SCHEMA,
   STATE_PLAN_VERSION,
+  STATE_APPLY_SCHEMA,
+  STATE_APPLY_VERSION,
+  applyStatePlan,
   planState,
   readStateStatus,
   refreshState
