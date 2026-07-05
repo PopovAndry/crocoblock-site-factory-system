@@ -15,7 +15,7 @@ const { installDependency } = require("./install-dependency");
 const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus } = require("./site");
-const { refreshState, readStateStatus } = require("./state");
+const { refreshState, readStateStatus, planState } = require("./state");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -65,6 +65,7 @@ function printUsage() {
     "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty refresh [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
@@ -532,7 +533,31 @@ async function runState(parsed) {
     return;
   }
 
-  throw new Error("state requires a subcommand: refresh | status.");
+  if (subcommand === "plan") {
+    const result = planState({
+      slug: parsed.flags.slug,
+      projectsRoot: parsed.flags["projects-root"],
+      prompt: parsed.flags.prompt
+    });
+    const protectedFields = Array.isArray(result.plan.current && result.plan.current.protected_fields)
+      ? result.plan.current.protected_fields
+      : [];
+    console.log("Managed state plan:");
+    console.log("  Site name: " + result.project.site_name);
+    console.log("  Slug: " + result.project.slug);
+    console.log("  Plan ID: " + result.plan.plan_id);
+    console.log("  Applies changes: false");
+    console.log("  Provider called: false");
+    console.log("  Field changes: " + String(result.plan.diff.field_changes.length));
+    console.log("  Conflicts: " + String(result.plan.conflicts.length));
+    console.log("  Protected fields: " + (protectedFields.length ? protectedFields.join(", ") : "None"));
+    console.log("  Can apply without confirmation: " + String(result.plan.can_apply_without_confirmation));
+    console.log("  Plan path: " + result.planPath);
+    console.log("  Proof path: " + result.proofPath);
+    return;
+  }
+
+  throw new Error("state requires a subcommand: refresh | status | plan.");
 }
 
 async function main() {

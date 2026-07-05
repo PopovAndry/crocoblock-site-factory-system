@@ -140,6 +140,14 @@ body {
   margin-top: 18px;
 }
 
+.compact-form textarea {
+  min-height: 96px;
+}
+
+.managed-state-actions {
+  margin-top: 16px;
+}
+
 .project-form label {
   display: grid;
   gap: 6px;

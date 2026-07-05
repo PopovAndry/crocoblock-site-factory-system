@@ -14,7 +14,7 @@ const { planProject } = require("./plan");
 const { configureAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
-const { readStateStatus, refreshState } = require("./state");
+const { readStateStatus, refreshState, planState } = require("./state");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -189,7 +189,17 @@ function renderHomePage(config) {
     "          <p>Launcher-managed ownership, personalization, and protected override summary.</p>",
     "        </div>",
     "        <div id=\"managed-state\" class=\"project-list\"></div>",
-    "        <button type=\"button\" class=\"button\" id=\"refresh-state-button\">Refresh State</button>",
+    "        <div class=\"managed-state-actions\">",
+    "          <button type=\"button\" class=\"button\" id=\"refresh-state-button\">Refresh State</button>",
+    "        </div>",
+    "        <form id=\"state-plan-form\" class=\"project-form compact-form\">",
+    "          <label>",
+    "            <span>Plan a change against current state</span>",
+    "            <textarea name=\"prompt\" id=\"state-plan-prompt\" rows=\"4\" placeholder=\"Describe the next site direction without applying it yet.\"></textarea>",
+    "          </label>",
+    "          <button type=\"submit\" class=\"button\" id=\"state-plan-button\">Plan Change</button>",
+    "        </form>",
+    "        <div id=\"state-plan-result\" class=\"result-box\" hidden></div>",
     "      </section>",
     "    </section>",
     "  </main>",
@@ -408,6 +418,28 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/plan$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = planState({
+          slug,
+          projectsRoot,
+          prompt: payload.prompt
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          plan: result.plan,
+          plan_path: result.planPath,
+          proof_path: result.proofPath,
+          conflicts: result.plan.conflicts,
+          warnings: result.plan.warnings
+        });
+        return;
+      }
+
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/ai$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = getAiStatus({
@@ -476,6 +508,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/state\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500;

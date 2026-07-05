@@ -10,10 +10,16 @@ const {
   resolveProjectsRoot,
   writeJsonFile
 } = require("./project-store");
+const {
+  derivePromptPersonalization,
+  summarizeAppliedFieldKeys
+} = require("./prompt-personalization");
 const { runCommand } = require("./runtime-tools");
 
 const STATE_SCHEMA = "factory_state";
 const STATE_VERSION = 1;
+const STATE_PLAN_SCHEMA = "factory_state_plan";
+const STATE_PLAN_VERSION = 1;
 const DOCKER_TIMEOUT_MS = 180000;
 
 function timestampCompact() {
@@ -35,11 +41,14 @@ function safeJsonRead(filePath) {
 function ensureStatePaths(runtimePath) {
   const statePath = path.join(runtimePath, "state");
   const snapshotsPath = path.join(statePath, "snapshots");
+  const plansPath = path.join(statePath, "plans");
   ensureDirectory(statePath);
   ensureDirectory(snapshotsPath);
+  ensureDirectory(plansPath);
   return {
     statePath,
     snapshotsPath,
+    plansPath,
     currentPath: path.join(statePath, "current.json")
   };
 }
@@ -383,6 +392,156 @@ function buildStateSummary(state, statePath) {
   };
 }
 
+function extractProtectedFields(userOverrides) {
+  return Object.values(userOverrides || {})
+    .filter((entry) => entry && entry.protected && entry.field_key)
+    .map((entry) => entry.field_key);
+}
+
+function buildFieldDiffEntry(fieldKey, currentValues, proposedValues, userOverrides) {
+  const override = userOverrides && userOverrides[fieldKey] && typeof userOverrides[fieldKey] === "object"
+    ? userOverrides[fieldKey]
+    : null;
+  const currentPersonalizationValue = asString(currentValues && currentValues[fieldKey]);
+  const proposedValue = asString(proposedValues && proposedValues[fieldKey]);
+  const currentValue = override ? asString(override.value) : currentPersonalizationValue;
+  let changeType = "unchanged";
+
+  if (!currentValue && proposedValue) {
+    changeType = "add";
+  } else if (currentValue && !proposedValue) {
+    changeType = "remove";
+  } else if (currentValue !== proposedValue) {
+    changeType = "update";
+  }
+
+  return {
+    field_key: fieldKey,
+    current_value: currentValue,
+    proposed_value: proposedValue,
+    change_type: changeType,
+    source: override ? "frontend_safe_edit_override" : "personalization",
+    protected: override ? override.protected === true : false
+  };
+}
+
+function buildStatePlan(state, prompt) {
+  const createdAt = stateNow();
+  const planId = "state-plan-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
+  const currentPersonalization = state.personalization && typeof state.personalization === "object"
+    ? state.personalization
+    : {};
+  const currentFields = currentPersonalization.fields && typeof currentPersonalization.fields === "object"
+    ? currentPersonalization.fields
+    : {};
+  const userOverrides = state.user_overrides && typeof state.user_overrides === "object"
+    ? state.user_overrides
+    : {};
+  const protectedFields = extractProtectedFields(userOverrides);
+  const proposedPersonalization = derivePromptPersonalization(prompt);
+  const proposedFields = proposedPersonalization.fields && typeof proposedPersonalization.fields === "object"
+    ? proposedPersonalization.fields
+    : {};
+  const allFieldKeys = Array.from(new Set(
+    Object.keys(currentFields)
+      .concat(Object.keys(proposedFields))
+      .concat(Object.keys(userOverrides))
+  )).sort();
+
+  const fieldChanges = [];
+  const unchangedFields = [];
+  const newFields = [];
+  const removedFields = [];
+  const conflicts = [];
+  const warnings = [];
+
+  for (const fieldKey of allFieldKeys) {
+    const entry = buildFieldDiffEntry(fieldKey, currentFields, proposedFields, userOverrides);
+
+    if (entry.change_type === "unchanged") {
+      unchangedFields.push(entry.field_key);
+    } else {
+      fieldChanges.push(entry);
+      if (entry.change_type === "add") {
+        newFields.push(entry.field_key);
+      }
+      if (entry.change_type === "remove") {
+        removedFields.push(entry.field_key);
+      }
+    }
+
+    if (
+      entry.protected &&
+      entry.change_type !== "unchanged" &&
+      userOverrides[fieldKey] &&
+      asString(userOverrides[fieldKey].value) !== proposedValueOrEmpty(proposedFields[fieldKey])
+    ) {
+      conflicts.push({
+        type: "protected_user_override",
+        severity: "requires_confirmation",
+        field_key: fieldKey,
+        current_user_value: asString(userOverrides[fieldKey].value),
+        proposed_value: proposedValueOrEmpty(proposedFields[fieldKey]),
+        overwrite_policy: asString(userOverrides[fieldKey].overwrite_policy) || "ask_before_overwrite",
+        message: "Field " + fieldKey + " was edited on the frontend and is protected. Ask before overwrite."
+      });
+    }
+  }
+
+  if (Array.isArray(currentPersonalization.warnings) && currentPersonalization.warnings.length) {
+    warnings.push.apply(warnings, currentPersonalization.warnings);
+  }
+  if (Array.isArray(proposedPersonalization.warnings) && proposedPersonalization.warnings.length) {
+    warnings.push.apply(warnings, proposedPersonalization.warnings);
+  }
+  warnings.push("Plan/diff is read-only in State v1.");
+
+  return {
+    schema: STATE_PLAN_SCHEMA,
+    version: STATE_PLAN_VERSION,
+    plan_id: planId,
+    project_slug: state.project_slug,
+    wp_url: state.wp_url,
+    created_at: createdAt,
+    applies_changes: false,
+    provider_called: false,
+    source: {
+      state_path: null,
+      current_state_updated_at: state.updated_at || null,
+      prompt_personalization_source: proposedPersonalization.source || "local_interpreter"
+    },
+    prompt: String(prompt || ""),
+    current: {
+      personalization: currentFields,
+      user_overrides: userOverrides,
+      protected_fields: protectedFields
+    },
+    proposed: {
+      personalization: proposedFields,
+      design_profile: proposedPersonalization.design_profile && typeof proposedPersonalization.design_profile === "object"
+        ? proposedPersonalization.design_profile
+        : {}
+    },
+    diff: {
+      field_changes: fieldChanges,
+      unchanged_fields: unchangedFields,
+      new_fields: newFields,
+      removed_fields: removedFields
+    },
+    conflicts,
+    preservation: {
+      protected_fields_preserved: true,
+      requires_user_confirmation: conflicts.length > 0
+    },
+    can_apply_without_confirmation: conflicts.length === 0,
+    warnings
+  };
+}
+
+function proposedValueOrEmpty(value) {
+  return asString(value);
+}
+
 async function buildState(projectState) {
   const warnings = [];
   const runtimePath = projectState.runtimePath;
@@ -525,9 +684,87 @@ function readStateStatus(options) {
   };
 }
 
+function planState(options) {
+  const projectsRoot = resolveProjectsRoot(options.projectsRoot);
+  const projectState = readProjectBySlug(options.slug, projectsRoot);
+  const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  const statePaths = ensureStatePaths(safeRuntimePath);
+  const prompt = String(options.prompt || "").trim();
+
+  if (!prompt) {
+    throw new Error("state plan requires a non-empty --prompt value.");
+  }
+
+  if (!fs.existsSync(statePaths.currentPath)) {
+    throw new Error(
+      "Managed state is missing. Run: node launcher/src/cli.js state --slug " +
+      projectState.project.slug +
+      " refresh"
+    );
+  }
+
+  const state = safeJsonRead(statePaths.currentPath);
+  const plan = buildStatePlan(state, prompt);
+  plan.source.state_path = statePaths.currentPath;
+
+  const planPath = path.join(statePaths.plansPath, "state-plan-" + timestampCompact() + ".json");
+  const proofId = "state-plan-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
+  const proofPath = path.join(safeRuntimePath, "proofs", proofId + ".json");
+  const protectedFields = Array.isArray(plan.current.protected_fields) ? plan.current.protected_fields : [];
+  const appliedFieldKeys = summarizeAppliedFieldKeys({
+    fields: plan.proposed.personalization
+  });
+  const proof = {
+    proof_id: proofId,
+    project_id: projectState.project.project_id,
+    slug: projectState.project.slug,
+    wp_url: projectState.project.wp_url,
+    state_path: statePaths.currentPath,
+    plan_id: plan.plan_id,
+    prompt_personalization: {
+      source: plan.source.prompt_personalization_source,
+      provider_called: false,
+      fields: plan.proposed.personalization,
+      design_profile: plan.proposed.design_profile,
+      applied_fields: appliedFieldKeys
+    },
+    diff_summary: {
+      field_changes: plan.diff.field_changes.length,
+      unchanged_fields: plan.diff.unchanged_fields.length,
+      new_fields: plan.diff.new_fields.length,
+      removed_fields: plan.diff.removed_fields.length
+    },
+    conflicts: plan.conflicts,
+    protected_fields: protectedFields,
+    requires_user_confirmation: plan.preservation.requires_user_confirmation,
+    can_apply_without_confirmation: plan.can_apply_without_confirmation,
+    applies_changes: false,
+    provider_called: false,
+    no_wp_mutation: true,
+    mutation_scope: "launcher_project_metadata_only",
+    created_at: plan.created_at,
+    warnings: plan.warnings
+  };
+
+  writeJsonFile(planPath, plan);
+  writeJsonFile(proofPath, proof);
+
+  return {
+    project: projectState.project,
+    statePath: statePaths.currentPath,
+    plan,
+    planPath,
+    proof,
+    proofPath
+  };
+}
+
 module.exports = {
   STATE_SCHEMA,
   STATE_VERSION,
+  STATE_PLAN_SCHEMA,
+  STATE_PLAN_VERSION,
+  planState,
   readStateStatus,
   refreshState
 };
