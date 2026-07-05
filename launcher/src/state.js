@@ -36,6 +36,8 @@ const STATE_PLAN_SCHEMA = "factory_state_plan";
 const STATE_PLAN_VERSION = 1;
 const STATE_APPLY_SCHEMA = "factory_state_apply";
 const STATE_APPLY_VERSION = 1;
+const STATE_ROLLBACK_SCHEMA = "factory_state_rollback";
+const STATE_ROLLBACK_VERSION = 1;
 const DOCKER_TIMEOUT_MS = 180000;
 const STATE_APPLY_ALLOWLIST = [ "agency_name", "hero_title", "hero_subtitle", "hero_cta_text" ];
 const STAGE_DEFINITIONS = [
@@ -148,15 +150,18 @@ function ensureStatePaths(runtimePath) {
   const snapshotsPath = path.join(statePath, "snapshots");
   const plansPath = path.join(statePath, "plans");
   const appliesPath = path.join(statePath, "applies");
+  const rollbacksPath = path.join(statePath, "rollbacks");
   ensureDirectory(statePath);
   ensureDirectory(snapshotsPath);
   ensureDirectory(plansPath);
   ensureDirectory(appliesPath);
+  ensureDirectory(rollbacksPath);
   return {
     statePath,
     snapshotsPath,
     plansPath,
     appliesPath,
+    rollbacksPath,
     currentPath: path.join(statePath, "current.json")
   };
 }
@@ -220,6 +225,7 @@ function findLatestMatchingFile(directoryPath, prefix, extension) {
 function findLatestPersonalizationProof(projectState, runtimePath) {
   const proofsPath = path.join(runtimePath, "proofs");
   const preferredIds = [
+    asString(projectState.project.generation && projectState.project.generation.last_rollback_proof_id),
     asString(projectState.project.generation && projectState.project.generation.last_apply_proof_id),
     asString(projectState.project.generation && projectState.project.generation.last_proof_id)
   ].filter(Boolean);
@@ -234,9 +240,10 @@ function findLatestPersonalizationProof(projectState, runtimePath) {
     }
   }
 
+  const latestRollbackPath = findLatestMatchingFile(proofsPath, "state-rollback-", ".json");
   const latestApplyPath = findLatestMatchingFile(proofsPath, "state-apply-", ".json");
   const latestGeneratePath = findLatestMatchingFile(proofsPath, "generate-", ".json");
-  const candidates = [latestApplyPath, latestGeneratePath]
+  const candidates = [latestRollbackPath, latestApplyPath, latestGeneratePath]
     .filter(Boolean)
     .map((filePath) => ({
       filePath,
@@ -434,6 +441,20 @@ function buildOwnershipRecord(resources) {
 }
 
 function extractPersonalization(generateProof) {
+  if (generateProof && generateProof.rollback_fields && typeof generateProof.rollback_fields === "object") {
+    return {
+      source: asString(generateProof.personalization && generateProof.personalization.source) || "state_apply_rollback_v1",
+      provider_called: generateProof.provider_called === true,
+      fields: generateProof.rollback_fields,
+      design_profile: generateProof.personalization && generateProof.personalization.design_profile && typeof generateProof.personalization.design_profile === "object"
+        ? generateProof.personalization.design_profile
+        : {},
+      applied_fields: Array.isArray(generateProof.applied_fields) ? generateProof.applied_fields : summarizeAppliedFieldKeys({ fields: generateProof.rollback_fields }),
+      ignored_fields: Array.isArray(generateProof.ignored_fields) ? generateProof.ignored_fields : [],
+      warnings: Array.isArray(generateProof.warnings) ? generateProof.warnings : []
+    };
+  }
+
   if (generateProof && generateProof.personalization && typeof generateProof.personalization === "object") {
     const personalization = generateProof.personalization;
     const appliedFields = Array.isArray(personalization.applied_fields)
@@ -806,6 +827,16 @@ async function refreshState(options) {
     : createdAt;
   state.updated_at = createdAt;
 
+  projectState.project.generated_site = Object.assign(
+    {},
+    defaultGeneratedSiteMetadata(),
+    projectState.project.generated_site || {},
+    {
+      personalization_last_applied: state.personalization
+    }
+  );
+  saveProjectRecord(projectState, projectState.project);
+
   const snapshotPath = path.join(statePaths.snapshotsPath, "state-" + timestampCompact() + ".json");
   writeJsonFile(statePaths.currentPath, state);
   writeJsonFile(snapshotPath, state);
@@ -861,7 +892,8 @@ function readStateStatus(options) {
     statePath: statePaths.currentPath,
     state,
     summary: buildStateSummary(state, statePaths.currentPath),
-    warnings: Array.isArray(state.warnings) ? state.warnings : []
+    warnings: Array.isArray(state.warnings) ? state.warnings : [],
+    rollback: buildRollbackUiSummary(statePaths, state)
   };
 }
 
@@ -993,6 +1025,39 @@ function buildBlockedApplyProof(projectState, reason, code, conflicts, statePath
   };
 }
 
+function buildBlockedRollbackProof(projectState, reason, code, conflicts, statePath, sourceApplyId, sourceApplyPath) {
+  return {
+    schema: STATE_ROLLBACK_SCHEMA,
+    version: STATE_ROLLBACK_VERSION,
+    rollback_id: "state-rollback-blocked-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex"),
+    project_slug: projectState.project.slug,
+    wp_url: projectState.project.wp_url,
+    created_at: stateNow(),
+    source_apply_id: sourceApplyId || null,
+    source_apply_path: sourceApplyPath || null,
+    state_before_rollback_path: statePath || null,
+    target_previous_state_path: null,
+    state_after_rollback_path: statePath || null,
+    applies_changes: false,
+    provider_called: false,
+    status: "blocked",
+    code,
+    blocked: true,
+    reason,
+    rollback_fields: {},
+    applied_fields: [],
+    ignored_fields: [],
+    preserved_protected_fields: [],
+    protected_conflicts: Array.isArray(conflicts) ? conflicts : [],
+    before_values: {},
+    after_values: {},
+    agent_manifest: null,
+    warnings: [],
+    no_wp_mutation: true,
+    mutation_scope: "launcher_project_metadata_only"
+  };
+}
+
 function deriveEffectiveCurrentValues(state) {
   const personalizationFields = state.personalization && state.personalization.fields && typeof state.personalization.fields === "object"
     ? state.personalization.fields
@@ -1012,6 +1077,37 @@ function deriveEffectiveCurrentValues(state) {
   }
 
   return values;
+}
+
+function derivePersonalizationValues(state) {
+  const fields = state && state.personalization && state.personalization.fields && typeof state.personalization.fields === "object"
+    ? state.personalization.fields
+    : {};
+  const values = {};
+
+  for (const key of STATE_APPLY_ALLOWLIST) {
+    values[key] = asString(fields[key]);
+  }
+
+  return values;
+}
+
+function buildPromptPersonalization(fields, designProfile, source) {
+  const safeFields = {};
+  for (const key of STATE_APPLY_ALLOWLIST) {
+    if (Object.prototype.hasOwnProperty.call(fields || {}, key)) {
+      safeFields[key] = asString(fields[key]);
+    }
+  }
+
+  return {
+    source: asString(source) || "local_interpreter",
+    applies_changes: true,
+    provider_called: false,
+    fields: safeFields,
+    design_profile: designProfile && typeof designProfile === "object" ? designProfile : {},
+    warnings: []
+  };
 }
 
 async function getAgentJson(projectState, targetUrl, proofId, warnings) {
@@ -1173,13 +1269,175 @@ function buildPromptPersonalizationFromPlan(plan) {
     }
   }
 
+  return buildPromptPersonalization(
+    applyFields,
+    designProfile,
+    asString(plan.source && plan.source.prompt_personalization_source) || "local_interpreter"
+  );
+}
+
+function resolveStateApplyPath(statePaths, runtimePath, applyPathValue) {
+  const raw = asString(applyPathValue);
+  if (!raw || raw === "latest") {
+    return null;
+  }
+
+  if (path.isAbsolute(raw)) {
+    return raw;
+  }
+
+  return path.resolve(runtimePath, raw);
+}
+
+function readSuccessfulStateApplyRecord(applyPath) {
+  if (!applyPath || !fs.existsSync(applyPath)) {
+    return null;
+  }
+
+  let applyRecord;
+  try {
+    applyRecord = safeJsonRead(applyPath);
+  } catch (error) {
+    return null;
+  }
+
+  if (
+    !applyRecord ||
+    applyRecord.schema !== STATE_APPLY_SCHEMA ||
+    asString(applyRecord.status) !== "ok" ||
+    applyRecord.applies_changes !== true
+  ) {
+    return null;
+  }
+
+  return applyRecord;
+}
+
+function selectLatestRollbackCandidate(statePaths, currentState) {
+  if (!fs.existsSync(statePaths.appliesPath)) {
+    return null;
+  }
+
+  const currentValues = deriveEffectiveCurrentValues(currentState);
+  const candidates = fs.readdirSync(statePaths.appliesPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith("state-apply-") && entry.name.endsWith(".json"))
+    .map((entry) => {
+      const filePath = path.join(statePaths.appliesPath, entry.name);
+      return {
+        filePath,
+        mtimeMs: fs.statSync(filePath).mtimeMs
+      };
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+
+  for (const candidate of candidates) {
+    const applyRecord = readSuccessfulStateApplyRecord(candidate.filePath);
+    if (!applyRecord || !applyRecord.state_before_path || !fs.existsSync(applyRecord.state_before_path)) {
+      continue;
+    }
+
+    let previousState;
+    try {
+      previousState = safeJsonRead(applyRecord.state_before_path);
+    } catch (error) {
+      continue;
+    }
+
+    const rollbackValues = derivePersonalizationValues(previousState);
+    const hasMeaningfulChange = STATE_APPLY_ALLOWLIST.some((key) => asString(rollbackValues[key]) !== asString(currentValues[key]));
+    if (!hasMeaningfulChange) {
+      continue;
+    }
+
+    return {
+      applyPath: candidate.filePath,
+      applyRecord,
+      previousState
+    };
+  }
+
+  return null;
+}
+
+function resolveRollbackCandidate(statePaths, runtimePath, currentState, applyPathValue) {
+  const explicitPath = resolveStateApplyPath(statePaths, runtimePath, applyPathValue);
+  if (explicitPath) {
+    const applyRecord = readSuccessfulStateApplyRecord(explicitPath);
+    if (!applyRecord) {
+      throw new Error("Selected state apply record is unavailable or not rollback-eligible.");
+    }
+
+    if (!applyRecord.state_before_path || !fs.existsSync(applyRecord.state_before_path)) {
+      throw new Error("Selected state apply record is missing its state_before_path snapshot.");
+    }
+
+    return {
+      applyPath: explicitPath,
+      applyRecord,
+      previousState: safeJsonRead(applyRecord.state_before_path)
+    };
+  }
+
+  return selectLatestRollbackCandidate(statePaths, currentState);
+}
+
+function buildRollbackPrompt(previousValues) {
+  const agency = asString(previousValues.agency_name) || "the previous state";
+  return "Rollback safe personalization to previous state for " + agency;
+}
+
+function validateStateRollbackCandidate(state, rollbackValues) {
+  const userOverrides = state.user_overrides && typeof state.user_overrides === "object" ? state.user_overrides : {};
+  const protectedConflicts = [];
+
+  for (const [fieldKey, override] of Object.entries(userOverrides)) {
+    if (!override || override.protected !== true) {
+      continue;
+    }
+
+    const rollbackValue = asString(rollbackValues[fieldKey]);
+    const currentValue = asString(override.value);
+
+    if (rollbackValue && rollbackValue !== currentValue) {
+      protectedConflicts.push({
+        type: "protected_user_override",
+        severity: "requires_confirmation",
+        field_key: fieldKey,
+        current_user_value: currentValue,
+        rollback_value: rollbackValue,
+        overwrite_policy: asString(override.overwrite_policy) || "ask_before_overwrite",
+        message: "Field " + fieldKey + " was edited on the frontend and is protected. Ask before overwrite."
+      });
+    }
+  }
+
+  return protectedConflicts;
+}
+
+function buildRollbackUiSummary(statePaths, state) {
+  const candidate = selectLatestRollbackCandidate(statePaths, state);
+  if (!candidate) {
+    return {
+      available: false,
+      safe: false,
+      code: "rollback_unavailable",
+      message: "No rollback-ready state apply is available."
+    };
+  }
+
+  const rollbackValues = derivePersonalizationValues(candidate.previousState);
+  const protectedConflicts = validateStateRollbackCandidate(state, rollbackValues);
+
   return {
-    source: asString(plan.source && plan.source.prompt_personalization_source) || "local_interpreter",
-    applies_changes: true,
-    provider_called: false,
-    fields: applyFields,
-    design_profile: designProfile,
-    warnings: []
+    available: true,
+    safe: protectedConflicts.length === 0,
+    code: protectedConflicts.length ? "state_rollback_requires_confirmation" : "state_rollback_available",
+    message: protectedConflicts.length
+      ? "Rollback blocked: confirmation required."
+      : "Rollback last apply is available.",
+    apply_id: candidate.applyRecord.apply_id || null,
+    apply_path: candidate.applyPath,
+    protected_conflicts: protectedConflicts
   };
 }
 
@@ -1539,6 +1797,287 @@ async function applyStatePlan(options) {
   }
 }
 
+async function rollbackStateApply(options) {
+  const projectsRoot = resolveProjectsRoot(options.projectsRoot);
+  const projectState = readProjectBySlug(options.slug, projectsRoot);
+  const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  const statePaths = ensureStatePaths(safeRuntimePath);
+  const state = fs.existsSync(statePaths.currentPath) ? safeJsonRead(statePaths.currentPath) : null;
+  const warnings = [];
+
+  if (!state) {
+    throw new Error(
+      "Managed state is missing. Run: node launcher/src/cli.js state --slug " +
+      projectState.project.slug +
+      " refresh"
+    );
+  }
+
+  const rollbackCandidate = resolveRollbackCandidate(statePaths, safeRuntimePath, state, options.applyPath);
+  if (!rollbackCandidate) {
+    return {
+      project: projectState.project,
+      status: "unavailable",
+      code: "rollback_unavailable",
+      proofPath: null,
+      statePath: statePaths.currentPath,
+      protectedConflicts: []
+    };
+  }
+
+  const { applyPath, applyRecord, previousState } = rollbackCandidate;
+  const rollbackValues = derivePersonalizationValues(previousState);
+  const protectedConflicts = validateStateRollbackCandidate(state, rollbackValues);
+
+  if (protectedConflicts.length > 0) {
+    const blockedProof = buildBlockedRollbackProof(
+      projectState,
+      "Rollback would overwrite protected frontend overrides and requires explicit confirmation.",
+      "state_rollback_requires_confirmation",
+      protectedConflicts,
+      statePaths.currentPath,
+      applyRecord.apply_id,
+      applyPath
+    );
+    blockedProof.target_previous_state_path = applyRecord.state_before_path || null;
+    const blockedProofPath = path.join(safeRuntimePath, "proofs", "state-rollback-blocked-" + timestampCompact() + ".json");
+    writeJsonFile(blockedProofPath, blockedProof);
+
+    return {
+      project: projectState.project,
+      status: "blocked",
+      code: blockedProof.code,
+      proof: blockedProof,
+      proofPath: blockedProofPath,
+      statePath: statePaths.currentPath,
+      protectedConflicts
+    };
+  }
+
+  const rollbackTimestamp = timestampCompact();
+  const rollbackId = "state-rollback-" + rollbackTimestamp + "-" + crypto.randomBytes(3).toString("hex");
+  const rollbackPath = path.join(statePaths.rollbacksPath, "state-rollback-" + rollbackTimestamp + ".json");
+  const proofPath = path.join(safeRuntimePath, "proofs", "state-rollback-" + rollbackTimestamp + ".json");
+  const stateBeforeRollbackPath = path.join(statePaths.rollbacksPath, "state-before-rollback-" + rollbackTimestamp + ".json");
+  writeJsonFile(stateBeforeRollbackPath, state);
+
+  const effectiveBeforeValues = deriveEffectiveCurrentValues(state);
+  const promptPersonalization = buildPromptPersonalization(
+    rollbackValues,
+    previousState.personalization && previousState.personalization.design_profile ? previousState.personalization.design_profile : {},
+    "state_apply_rollback_v1"
+  );
+  const rollbackFields = Object.assign({}, rollbackValues);
+  const appliedFields = STATE_APPLY_ALLOWLIST.filter((key) => asString(rollbackValues[key]));
+  const ignoredFields = Object.keys(previousState.personalization && previousState.personalization.fields || {})
+    .filter((key) => !STATE_APPLY_ALLOWLIST.includes(key));
+  const preservedProtectedFields = extractProtectedFields(state.user_overrides || {});
+  let enteredMutationBoundary = false;
+  let executeData = null;
+  let afterCounts = null;
+  let homeHtmlBefore = null;
+  let homeHtmlAfter = null;
+  let refreshResult = null;
+
+  try {
+    const preconditions = await validateStateApplyPreconditions(projectState, rollbackId, warnings);
+    const prompt = buildRollbackPrompt(rollbackValues);
+
+    homeHtmlBefore = await readHomeHtml(projectState.project.wp_url);
+    const runtimeCountsBefore = await readRuntimeCounts(projectState, rollbackId + "-before", warnings);
+    const rerun = await rerunPlanningChain(projectState, prompt, promptPersonalization, rollbackId, warnings);
+    const gate = rerun.results.generate_gate || {};
+    const preflight = rerun.results.generate_preflight || {};
+    const confirmation = rerun.results.generate_confirmation || {};
+
+    if (!toBooleanTrue(gate.can_generate)) {
+      throw new Error("State rollback gate blocked safe personalization rollback.");
+    }
+
+    if (!toBooleanTrue(preflight.preflight_ready)) {
+      throw new Error("State rollback preflight blocked safe personalization rollback.");
+    }
+
+    if (!toBooleanTrue(confirmation.confirmation_ready)) {
+      throw new Error("State rollback confirmation blocked safe personalization rollback.");
+    }
+
+    const previewPayload = {
+      prompt,
+      site_plan: rerun.results.site_plan,
+      blueprint_candidate: rerun.results.blueprint_candidate,
+      preview_diff: rerun.results.preview_diff,
+      generate_gate: gate,
+      generate_preflight: preflight,
+      generate_confirmation: confirmation,
+      execute: false,
+      site_type: "real_estate",
+      vertical: "real_estate",
+      context: rerun.context
+    };
+    const previewResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", previewPayload, rollbackId, warnings);
+    const previewData = previewResponse.json || {};
+
+    if (toBooleanTrue(previewData.applies_changes)) {
+      throw new Error("Rollback preview unexpectedly reported applies_changes=true.");
+    }
+
+    if (toBooleanTrue(previewData.provider_called)) {
+      throw new Error("Rollback preview unexpectedly reported provider_called=true.");
+    }
+
+    if (!previewData.confirmation_required_phrase) {
+      throw new Error("Rollback preview did not return a confirmation phrase.");
+    }
+
+    const executePayload = Object.assign({}, previewPayload, {
+      execute: true,
+      confirmation_phrase: previewData.confirmation_required_phrase
+    });
+    enteredMutationBoundary = true;
+    const executeResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", executePayload, rollbackId, warnings);
+    executeData = executeResponse.json || {};
+
+    afterCounts = await readRuntimeCounts(projectState, rollbackId + "-after", warnings);
+    homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
+
+    const mutationStarted = toBooleanTrue(executeData.applies_changes)
+      || asString(executeData.mutation_status) === "unknown_after_apply_started"
+      || asString(executeData.mutation_status) === "completed";
+
+    if (!mutationStarted) {
+      throw new Error("State rollback did not enter the mutation boundary: " + String(executeData.message || executeData.code || "unknown rollback error"));
+    }
+
+    const baseRollbackRecord = {
+      schema: STATE_ROLLBACK_SCHEMA,
+      version: STATE_ROLLBACK_VERSION,
+      rollback_id: rollbackId,
+      project_slug: projectState.project.slug,
+      wp_url: projectState.project.wp_url,
+      created_at: stateNow(),
+      source_apply_id: applyRecord.apply_id || null,
+      source_apply_path: applyPath,
+      state_before_rollback_path: stateBeforeRollbackPath,
+      target_previous_state_path: applyRecord.state_before_path || null,
+      state_after_rollback_path: null,
+      state_current_path: null,
+      applies_changes: true,
+      provider_called: false,
+      status: "ok",
+      code: "state_rollback_applied",
+      rollback_fields: rollbackFields,
+      applied_fields: appliedFields,
+      ignored_fields: ignoredFields,
+      preserved_protected_fields: preservedProtectedFields,
+      protected_conflicts: [],
+      before_values: effectiveBeforeValues,
+      after_values: {},
+      before_counts: runtimeCountsBefore,
+      after_counts: afterCounts,
+      agent_manifest: asString(executeData.manifest_path) || null,
+      warnings
+    };
+
+    writeJsonFile(rollbackPath, baseRollbackRecord);
+    writeJsonFile(proofPath, baseRollbackRecord);
+
+    projectState.project.generation = Object.assign({}, projectState.project.generation || {}, {
+      status: asString(executeData.status) || "ok",
+      last_rollback_proof_id: path.basename(proofPath, ".json")
+    });
+    projectState.project.generated_site = Object.assign({}, defaultGeneratedSiteMetadata(), projectState.project.generated_site || {}, {
+      present: true,
+      personalization_last_applied: {
+        source: promptPersonalization.source,
+        provider_called: false,
+        fields: rollbackValues,
+        design_profile: promptPersonalization.design_profile,
+        applied_fields: appliedFields,
+        ignored_fields: ignoredFields,
+        warnings: warnings.slice()
+      }
+    });
+    saveProjectRecord(projectState, projectState.project);
+
+    refreshResult = await refreshState({
+      slug: projectState.project.slug,
+      projectsRoot
+    });
+
+    const refreshedState = refreshResult.state;
+    const afterValues = deriveEffectiveCurrentValues(refreshedState);
+    homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
+    const rollbackRecord = Object.assign({}, baseRollbackRecord, {
+      state_after_rollback_path: refreshResult.snapshotPath,
+      state_current_path: refreshResult.statePath,
+      after_values: afterValues,
+      home_html_before_contains: {
+        agency_name: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.agency_name)),
+        hero_title: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.hero_title))
+      },
+      home_html_after_contains: {
+        agency_name: homeHtmlAfter.body.includes(asString(afterValues.agency_name)),
+        hero_title: homeHtmlAfter.body.includes(asString(afterValues.hero_title)),
+        hero_subtitle: homeHtmlAfter.body.includes(asString(afterValues.hero_subtitle)),
+        hero_cta_text: homeHtmlAfter.body.includes(asString(afterValues.hero_cta_text))
+      },
+      warnings
+    });
+
+    writeJsonFile(rollbackPath, rollbackRecord);
+    writeJsonFile(proofPath, rollbackRecord);
+
+    return {
+      project: projectState.project,
+      status: "ok",
+      code: "state_rollback_applied",
+      rollback: rollbackRecord,
+      rollbackPath,
+      proofPath,
+      statePath: refreshResult.statePath,
+      summary: refreshResult.summary
+    };
+  } catch (error) {
+    const rollbackRecord = {
+      schema: STATE_ROLLBACK_SCHEMA,
+      version: STATE_ROLLBACK_VERSION,
+      rollback_id: rollbackId,
+      project_slug: projectState.project.slug,
+      wp_url: projectState.project.wp_url,
+      created_at: stateNow(),
+      source_apply_id: applyRecord.apply_id || null,
+      source_apply_path: applyPath,
+      state_before_rollback_path: stateBeforeRollbackPath,
+      target_previous_state_path: applyRecord.state_before_path || null,
+      state_after_rollback_path: statePaths.currentPath,
+      applies_changes: enteredMutationBoundary,
+      provider_called: false,
+      status: enteredMutationBoundary ? "failed" : "blocked",
+      code: enteredMutationBoundary ? "state_rollback_failed_after_boundary" : "state_rollback_failed",
+      rollback_fields: rollbackFields,
+      applied_fields: appliedFields,
+      ignored_fields: ignoredFields,
+      preserved_protected_fields: preservedProtectedFields,
+      protected_conflicts: [],
+      before_values: effectiveBeforeValues,
+      after_values: {},
+      agent_manifest: executeData && executeData.manifest_path ? executeData.manifest_path : null,
+      warnings: warnings.concat([error.message]),
+      mutation_status: enteredMutationBoundary
+        ? (executeData && executeData.mutation_status ? executeData.mutation_status : "unknown_after_apply_started")
+        : "not_started"
+    };
+
+    writeJsonFile(rollbackPath, rollbackRecord);
+    writeJsonFile(proofPath, rollbackRecord);
+
+    const enrichedError = new Error(error.message + " (proof: " + proofPath + ")");
+    enrichedError.proofPath = proofPath;
+    throw enrichedError;
+  }
+}
+
 module.exports = {
   STATE_SCHEMA,
   STATE_VERSION,
@@ -1546,7 +2085,10 @@ module.exports = {
   STATE_PLAN_VERSION,
   STATE_APPLY_SCHEMA,
   STATE_APPLY_VERSION,
+  STATE_ROLLBACK_SCHEMA,
+  STATE_ROLLBACK_VERSION,
   applyStatePlan,
+  rollbackStateApply,
   planState,
   readStateStatus,
   refreshState

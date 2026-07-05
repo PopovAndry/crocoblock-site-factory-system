@@ -15,7 +15,7 @@ const { installDependency } = require("./install-dependency");
 const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus } = require("./site");
-const { refreshState, readStateStatus, planState, applyStatePlan } = require("./state");
+const { refreshState, readStateStatus, planState, applyStatePlan, rollbackStateApply } = require("./state");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -67,6 +67,7 @@ function printUsage() {
     "  node launcher/src/cli.js state --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty rollback --apply latest [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
@@ -583,7 +584,36 @@ async function runState(parsed) {
     return;
   }
 
-  throw new Error("state requires a subcommand: refresh | status | plan | apply.");
+  if (subcommand === "rollback") {
+    const result = await rollbackStateApply({
+      slug: parsed.flags.slug,
+      projectsRoot: parsed.flags["projects-root"],
+      applyPath: parsed.flags.apply
+    });
+
+    console.log("Managed state rollback:");
+    console.log("  Site name: " + result.project.site_name);
+    console.log("  Slug: " + result.project.slug);
+    console.log("  Status: " + String(result.status));
+    console.log("  Code: " + String(result.code));
+    if (result.status === "unavailable") {
+      console.log("  State path: " + result.statePath);
+      return;
+    }
+    if (result.status === "blocked") {
+      console.log("  Protected conflicts: " + String((result.protectedConflicts || []).length));
+      console.log("  Proof path: " + result.proofPath);
+      console.log("  State path: " + result.statePath);
+      return;
+    }
+    console.log("  Rollback fields: " + Object.keys(result.rollback.rollback_fields || {}).join(", "));
+    console.log("  Applied fields: " + ((result.rollback.applied_fields || []).length ? result.rollback.applied_fields.join(", ") : "None"));
+    console.log("  Proof path: " + result.proofPath);
+    console.log("  State path: " + result.statePath);
+    return;
+  }
+
+  throw new Error("state requires a subcommand: refresh | status | plan | apply | rollback.");
 }
 
 async function main() {

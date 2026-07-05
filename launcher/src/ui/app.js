@@ -18,6 +18,7 @@
   const statePlanForm = document.getElementById("state-plan-form");
   const statePlanPrompt = document.getElementById("state-plan-prompt");
   const statePlanResult = document.getElementById("state-plan-result");
+  const stateRollbackResult = document.getElementById("state-rollback-result");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
   const totalTokens = document.getElementById("launcher-total-tokens");
   const aiMode = document.getElementById("launcher-ai-mode");
@@ -284,6 +285,7 @@
 
     const summary = payload.summary;
     const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+    const rollback = payload.rollback || null;
     managedState.innerHTML = [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
@@ -300,10 +302,51 @@
       "    <div><dt>User overrides</dt><dd>" + escapeHtml(String(summary.user_overrides_count)) + "</dd></div>",
       "    <div><dt>Protected fields</dt><dd>" + escapeHtml(summary.protected_fields.length ? summary.protected_fields.join(", ") : "None") + "</dd></div>",
       "  </dl>",
+      rollback && rollback.available && rollback.safe
+        ? "  <p><button type=\"button\" class=\"button\" id=\"state-rollback-button\" data-apply-path=\"" + escapeHtml(rollback.apply_path || "latest") + "\">Rollback Last Apply</button></p>"
+        : "",
+      rollback && rollback.available && !rollback.safe
+        ? "  <p class=\"project-note\">Rollback blocked: confirmation required.</p>"
+        : "",
+      rollback && !rollback.available
+        ? "  <p class=\"project-note\">" + escapeHtml(rollback.message || "No rollback-ready apply is available.") + "</p>"
+        : "",
       "  <p class=\"project-note\">State path: " + escapeHtml(summary.state_path) + "</p>",
       warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       "</article>"
     ].join("\n");
+
+    const rollbackButton = document.getElementById("state-rollback-button");
+    if (rollbackButton) {
+      rollbackButton.addEventListener("click", async () => {
+        rollbackButton.disabled = true;
+        try {
+          const response = await fetch("/api/projects/" + encodeURIComponent(String(generateProjectSlug.value || "").trim()) + "/state/rollback", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              apply_path: rollbackButton.getAttribute("data-apply-path") || "latest"
+            })
+          });
+          const rollbackResult = await response.json();
+          if (!response.ok) {
+            showResult(stateRollbackResult, rollbackResult, true);
+            return;
+          }
+
+          renderStateRollbackResult(rollbackResult);
+          await loadProjects();
+          await loadManagedState(generateProjectSlug.value);
+          await loadSiteStatus(generateProjectSlug.value);
+        } catch (error) {
+          showResult(stateRollbackResult, { error: error.message }, true);
+        } finally {
+          rollbackButton.disabled = false;
+        }
+      });
+    }
   }
 
   function renderStatePlanResult(result) {
@@ -389,6 +432,25 @@
       "<p><span>Ignored fields:</span> " + escapeHtml((apply.ignored_fields || []).length ? apply.ignored_fields.join(", ") : "None") + "</p>",
       conflicts.length ? "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>" : "",
       conflicts.length ? "<ul>" + conflicts.map((conflict) => "<li>" + escapeHtml(conflict.message || conflict.field_key || "Conflict") + "</li>").join("") + "</ul>" : ""
+    ].join("");
+  }
+
+  function renderStateRollbackResult(result) {
+    const rollback = result.rollback || {};
+    const protectedConflicts = Array.isArray(result.protected_conflicts) ? result.protected_conflicts : [];
+    stateRollbackResult.hidden = false;
+    stateRollbackResult.className = result.status === "ok" ? "result-box result-box-success" : "result-box result-box-error";
+    stateRollbackResult.innerHTML = [
+      "<strong>Managed state rollback " + escapeHtml(result.status || "unknown") + ".</strong>",
+      "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
+      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
+      "<p><span>State path:</span> " + escapeHtml(result.state_path || "Unavailable") + "</p>",
+      result.status === "ok"
+        ? "<p><span>Rollback fields:</span> " + escapeHtml(Object.keys(rollback.rollback_fields || {}).join(", ")) + "</p>"
+        : "",
+      protectedConflicts.length
+        ? "<ul>" + protectedConflicts.map((conflict) => "<li>" + escapeHtml(conflict.message || conflict.field_key || "Conflict") + "</li>").join("") + "</ul>"
+        : ""
     ].join("");
   }
 

@@ -14,7 +14,7 @@ const { planProject } = require("./plan");
 const { configureAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
-const { readStateStatus, refreshState, planState, applyStatePlan } = require("./state");
+const { readStateStatus, refreshState, planState, applyStatePlan, rollbackStateApply } = require("./state");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -200,6 +200,7 @@ function renderHomePage(config) {
     "          <button type=\"submit\" class=\"button\" id=\"state-plan-button\">Plan Change</button>",
     "        </form>",
     "        <div id=\"state-plan-result\" class=\"result-box\" hidden></div>",
+    "        <div id=\"state-rollback-result\" class=\"result-box\" hidden></div>",
     "      </section>",
     "    </section>",
     "  </main>",
@@ -387,14 +388,21 @@ function createLauncherServer(options) {
           slug,
           projectsRoot
         });
+        const stateProject = summarizeProjectForSite(result.project);
+        if (result.exists && result.state && stateProject.generated_site) {
+          stateProject.generated_site = Object.assign({}, stateProject.generated_site, {
+            personalization_last_applied: result.state.personalization || null
+          });
+        }
 
         sendJson(response, 200, {
           ok: true,
           exists: result.exists,
-          project: summarizeProjectForSite(result.project),
+          project: stateProject,
           state_path: result.statePath,
           summary: result.summary,
-          warnings: result.warnings
+          warnings: result.warnings,
+          rollback: result.rollback || null
         });
         return;
       }
@@ -460,6 +468,30 @@ function createLauncherServer(options) {
           state_path: result.statePath,
           conflicts: result.conflicts || [],
           warnings: result.apply ? result.apply.warnings : (result.proof ? result.proof.warnings : [])
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/rollback$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await rollbackStateApply({
+          slug,
+          projectsRoot,
+          applyPath: payload.apply_path
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          status: result.status,
+          code: result.code,
+          rollback: result.rollback || null,
+          proof_path: result.proofPath || null,
+          state_path: result.statePath,
+          protected_conflicts: result.protectedConflicts || [],
+          warnings: result.rollback ? result.rollback.warnings : []
         });
         return;
       }
@@ -534,6 +566,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/apply$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/state\/rollback$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500;
