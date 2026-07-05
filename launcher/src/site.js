@@ -145,6 +145,25 @@ function buildCountsSummary(proof) {
   };
 }
 
+function buildPersonalizationSummary(proof) {
+  if (!proof || !proof.personalization || typeof proof.personalization !== "object") {
+    return null;
+  }
+
+  const personalization = proof.personalization;
+  return {
+    source: asString(personalization.source) || "local_interpreter",
+    provider_called: personalization.provider_called === true,
+    fields: personalization.fields && typeof personalization.fields === "object" ? personalization.fields : {},
+    design_profile: personalization.design_profile && typeof personalization.design_profile === "object" ? personalization.design_profile : {},
+    applied_fields: Array.isArray(personalization.applied_fields) ? personalization.applied_fields : [],
+    ignored_fields: Array.isArray(personalization.ignored_fields) ? personalization.ignored_fields : [],
+    warnings: Array.isArray(personalization.warnings) ? personalization.warnings : [],
+    before_values: personalization.before_values && typeof personalization.before_values === "object" ? personalization.before_values : null,
+    after_values: personalization.after_values && typeof personalization.after_values === "object" ? personalization.after_values : null
+  };
+}
+
 async function checkUrl(targetUrl, warnings) {
   if (!targetUrl) {
     return 0;
@@ -237,6 +256,7 @@ async function getSiteStatus(options) {
   const frontendEditLoginUrl = frontendEdit.available ? buildFrontendEditLoginUrl(frontendEdit.url) : null;
   const warnings = [];
   const countsSummary = buildCountsSummary(latestProof);
+  const personalization = buildPersonalizationSummary(latestProof);
 
   if (frontendEdit.available) {
     generatedUrls.frontend_edit = frontendEdit.url;
@@ -271,6 +291,7 @@ async function getSiteStatus(options) {
     agent_frontend_safe_edit_capability: hasFrontendSafeEditCapability(projectState.project),
     frontend_edit_reason: frontendEdit.reason,
     counts_summary: countsSummary,
+    personalization,
     controlled_generate_status: latestProof ? latestProof.controlled_generate_status || null : null,
     controlled_generate_code: latestProof ? latestProof.controlled_generate_code || null : null,
     url_status: urlStatus,
@@ -307,6 +328,7 @@ async function writeSiteSurfaceProof(options) {
     frontend_edit_auth_required: statusResult.site.frontend_edit_auth_required,
     agent_frontend_safe_edit_capability: statusResult.site.agent_frontend_safe_edit_capability,
     counts_summary: statusResult.site.counts_summary,
+    personalization: statusResult.site.personalization,
     applies_changes: false,
     mutation_scope: "launcher_project_metadata_only",
     created_at: new Date().toISOString(),

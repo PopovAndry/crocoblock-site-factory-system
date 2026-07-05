@@ -165,6 +165,7 @@
 
   function renderPlanResult(result) {
     const stages = Array.isArray(result.run && result.run.stages) ? result.run.stages : [];
+    const personalization = result.proof && result.proof.prompt_personalization ? result.proof.prompt_personalization : null;
     const stageList = stages.map((stage) => {
       const status = stage.status || stage.code || "ok";
       return "<li><strong>" + escapeHtml(stage.label || stage.name) + ":</strong> " + escapeHtml(status) + "</li>";
@@ -177,6 +178,7 @@
       "<p><span>Run ID:</span> " + escapeHtml(result.run.run_id) + "</p>",
       "<p><span>Run file:</span> " + escapeHtml(result.run_path) + "</p>",
       "<p><span>Proof file:</span> " + escapeHtml(result.proof_path) + "</p>",
+      personalization ? "<p><span>Personalization:</span> " + escapeHtml(personalization.source) + " -> " + escapeHtml(Object.keys(personalization.fields || {}).join(", ")) + "</p>" : "",
       "<p><span>Stages:</span></p>",
       "<ul>" + stageList + "</ul>"
     ].join("");
@@ -184,6 +186,7 @@
 
   function renderGenerateResult(result) {
     const urls = result.generated_urls || {};
+    const personalization = result.proof && result.proof.personalization ? result.proof.personalization : null;
     generateResult.hidden = false;
     generateResult.className = "result-box result-box-success";
     generateResult.innerHTML = [
@@ -191,6 +194,7 @@
       "<p><span>Status:</span> " + escapeHtml(result.status || "unknown") + "</p>",
       "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
       "<p><span>Proof file:</span> " + escapeHtml(result.proof_path) + "</p>",
+      personalization ? "<p><span>Personalization:</span> " + escapeHtml(personalization.source || "local_interpreter") + " -> " + escapeHtml((personalization.applied_fields || []).join(", ")) + "</p>" : "",
       "<p><span>Home:</span> " + escapeHtml(urls.home || urls.root || result.project.wp_url) + "</p>",
       "<p><span>Properties:</span> " + escapeHtml(urls.properties || "Unavailable") + "</p>",
       "<p><span>Contact:</span> " + escapeHtml(urls.contact || "Unavailable") + "</p>"
@@ -219,6 +223,7 @@
     const counts = site.counts_summary || {};
     const beforeCounts = counts.before || {};
     const afterCounts = counts.after || {};
+    const personalization = site.personalization || null;
     const warnings = Array.isArray(site.warnings) ? site.warnings : [];
 
     if (!site.latest_generate_proof_id && !site.generated_site_present) {
@@ -250,6 +255,8 @@
       "    <div><dt>Attachments</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.attachments, afterCounts.attachments)) + "</dd></div>",
       "    <div><dt>Frontend Edit</dt><dd>" + escapeHtml(site.frontend_edit_available ? "Available" : "Unavailable") + "</dd></div>",
       "    <div><dt>Auth</dt><dd>" + escapeHtml(site.frontend_edit_auth_required ? "WordPress admin login required" : "No extra login required") + "</dd></div>",
+      "    <div><dt>Personalization</dt><dd>" + escapeHtml(personalization ? (personalization.source || "local_interpreter") : "Unavailable") + "</dd></div>",
+      "    <div><dt>Applied fields</dt><dd>" + escapeHtml(personalization ? ((personalization.applied_fields || []).join(", ") || "None") : "Unavailable") + "</dd></div>",
       "  </dl>",
       links ? "  <div class=\"site-links\">" + links + "</div>" : "",
       site.frontend_edit_available ? "  <p class=\"project-note\">Frontend editing requires a WordPress admin browser session.</p>" : "",

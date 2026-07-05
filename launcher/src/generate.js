@@ -25,6 +25,11 @@ const {
 } = require("./install-agent");
 const { fetchDependencyStatus } = require("./dependencies");
 const { runCommand } = require("./runtime-tools");
+const {
+  buildPlanningContextFromPersonalization,
+  derivePromptPersonalization,
+  summarizeAppliedFieldKeys
+} = require("./prompt-personalization");
 
 const DOCKER_TIMEOUT_MS = 180000;
 const STAGE_DEFINITIONS = [
@@ -128,21 +133,6 @@ function timestampCompact() {
 
 function toBooleanTrue(value) {
   return value === true || value === "true";
-}
-
-function createPlanningContext() {
-  return {
-    preset: "real-estate",
-    preset_variables: {},
-    style_context: {
-      tone: "premium",
-      primary_preset: "turquoise"
-    },
-    image_context: {
-      source: "demo_pool",
-      mode: "round_robin"
-    }
-  };
 }
 
 async function postAgentJson(projectState, targetUrl, payload, proofId, warnings) {
@@ -456,9 +446,27 @@ async function verifyGeneratedUrls(urls, warnings) {
   return results;
 }
 
-async function rerunPlanningChain(projectState, prompt, proofId, warnings) {
+function readPreviousGenerateProof(projectState) {
+  const proofId = projectState.project.generation && projectState.project.generation.last_proof_id;
+  if (!proofId) {
+    return null;
+  }
+
+  const proofPath = path.join(projectState.runtimePath, "proofs", proofId + ".json");
+  if (!fs.existsSync(proofPath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(proofPath, "utf8"));
+  } catch (error) {
+    return null;
+  }
+}
+
+async function rerunPlanningChain(projectState, prompt, promptPersonalization, proofId, warnings) {
   const restBase = String(projectState.project.agent && projectState.project.agent.rest_base || "");
-  const context = createPlanningContext();
+  const context = buildPlanningContextFromPersonalization(promptPersonalization);
   const results = {};
   const stages = [];
 
@@ -600,6 +608,8 @@ async function generateProject(options) {
   let executeData = null;
   let enteredMutationBoundary = false;
   let dependencyStateBefore = projectState.project.dependency_state || null;
+  let promptPersonalization = null;
+  let previousGenerateProof = null;
 
   try {
     preconditions = await validateGeneratePreconditions(projectState, proofId, warnings);
@@ -609,8 +619,10 @@ async function generateProject(options) {
       throw new Error("Latest planning run prompt is missing.");
     }
 
+    promptPersonalization = derivePromptPersonalization(prompt);
+    previousGenerateProof = readPreviousGenerateProof(projectState);
     beforeCounts = await readRuntimeCounts(projectState, proofId, warnings);
-    const rerun = await rerunPlanningChain(projectState, prompt, proofId, warnings);
+    const rerun = await rerunPlanningChain(projectState, prompt, promptPersonalization, proofId, warnings);
     const gate = rerun.results.generate_gate || {};
     const preflight = rerun.results.generate_preflight || {};
     const confirmation = rerun.results.generate_confirmation || {};
@@ -686,6 +698,13 @@ async function generateProject(options) {
       warnings.push("Post-generate verification was partial: " + error.message);
     }
 
+    const personalizationAppliedFields = summarizeAppliedFieldKeys(promptPersonalization);
+    const personalizationBeforeValues = previousGenerateProof
+      && previousGenerateProof.personalization
+      && (previousGenerateProof.personalization.after_values || previousGenerateProof.personalization.fields)
+        ? previousGenerateProof.personalization.after_values || previousGenerateProof.personalization.fields
+        : null;
+    const personalizationAfterValues = promptPersonalization ? Object.assign({}, promptPersonalization.fields) : null;
     const mutationStarted = toBooleanTrue(executeData.applies_changes) || String(executeData.mutation_status || "") === "unknown_after_apply_started" || String(executeData.mutation_status || "") === "completed";
     const proof = {
       proof_id: proofId,
@@ -698,6 +717,18 @@ async function generateProject(options) {
       dependency_state_before: dependencyStateBefore,
       before_counts: beforeCounts,
       after_counts: afterCounts,
+      prompt,
+      personalization: {
+        source: promptPersonalization ? promptPersonalization.source : "local_interpreter",
+        provider_called: false,
+        fields: promptPersonalization ? promptPersonalization.fields : {},
+        design_profile: promptPersonalization ? promptPersonalization.design_profile : {},
+        applied_fields: personalizationAppliedFields,
+        ignored_fields: [],
+        warnings: promptPersonalization ? promptPersonalization.warnings : [],
+        before_values: personalizationBeforeValues,
+        after_values: personalizationAfterValues
+      },
       controlled_generate_status: executeData.status || "error",
       controlled_generate_code: executeData.code || "controlled_generate_failed",
       generated_urls: generatedUrls,
@@ -729,7 +760,8 @@ async function generateProject(options) {
     });
     projectState.project.generated_site = Object.assign({}, defaultGeneratedSiteMetadata(), projectState.project.generated_site || {}, {
       present: toBooleanTrue(executeData.generated),
-      urls: generatedUrls
+      urls: generatedUrls,
+      personalization_last_applied: proof.personalization
     });
     saveProjectRecord(projectState, projectState.project);
 
@@ -758,6 +790,22 @@ async function generateProject(options) {
       dependency_state_before: dependencyStateBefore,
       before_counts: beforeCounts,
       after_counts: afterCounts,
+      prompt,
+      personalization: {
+        source: promptPersonalization ? promptPersonalization.source : "local_interpreter",
+        provider_called: false,
+        fields: promptPersonalization ? promptPersonalization.fields : {},
+        design_profile: promptPersonalization ? promptPersonalization.design_profile : {},
+        applied_fields: promptPersonalization ? summarizeAppliedFieldKeys(promptPersonalization) : [],
+        ignored_fields: [],
+        warnings: promptPersonalization ? promptPersonalization.warnings : [],
+        before_values: previousGenerateProof
+          && previousGenerateProof.personalization
+          && (previousGenerateProof.personalization.after_values || previousGenerateProof.personalization.fields)
+            ? previousGenerateProof.personalization.after_values || previousGenerateProof.personalization.fields
+            : null,
+        after_values: promptPersonalization ? Object.assign({}, promptPersonalization.fields) : null
+      },
       controlled_generate_status: executeData && executeData.status ? executeData.status : "error",
       controlled_generate_code: executeData && executeData.code ? executeData.code : "launcher_generate_failed",
       generated_urls: generatedUrls,

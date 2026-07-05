@@ -23,6 +23,11 @@ const {
   estimateOutputTokens,
   normalizeAiState
 } = require("./ai");
+const {
+  buildPlanningContextFromPersonalization,
+  derivePromptPersonalization,
+  summarizeAppliedFieldKeys
+} = require("./prompt-personalization");
 
 const STAGE_DEFINITIONS = [
   {
@@ -125,21 +130,6 @@ function timestampCompact() {
 
 function makeRunId() {
   return "run-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
-}
-
-function createPlanningContext() {
-  return {
-    preset: "real-estate",
-    preset_variables: {},
-    style_context: {
-      tone: "premium",
-      primary_preset: "turquoise"
-    },
-    image_context: {
-      source: "demo_pool",
-      mode: "round_robin"
-    }
-  };
 }
 
 function toBooleanTrue(value) {
@@ -269,7 +259,9 @@ async function planProject(options) {
   const estimatedInputTokens = estimateInputTokens(prompt);
   const estimatedOutputTokens = estimateOutputTokens(modelProfile);
   const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens;
-  const context = createPlanningContext();
+  const promptPersonalization = derivePromptPersonalization(prompt);
+  const appliedFieldKeys = summarizeAppliedFieldKeys(promptPersonalization);
+  const context = buildPlanningContextFromPersonalization(promptPersonalization);
   const results = {};
   const stages = [];
   let status = "ok";
@@ -328,6 +320,8 @@ async function planProject(options) {
     project_id: projectState.project.project_id,
     slug: projectState.project.slug,
     prompt,
+    prompt_personalization: promptPersonalization,
+    generate_would_apply_personalization: appliedFieldKeys.length > 0,
     ai_mode: aiState.mode,
     ai_provider: aiState.provider,
     ai_key_status: aiState.key_status,
@@ -353,6 +347,9 @@ async function planProject(options) {
     ai_key_status: aiState.key_status,
     model_profile: modelProfile,
     prompt_hash: hashPrompt(prompt),
+    prompt_personalization: promptPersonalization,
+    personalization_applied_fields: appliedFieldKeys,
+    generate_would_apply_personalization: appliedFieldKeys.length > 0,
     stages_completed: stagesCompleted,
     all_read_only: true,
     any_provider_called: anyProviderCalled,

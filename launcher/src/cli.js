@@ -184,6 +184,8 @@ async function runPlan(flags) {
   console.log("  Stages completed: " + String(result.stagesCompleted) + "/" + String(result.run.stages.length));
   console.log("  Applies changes: false");
   console.log("  Any provider called: " + String(result.proof.any_provider_called));
+  console.log("  Personalization source: " + String(result.proof.prompt_personalization && result.proof.prompt_personalization.source || "local_interpreter"));
+  console.log("  Personalization fields: " + Object.keys(result.proof.prompt_personalization && result.proof.prompt_personalization.fields || {}).join(", "));
   console.log("  Run file: " + result.runPath);
   console.log("  Proof file: " + result.proofPath);
 }
@@ -350,6 +352,8 @@ async function runGenerate(flags) {
   console.log("  Code: " + String(result.executeData.code || "unknown"));
   console.log("  Applies changes: " + String(result.proof.applies_changes));
   console.log("  Mutation status: " + String(result.proof.mutation_status || "unknown"));
+  console.log("  Personalization source: " + String(result.proof.personalization && result.proof.personalization.source || "local_interpreter"));
+  console.log("  Applied fields: " + ((result.proof.personalization && result.proof.personalization.applied_fields || []).join(", ") || "None"));
   console.log("  Proof file: " + result.proofPath);
   console.log("  Home: " + String(result.generatedUrls.home || result.generatedUrls.root || result.project.wp_url));
   console.log("  Properties: " + String(result.generatedUrls.properties || "Unavailable"));
@@ -378,6 +382,7 @@ function printSiteStatus(result) {
   const counts = site.counts_summary || {};
   const beforeCounts = counts.before || {};
   const afterCounts = counts.after || {};
+  const personalization = site.personalization || null;
 
   console.log("Generated site status:");
   console.log("  Project name: " + result.project.site_name);
@@ -398,6 +403,9 @@ function printSiteStatus(result) {
   console.log("  Page count: " + formatCountChange(beforeCounts.pages, afterCounts.pages));
   console.log("  Property count: " + formatCountChange(beforeCounts.properties, afterCounts.properties));
   console.log("  Attachment count: " + formatCountChange(beforeCounts.attachments, afterCounts.attachments));
+  console.log("  Personalization source: " + String(personalization && personalization.source || "Unavailable"));
+  console.log("  Personalization provider_called: " + String(personalization && personalization.provider_called === true));
+  console.log("  Personalization applied fields: " + ((personalization && personalization.applied_fields || []).join(", ") || "None"));
   console.log("  URL status: home=" + String(site.url_status && site.url_status.home || "n/a") + ", properties=" + String(site.url_status && site.url_status.properties || "n/a") + ", contact=" + String(site.url_status && site.url_status.contact || "n/a"));
   console.log("  Next suggested action: " + String(site.next_suggested_action || "Review the latest proof."));
 
