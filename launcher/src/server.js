@@ -14,6 +14,7 @@ const { planProject } = require("./plan");
 const { configureAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
+const { readStateStatus, refreshState } = require("./state");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -183,6 +184,12 @@ function renderHomePage(config) {
     "          <p>The latest generate proof, counts, and direct links to the generated site.</p>",
     "        </div>",
     "        <div id=\"site-status\" class=\"project-list\"></div>",
+    "        <div class=\"panel-header\">",
+    "          <h2>Managed State</h2>",
+    "          <p>Launcher-managed ownership, personalization, and protected override summary.</p>",
+    "        </div>",
+    "        <div id=\"managed-state\" class=\"project-list\"></div>",
+    "        <button type=\"button\" class=\"button\" id=\"refresh-state-button\">Refresh State</button>",
     "      </section>",
     "    </section>",
     "  </main>",
@@ -364,6 +371,43 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/state$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = readStateStatus({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          exists: result.exists,
+          project: summarizeProjectForSite(result.project),
+          state_path: result.statePath,
+          summary: result.summary,
+          warnings: result.warnings
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await refreshState({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          state_path: result.statePath,
+          snapshot_path: result.snapshotPath,
+          proof_path: result.proofPath,
+          summary: result.summary,
+          warnings: result.state.warnings
+        });
+        return;
+      }
+
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/ai$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = getAiStatus({
@@ -431,6 +475,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500;

@@ -13,6 +13,8 @@
   const generateProjectSlug = document.getElementById("generate-project-slug");
   const generateResult = document.getElementById("generate-result");
   const siteStatus = document.getElementById("site-status");
+  const managedState = document.getElementById("managed-state");
+  const refreshStateButton = document.getElementById("refresh-state-button");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
   const totalTokens = document.getElementById("launcher-total-tokens");
   const aiMode = document.getElementById("launcher-ai-mode");
@@ -36,6 +38,10 @@
     siteStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
   }
 
+  function setManagedStateEmpty(message) {
+    managedState.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
   function renderProjects(projects) {
     projectsCache = projects.slice();
 
@@ -47,6 +53,7 @@
       generateProjectSlug.disabled = true;
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
       setSiteStatusEmpty("No generated site result yet.");
+      setManagedStateEmpty("Refresh state after generate or frontend edits.");
       milestoneGenerate.disabled = true;
       totalTokens.textContent = "0";
       aiMode.textContent = "mock";
@@ -266,6 +273,36 @@
     ].join("\n");
   }
 
+  function renderManagedState(payload) {
+    if (!payload.exists || !payload.summary) {
+      setManagedStateEmpty("Managed state has not been refreshed yet.");
+      return;
+    }
+
+    const summary = payload.summary;
+    const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+    managedState.innerHTML = [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
+      "    <span class=\"status-pill\">State v" + escapeHtml(String(summary.version)) + "</span>",
+      "  </div>",
+      "  <dl>",
+      "    <div><dt>State</dt><dd>Available</dd></div>",
+      "    <div><dt>Updated</dt><dd>" + escapeHtml(summary.last_updated || "Unknown") + "</dd></div>",
+      "    <div><dt>Pages</dt><dd>" + escapeHtml(String(summary.pages)) + "</dd></div>",
+      "    <div><dt>Properties</dt><dd>" + escapeHtml(String(summary.property_count)) + "</dd></div>",
+      "    <div><dt>Attachments</dt><dd>" + escapeHtml(String(summary.attachment_count)) + "</dd></div>",
+      "    <div><dt>Personalization</dt><dd>" + escapeHtml(summary.personalization_source || "unknown") + "</dd></div>",
+      "    <div><dt>User overrides</dt><dd>" + escapeHtml(String(summary.user_overrides_count)) + "</dd></div>",
+      "    <div><dt>Protected fields</dt><dd>" + escapeHtml(summary.protected_fields.length ? summary.protected_fields.join(", ") : "None") + "</dd></div>",
+      "  </dl>",
+      "  <p class=\"project-note\">State path: " + escapeHtml(summary.state_path) + "</p>",
+      warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
+      "</article>"
+    ].join("\n");
+  }
+
   async function loadSiteStatus(slug) {
     const selectedSlug = String(slug || "").trim();
     if (!selectedSlug) {
@@ -288,11 +325,28 @@
     renderSiteStatus(payload);
   }
 
+  async function loadManagedState(slug) {
+    const selectedSlug = String(slug || "").trim();
+    if (!selectedSlug) {
+      setManagedStateEmpty("Select a project to view managed state.");
+      return;
+    }
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/state");
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Unable to load managed state.");
+    }
+
+    renderManagedState(payload);
+  }
+
   async function loadProjects() {
     const response = await fetch("/api/projects");
     const payload = await response.json();
     renderProjects(payload.projects || []);
     await loadSiteStatus(generateProjectSlug.value);
+    await loadManagedState(generateProjectSlug.value);
   }
 
   planProjectSlug.addEventListener("change", () => {
@@ -301,7 +355,10 @@
     });
   });
   generateProjectSlug.addEventListener("change", () => {
-    loadSiteStatus(generateProjectSlug.value).catch((error) => {
+    Promise.all([
+      loadSiteStatus(generateProjectSlug.value),
+      loadManagedState(generateProjectSlug.value)
+    ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
   });
@@ -389,6 +446,34 @@
 
     renderGenerateResult(result);
     await loadProjects();
+  });
+
+  refreshStateButton.addEventListener("click", async () => {
+    const slug = String(generateProjectSlug.value || "").trim();
+    if (!slug) {
+      setManagedStateEmpty("Select a project to refresh managed state.");
+      return;
+    }
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/refresh", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({})
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      showResult(createResult, result, true);
+      return;
+    }
+
+    renderManagedState({
+      exists: true,
+      project: result.project,
+      summary: result.summary,
+      warnings: result.warnings || []
+    });
   });
 
   loadProjects().catch((error) => {

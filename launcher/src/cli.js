@@ -15,6 +15,7 @@ const { installDependency } = require("./install-dependency");
 const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus } = require("./site");
+const { refreshState, readStateStatus } = require("./state");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -62,6 +63,8 @@ function printUsage() {
     "  node launcher/src/cli.js generate --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty refresh [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
@@ -468,6 +471,70 @@ async function runSite(parsed) {
   throw new Error("site requires a subcommand: status | open.");
 }
 
+function printStateStatus(result) {
+  if (!result.exists) {
+    console.log("Managed state status:");
+    console.log("  Site name: " + result.project.site_name);
+    console.log("  Slug: " + result.project.slug);
+    console.log("  State exists: false");
+    console.log("  State path: " + result.statePath);
+    console.log("  Next step: state refresh");
+    return;
+  }
+
+  const summary = result.summary;
+  console.log("Managed state status:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  Schema/version: " + summary.schema + " v" + String(summary.version));
+  console.log("  Generation status: " + String(summary.generation_status));
+  console.log("  Pages: " + String(summary.pages));
+  console.log("  Property count: " + String(summary.property_count));
+  console.log("  Attachment count: " + String(summary.attachment_count));
+  console.log("  Personalization source: " + String(summary.personalization_source));
+  console.log("  Applied personalization fields: " + (summary.personalization_fields.length ? summary.personalization_fields.join(", ") : "None"));
+  console.log("  User overrides count: " + String(summary.user_overrides_count));
+  console.log("  Protected fields: " + (summary.protected_fields.length ? summary.protected_fields.join(", ") : "None"));
+  console.log("  Drift status: " + String(summary.drift_status));
+  console.log("  State path: " + summary.state_path);
+}
+
+async function runState(parsed) {
+  if (!parsed.flags.slug) {
+    throw new Error("state requires --slug <slug>.");
+  }
+
+  const subcommand = String(parsed.positionals[0] || "status").trim().toLowerCase();
+
+  if (subcommand === "refresh") {
+    const result = await refreshState({
+      slug: parsed.flags.slug,
+      projectsRoot: parsed.flags["projects-root"]
+    });
+
+    console.log("Refreshed managed state:");
+    console.log("  Site name: " + result.project.site_name);
+    console.log("  Slug: " + result.project.slug);
+    console.log("  State path: " + result.statePath);
+    console.log("  Snapshot path: " + result.snapshotPath);
+    console.log("  Proof path: " + result.proofPath);
+    console.log("  Personalization source: " + String(result.summary.personalization_source));
+    console.log("  User overrides count: " + String(result.summary.user_overrides_count));
+    console.log("  Protected fields: " + (result.summary.protected_fields.length ? result.summary.protected_fields.join(", ") : "None"));
+    return;
+  }
+
+  if (subcommand === "status") {
+    printStateStatus(readStateStatus({
+      slug: parsed.flags.slug,
+      projectsRoot: parsed.flags["projects-root"]
+    }));
+    return;
+  }
+
+  throw new Error("state requires a subcommand: refresh | status.");
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -504,6 +571,9 @@ async function main() {
       return;
     case "site":
       await runSite(parsed);
+      return;
+    case "state":
+      await runState(parsed);
       return;
     default:
       printUsage();
