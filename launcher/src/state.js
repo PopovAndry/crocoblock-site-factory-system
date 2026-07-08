@@ -625,9 +625,12 @@ function buildFieldDiffEntry(fieldKey, currentValues, proposedValues, userOverri
     field_key: fieldKey,
     current_value: currentValue,
     proposed_value: proposedValue,
+    effective_value: proposedValue,
     change_type: changeType,
     source: override ? "frontend_safe_edit_override" : "personalization",
-    protected: override ? override.protected === true : false
+    protected: override ? override.protected === true : false,
+    included_in_apply: STATE_APPLY_ALLOWLIST.includes(fieldKey) && !!proposedValue && currentValue !== proposedValue,
+    excluded_reason: null
   };
 }
 
@@ -660,9 +663,41 @@ function buildStatePlan(state, prompt) {
   const removedFields = [];
   const conflicts = [];
   const warnings = [];
+  const includedFields = [];
+  const excludedFields = [];
+  const preservedProtectedFields = [];
+  const requiresConfirmationFields = [];
 
   for (const fieldKey of allFieldKeys) {
     const entry = buildFieldDiffEntry(fieldKey, currentFields, proposedFields, userOverrides);
+    const hasProtectedValueChange = entry.protected
+      && entry.change_type !== "unchanged"
+      && userOverrides[fieldKey]
+      && asString(userOverrides[fieldKey].value) !== proposedValueOrEmpty(proposedFields[fieldKey]);
+
+    if (hasProtectedValueChange) {
+      entry.effective_value = asString(userOverrides[fieldKey].value);
+      entry.change_type = "preserve_protected";
+      entry.included_in_apply = false;
+      entry.excluded_reason = "protected_user_override_preserved";
+      preservedProtectedFields.push(fieldKey);
+      excludedFields.push(fieldKey);
+      warnings.push("Protected field " + fieldKey + " is preserved by default and excluded from apply scope.");
+    } else if (entry.change_type === "unchanged") {
+      entry.included_in_apply = false;
+    } else if (STATE_APPLY_ALLOWLIST.includes(fieldKey) && asString(entry.effective_value)) {
+      entry.included_in_apply = true;
+      includedFields.push(fieldKey);
+    } else {
+      entry.included_in_apply = false;
+      if (!STATE_APPLY_ALLOWLIST.includes(fieldKey)) {
+        entry.excluded_reason = "unsupported_field";
+        excludedFields.push(fieldKey);
+      } else if (!asString(entry.effective_value)) {
+        entry.excluded_reason = "empty_or_unsupported_value";
+        excludedFields.push(fieldKey);
+      }
+    }
 
     if (entry.change_type === "unchanged") {
       unchangedFields.push(entry.field_key);
@@ -676,22 +711,6 @@ function buildStatePlan(state, prompt) {
       }
     }
 
-    if (
-      entry.protected &&
-      entry.change_type !== "unchanged" &&
-      userOverrides[fieldKey] &&
-      asString(userOverrides[fieldKey].value) !== proposedValueOrEmpty(proposedFields[fieldKey])
-    ) {
-      conflicts.push({
-        type: "protected_user_override",
-        severity: "requires_confirmation",
-        field_key: fieldKey,
-        current_user_value: asString(userOverrides[fieldKey].value),
-        proposed_value: proposedValueOrEmpty(proposedFields[fieldKey]),
-        overwrite_policy: asString(userOverrides[fieldKey].overwrite_policy) || "ask_before_overwrite",
-        message: "Field " + fieldKey + " was edited on the frontend and is protected. Ask before overwrite."
-      });
-    }
   }
 
   if (Array.isArray(currentPersonalization.warnings) && currentPersonalization.warnings.length) {
@@ -734,13 +753,20 @@ function buildStatePlan(state, prompt) {
       new_fields: newFields,
       removed_fields: removedFields
     },
+    field_scope: {
+      mode: "preserve_protected_by_default",
+      included_fields: Array.from(new Set(includedFields)),
+      excluded_fields: Array.from(new Set(excludedFields)),
+      preserved_protected_fields: Array.from(new Set(preservedProtectedFields)),
+      requires_confirmation_fields: Array.from(new Set(requiresConfirmationFields))
+    },
     conflicts,
     preservation: {
       protected_fields_preserved: true,
       requires_user_confirmation: conflicts.length > 0
     },
     can_apply_without_confirmation: conflicts.length === 0,
-    warnings
+    warnings: Array.from(new Set(warnings))
   };
 }
 
@@ -924,9 +950,14 @@ function planState(options) {
   const proofId = "state-plan-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
   const proofPath = path.join(safeRuntimePath, "proofs", proofId + ".json");
   const protectedFields = Array.isArray(plan.current.protected_fields) ? plan.current.protected_fields : [];
-  const appliedFieldKeys = summarizeAppliedFieldKeys({
-    fields: plan.proposed.personalization
-  });
+  const fieldScope = plan.field_scope && typeof plan.field_scope === "object" ? plan.field_scope : {
+    mode: "preserve_protected_by_default",
+    included_fields: [],
+    excluded_fields: [],
+    preserved_protected_fields: [],
+    requires_confirmation_fields: []
+  };
+  const appliedFieldKeys = Array.isArray(fieldScope.included_fields) ? fieldScope.included_fields : [];
   const proof = {
     proof_id: proofId,
     project_id: projectState.project.project_id,
@@ -947,6 +978,10 @@ function planState(options) {
       new_fields: plan.diff.new_fields.length,
       removed_fields: plan.diff.removed_fields.length
     },
+    field_scope: fieldScope,
+    preserved_protected_fields: Array.isArray(fieldScope.preserved_protected_fields) ? fieldScope.preserved_protected_fields : [],
+    excluded_fields: Array.isArray(fieldScope.excluded_fields) ? fieldScope.excluded_fields : [],
+    included_fields: appliedFieldKeys,
     conflicts: plan.conflicts,
     protected_fields: protectedFields,
     requires_user_confirmation: plan.preservation.requires_user_confirmation,
@@ -1262,8 +1297,13 @@ function buildPromptPersonalizationFromPlan(plan) {
     ? proposed.design_profile
     : {};
   const applyFields = {};
+  const fieldScope = plan.field_scope && typeof plan.field_scope === "object" ? plan.field_scope : null;
+  const includedFields = fieldScope && Array.isArray(fieldScope.included_fields)
+    ? fieldScope.included_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+    : null;
+  const fieldKeys = includedFields || STATE_APPLY_ALLOWLIST;
 
-  for (const key of STATE_APPLY_ALLOWLIST) {
+  for (const key of fieldKeys) {
     if (Object.prototype.hasOwnProperty.call(fields, key)) {
       applyFields[key] = asString(fields[key]);
     }
@@ -1462,10 +1502,22 @@ function validateStatePlanForApply(state, plan) {
     throw new Error("Selected plan is invalid because provider_called=true.");
   }
 
+  const planFieldScope = plan.field_scope && typeof plan.field_scope === "object" ? plan.field_scope : null;
+  const includedPlanFields = planFieldScope && Array.isArray(planFieldScope.included_fields)
+    ? planFieldScope.included_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+    : null;
+
   if (plan.can_apply_without_confirmation !== true || (Array.isArray(plan.conflicts) && plan.conflicts.length > 0)) {
     const blockedError = new Error("Plan has protected user override conflicts and requires explicit confirmation.");
     blockedError.blockedCode = "state_plan_requires_confirmation";
     blockedError.blockedConflicts = Array.isArray(plan.conflicts) ? plan.conflicts : [];
+    throw blockedError;
+  }
+
+  if (includedPlanFields && includedPlanFields.length === 0) {
+    const blockedError = new Error("Plan has no included fields after preserving protected overrides.");
+    blockedError.blockedCode = "state_plan_no_included_fields";
+    blockedError.blockedConflicts = [];
     throw blockedError;
   }
 
@@ -1474,9 +1526,14 @@ function validateStatePlanForApply(state, plan) {
     ? plan.proposed.personalization
     : {};
   const lateConflicts = [];
+  const scopedKeys = includedPlanFields || Object.keys(proposed);
 
   for (const [fieldKey, override] of Object.entries(userOverrides)) {
     if (!override || override.protected !== true) {
+      continue;
+    }
+
+    if (!scopedKeys.includes(fieldKey)) {
       continue;
     }
 
@@ -1567,16 +1624,32 @@ async function applyStatePlan(options) {
   const proposedFields = promptPersonalization.fields;
   const appliedFields = [];
   const ignoredFields = [];
+  const planFieldScope = plan.field_scope && typeof plan.field_scope === "object" ? plan.field_scope : null;
+  const scopedIncludedFields = planFieldScope && Array.isArray(planFieldScope.included_fields)
+    ? planFieldScope.included_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+    : null;
+  const scopedExcludedFields = planFieldScope && Array.isArray(planFieldScope.excluded_fields)
+    ? planFieldScope.excluded_fields
+    : [];
 
   for (const [key, value] of Object.entries(plan.proposed && plan.proposed.personalization && typeof plan.proposed.personalization === "object" ? plan.proposed.personalization : {})) {
-    if (STATE_APPLY_ALLOWLIST.includes(key) && asString(value)) {
+    const isIncluded = scopedIncludedFields ? scopedIncludedFields.includes(key) : STATE_APPLY_ALLOWLIST.includes(key);
+    if (isIncluded && STATE_APPLY_ALLOWLIST.includes(key) && asString(value)) {
       appliedFields.push(key);
     } else {
       ignoredFields.push(key);
     }
   }
 
-  const preservedProtectedFields = extractProtectedFields(state.user_overrides || {});
+  for (const excludedField of scopedExcludedFields) {
+    if (!ignoredFields.includes(excludedField)) {
+      ignoredFields.push(excludedField);
+    }
+  }
+
+  const preservedProtectedFields = planFieldScope && Array.isArray(planFieldScope.preserved_protected_fields)
+    ? planFieldScope.preserved_protected_fields
+    : extractProtectedFields(state.user_overrides || {});
   let enteredMutationBoundary = false;
   let executeData = null;
   let preconditions = null;

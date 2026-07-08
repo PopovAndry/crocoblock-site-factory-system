@@ -442,6 +442,16 @@ function createLauncherServer(options) {
           plan: result.plan,
           plan_path: result.planPath,
           proof_path: result.proofPath,
+          field_scope: result.plan.field_scope || null,
+          preserved_protected_fields: result.plan.field_scope && Array.isArray(result.plan.field_scope.preserved_protected_fields)
+            ? result.plan.field_scope.preserved_protected_fields
+            : [],
+          excluded_fields: result.plan.field_scope && Array.isArray(result.plan.field_scope.excluded_fields)
+            ? result.plan.field_scope.excluded_fields
+            : [],
+          included_fields: result.plan.field_scope && Array.isArray(result.plan.field_scope.included_fields)
+            ? result.plan.field_scope.included_fields
+            : [],
           conflicts: result.plan.conflicts,
           warnings: result.plan.warnings
         });

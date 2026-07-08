@@ -544,6 +544,9 @@ async function runState(parsed) {
     const protectedFields = Array.isArray(result.plan.current && result.plan.current.protected_fields)
       ? result.plan.current.protected_fields
       : [];
+    const fieldScope = result.plan.field_scope && typeof result.plan.field_scope === "object"
+      ? result.plan.field_scope
+      : { included_fields: [], excluded_fields: [], preserved_protected_fields: [] };
     console.log("Managed state plan:");
     console.log("  Site name: " + result.project.site_name);
     console.log("  Slug: " + result.project.slug);
@@ -551,6 +554,9 @@ async function runState(parsed) {
     console.log("  Applies changes: false");
     console.log("  Provider called: false");
     console.log("  Field changes: " + String(result.plan.diff.field_changes.length));
+    console.log("  Preserved protected fields: " + ((fieldScope.preserved_protected_fields || []).length ? fieldScope.preserved_protected_fields.join(", ") : "None"));
+    console.log("  Excluded fields: " + ((fieldScope.excluded_fields || []).length ? fieldScope.excluded_fields.join(", ") : "None"));
+    console.log("  Included fields: " + ((fieldScope.included_fields || []).length ? fieldScope.included_fields.join(", ") : "None"));
     console.log("  Conflicts: " + String(result.plan.conflicts.length));
     console.log("  Protected fields: " + (protectedFields.length ? protectedFields.join(", ") : "None"));
     console.log("  Can apply without confirmation: " + String(result.plan.can_apply_without_confirmation));

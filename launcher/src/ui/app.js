@@ -355,11 +355,21 @@
     const protectedFields = Array.isArray(plan.current && plan.current.protected_fields)
       ? plan.current.protected_fields
       : [];
+    const fieldScope = plan.field_scope && typeof plan.field_scope === "object"
+      ? plan.field_scope
+      : { included_fields: [], excluded_fields: [], preserved_protected_fields: [] };
+    const includedFields = Array.isArray(fieldScope.included_fields) ? fieldScope.included_fields : [];
+    const excludedFields = Array.isArray(fieldScope.excluded_fields) ? fieldScope.excluded_fields : [];
+    const preservedProtectedFields = Array.isArray(fieldScope.preserved_protected_fields)
+      ? fieldScope.preserved_protected_fields
+      : [];
     const changeList = Array.isArray(plan.diff && plan.diff.field_changes)
       ? plan.diff.field_changes.map((entry) => {
         return "<li><strong>" + escapeHtml(entry.field_key) + ":</strong> "
-          + escapeHtml(entry.change_type + " -> " + (entry.proposed_value || "(empty)"))
+          + escapeHtml(entry.change_type + " -> effective: " + (entry.effective_value || "(empty)"))
           + (entry.protected ? " <em>(protected)</em>" : "")
+          + (entry.included_in_apply ? " <em>(included)</em>" : "")
+          + (entry.excluded_reason ? " <em>(" + escapeHtml(entry.excluded_reason) + ")</em>" : "")
           + "</li>";
       }).join("")
       : "";
@@ -375,12 +385,17 @@
       "<p><span>Plan file:</span> " + escapeHtml(result.plan_path || "Unavailable") + "</p>",
       "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
       "<p><span>Field changes:</span> " + escapeHtml(String(plan.diff && plan.diff.field_changes ? plan.diff.field_changes.length : 0)) + "</p>",
+      "<p><span>Preserved protected fields:</span> " + escapeHtml(preservedProtectedFields.length ? preservedProtectedFields.join(", ") : "None") + "</p>",
+      "<p><span>Excluded fields:</span> " + escapeHtml(excludedFields.length ? excludedFields.join(", ") : "None") + "</p>",
+      "<p><span>Included fields:</span> " + escapeHtml(includedFields.length ? includedFields.join(", ") : "None") + "</p>",
       "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>",
       "<p><span>Protected fields:</span> " + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</p>",
       "<p><span>Can apply without confirmation:</span> " + escapeHtml(String(plan.can_apply_without_confirmation === true)) + "</p>",
-      plan.can_apply_without_confirmation === true && !conflicts.length
+      plan.can_apply_without_confirmation === true && !conflicts.length && includedFields.length > 0
         ? "<p><button type=\"button\" class=\"button\" id=\"state-apply-button\" data-plan-path=\"" + escapeHtml(result.plan_path || "latest") + "\">Apply Plan</button></p>"
-        : "<p class=\"project-note\">Apply blocked: confirmation required.</p>",
+        : (conflicts.length
+          ? "<p class=\"project-note\">Apply blocked: confirmation required.</p>"
+          : "<p class=\"project-note\">No applyable field changes remain after preserving protected fields.</p>"),
       changeList ? "<p><span>Field changes:</span></p><ul>" + changeList + "</ul>" : "",
       conflictList ? "<p><span>Conflicts:</span></p><ul>" + conflictList + "</ul>" : ""
     ].join("");
