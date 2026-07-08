@@ -2732,12 +2732,20 @@ class Factory_Render_Adapter {
 		$hero_title   = (string) ( $hero_section['title'] ?? $defaults['hero_title'] ?? '' );
 		$subtitle     = (string) ( $hero_section['subtitle'] ?? $defaults['hero_subtitle'] ?? '' );
 		$cta_label    = (string) ( $hero_section['cta_label'] ?? $defaults['hero_cta_text'] ?? '' );
+		$hero_title_html = esc_html( wptexturize( $hero_title ) );
 
 		$content = $this->replace_first_exact(
 			$content,
-			'>' . esc_html( $hero_title ) . '</h1>',
+			'>' . $hero_title_html . '</h1>',
 			'>' . $this->render_frontend_safe_field_marker( 'hero_title', $hero_title ) . '</h1>'
 		);
+		if ( false === strpos( $content, 'data-factory-safe-field="hero_title"' ) ) {
+			$content = $this->replace_first_exact(
+				$content,
+				'>' . esc_html( $hero_title ) . '</h1>',
+				'>' . $this->render_frontend_safe_field_marker( 'hero_title', $hero_title ) . '</h1>'
+			);
+		}
 		$content = $this->replace_first_exact(
 			$content,
 			'>' . esc_html( $subtitle ) . '</p>',
