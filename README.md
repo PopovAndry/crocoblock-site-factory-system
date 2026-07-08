@@ -33,3 +33,7 @@ Use the system-level packaging script from this repository root:
 `.\tools\build-plugin-zip.ps1`
 
 The script builds an installable plugin ZIP from the committed `wordpress-plugin/` subtree only. The archive root is `crocoblock-site-factory/`, so plugin files appear directly under that folder inside the ZIP. The `build/` output directory is a generated artifact and is not source of truth.
+
+## Alpha Demo Docs
+
+- [Terraform-like alpha docs](docs/alpha/README.md)
