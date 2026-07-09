@@ -433,7 +433,8 @@ function createLauncherServer(options) {
         const result = planState({
           slug,
           projectsRoot,
-          prompt: payload.prompt
+          prompt: payload.prompt,
+          overwriteFields: payload.overwrite_fields
         });
 
         sendJson(response, 200, {
@@ -452,6 +453,7 @@ function createLauncherServer(options) {
           included_fields: result.plan.field_scope && Array.isArray(result.plan.field_scope.included_fields)
             ? result.plan.field_scope.included_fields
             : [],
+          confirmation_required: result.plan.confirmation_required || null,
           conflicts: result.plan.conflicts,
           warnings: result.plan.warnings
         });
@@ -465,7 +467,8 @@ function createLauncherServer(options) {
         const result = await applyStatePlan({
           slug,
           projectsRoot,
-          planPath: payload.plan_path
+          planPath: payload.plan_path,
+          confirmOverwriteFields: payload.confirm_overwrite_fields
         });
 
         sendJson(response, 200, {

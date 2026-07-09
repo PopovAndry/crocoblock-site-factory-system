@@ -363,6 +363,12 @@
     const preservedProtectedFields = Array.isArray(fieldScope.preserved_protected_fields)
       ? fieldScope.preserved_protected_fields
       : [];
+    const requiresConfirmationFields = Array.isArray(fieldScope.requires_confirmation_fields)
+      ? fieldScope.requires_confirmation_fields
+      : [];
+    const confirmationRequired = plan.confirmation_required && typeof plan.confirmation_required === "object"
+      ? plan.confirmation_required
+      : null;
     const changeList = Array.isArray(plan.diff && plan.diff.field_changes)
       ? plan.diff.field_changes.map((entry) => {
         return "<li><strong>" + escapeHtml(entry.field_key) + ":</strong> "
@@ -388,14 +394,17 @@
       "<p><span>Preserved protected fields:</span> " + escapeHtml(preservedProtectedFields.length ? preservedProtectedFields.join(", ") : "None") + "</p>",
       "<p><span>Excluded fields:</span> " + escapeHtml(excludedFields.length ? excludedFields.join(", ") : "None") + "</p>",
       "<p><span>Included fields:</span> " + escapeHtml(includedFields.length ? includedFields.join(", ") : "None") + "</p>",
+      "<p><span>Requires confirmation fields:</span> " + escapeHtml(requiresConfirmationFields.length ? requiresConfirmationFields.join(", ") : "None") + "</p>",
       "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>",
       "<p><span>Protected fields:</span> " + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</p>",
       "<p><span>Can apply without confirmation:</span> " + escapeHtml(String(plan.can_apply_without_confirmation === true)) + "</p>",
       plan.can_apply_without_confirmation === true && !conflicts.length && includedFields.length > 0
         ? "<p><button type=\"button\" class=\"button\" id=\"state-apply-button\" data-plan-path=\"" + escapeHtml(result.plan_path || "latest") + "\">Apply Plan</button></p>"
-        : (conflicts.length
+        : (confirmationRequired && confirmationRequired.required
+          ? "<p class=\"project-note\">Overwrite confirmation required for: " + escapeHtml((confirmationRequired.fields || []).join(", ")) + "</p>"
+          : (conflicts.length
           ? "<p class=\"project-note\">Apply blocked: confirmation required.</p>"
-          : "<p class=\"project-note\">No applyable field changes remain after preserving protected fields.</p>"),
+          : "<p class=\"project-note\">No applyable field changes remain after preserving protected fields.</p>")),
       changeList ? "<p><span>Field changes:</span></p><ul>" + changeList + "</ul>" : "",
       conflictList ? "<p><span>Conflicts:</span></p><ul>" + conflictList + "</ul>" : ""
     ].join("");
@@ -436,6 +445,9 @@
   function renderStateApplyResult(result) {
     const apply = result.apply || {};
     const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+    const confirmation = apply.confirmation && typeof apply.confirmation === "object"
+      ? apply.confirmation
+      : (result.proof && result.proof.confirmation && typeof result.proof.confirmation === "object" ? result.proof.confirmation : null);
     statePlanResult.hidden = false;
     statePlanResult.className = result.status === "ok" ? "result-box result-box-success" : "result-box result-box-error";
     statePlanResult.innerHTML = [
@@ -445,6 +457,15 @@
       "<p><span>State path:</span> " + escapeHtml(result.state_path || "Unavailable") + "</p>",
       "<p><span>Applied fields:</span> " + escapeHtml((apply.applied_fields || []).length ? apply.applied_fields.join(", ") : "None") + "</p>",
       "<p><span>Ignored fields:</span> " + escapeHtml((apply.ignored_fields || []).length ? apply.ignored_fields.join(", ") : "None") + "</p>",
+      confirmation && confirmation.required
+        ? "<p><span>Overwrite confirmation:</span> " + escapeHtml(confirmation.confirmed ? "confirmed" : "required") + "</p>"
+        : "",
+      confirmation && confirmation.required
+        ? "<p><span>Confirmation fields:</span> " + escapeHtml(((confirmation.confirmed_fields || confirmation.required_fields || []).length ? (confirmation.confirmed_fields || confirmation.required_fields).join(", ") : "None")) + "</p>"
+        : "",
+      apply.confirmation && Array.isArray(apply.confirmation.overwritten_protected_fields)
+        ? "<p><span>Overwritten protected fields:</span> " + escapeHtml(apply.confirmation.overwritten_protected_fields.length ? apply.confirmation.overwritten_protected_fields.join(", ") : "None") + "</p>"
+        : "",
       conflicts.length ? "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>" : "",
       conflicts.length ? "<ul>" + conflicts.map((conflict) => "<li>" + escapeHtml(conflict.message || conflict.field_key || "Conflict") + "</li>").join("") + "</ul>" : ""
     ].join("");

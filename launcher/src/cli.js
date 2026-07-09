@@ -36,7 +36,12 @@ function parseArguments(argv) {
       continue;
     }
 
-    flags[key] = next;
+    if (Object.prototype.hasOwnProperty.call(flags, key)) {
+      const currentValue = flags[key];
+      flags[key] = Array.isArray(currentValue) ? currentValue.concat(next) : [currentValue, next];
+    } else {
+      flags[key] = next;
+    }
     index += 1;
   }
 
@@ -65,8 +70,8 @@ function printUsage() {
     "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty refresh [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--overwrite-field hero_title] [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--confirm-overwrite hero_title] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty rollback --apply latest [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
@@ -539,7 +544,8 @@ async function runState(parsed) {
     const result = planState({
       slug: parsed.flags.slug,
       projectsRoot: parsed.flags["projects-root"],
-      prompt: parsed.flags.prompt
+      prompt: parsed.flags.prompt,
+      overwriteFields: parsed.flags["overwrite-field"]
     });
     const protectedFields = Array.isArray(result.plan.current && result.plan.current.protected_fields)
       ? result.plan.current.protected_fields
@@ -557,9 +563,14 @@ async function runState(parsed) {
     console.log("  Preserved protected fields: " + ((fieldScope.preserved_protected_fields || []).length ? fieldScope.preserved_protected_fields.join(", ") : "None"));
     console.log("  Excluded fields: " + ((fieldScope.excluded_fields || []).length ? fieldScope.excluded_fields.join(", ") : "None"));
     console.log("  Included fields: " + ((fieldScope.included_fields || []).length ? fieldScope.included_fields.join(", ") : "None"));
+    console.log("  Requires confirmation fields: " + ((fieldScope.requires_confirmation_fields || []).length ? fieldScope.requires_confirmation_fields.join(", ") : "None"));
     console.log("  Conflicts: " + String(result.plan.conflicts.length));
     console.log("  Protected fields: " + (protectedFields.length ? protectedFields.join(", ") : "None"));
     console.log("  Can apply without confirmation: " + String(result.plan.can_apply_without_confirmation));
+    if (result.plan.confirmation_required && result.plan.confirmation_required.required) {
+      console.log("  Confirmation required: true");
+      console.log("  Confirmation fields: " + result.plan.confirmation_required.fields.join(", "));
+    }
     console.log("  Plan path: " + result.planPath);
     console.log("  Proof path: " + result.proofPath);
     return;
@@ -569,7 +580,8 @@ async function runState(parsed) {
     const result = await applyStatePlan({
       slug: parsed.flags.slug,
       projectsRoot: parsed.flags["projects-root"],
-      planPath: parsed.flags.plan
+      planPath: parsed.flags.plan,
+      confirmOverwriteFields: parsed.flags["confirm-overwrite"]
     });
 
     console.log("Managed state apply:");
@@ -579,12 +591,16 @@ async function runState(parsed) {
     console.log("  Code: " + String(result.code));
     if (result.status === "blocked") {
       console.log("  Conflicts: " + String((result.conflicts || []).length));
+      if (result.proof && result.proof.confirmation && result.proof.confirmation.required) {
+        console.log("  Confirmation required fields: " + ((result.proof.confirmation.required_fields || []).length ? result.proof.confirmation.required_fields.join(", ") : "None"));
+      }
       console.log("  Proof path: " + result.proofPath);
       console.log("  State path: " + result.statePath);
       return;
     }
     console.log("  Applied fields: " + ((result.apply.applied_fields || []).length ? result.apply.applied_fields.join(", ") : "None"));
     console.log("  Ignored fields: " + ((result.apply.ignored_fields || []).length ? result.apply.ignored_fields.join(", ") : "None"));
+    console.log("  Overwritten protected fields: " + ((result.apply.confirmation && result.apply.confirmation.overwritten_protected_fields || []).length ? result.apply.confirmation.overwritten_protected_fields.join(", ") : "None"));
     console.log("  Proof path: " + result.proofPath);
     console.log("  State path: " + result.statePath);
     return;

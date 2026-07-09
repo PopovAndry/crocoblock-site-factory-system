@@ -571,6 +571,96 @@ function parseFrontendSafeEditOverrides(runtimePath, warnings) {
   return overrides;
 }
 
+function mergeConfirmedOverwriteOverrides(runtimePath, overrides, warnings) {
+  const proofsPath = path.join(runtimePath, "proofs");
+  if (!fs.existsSync(proofsPath)) {
+    return overrides;
+  }
+
+  const candidates = fs.readdirSync(proofsPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith("state-apply-") && entry.name.endsWith(".json"))
+    .map((entry) => {
+      const filePath = path.join(proofsPath, entry.name);
+      return {
+        filePath,
+        mtimeMs: fs.statSync(filePath).mtimeMs
+      };
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+
+  let applyProof = null;
+  let applyProofPath = null;
+  let overwrittenFields = [];
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = safeJsonRead(candidate.filePath);
+      const confirmation = parsed && parsed.confirmation && typeof parsed.confirmation === "object"
+        ? parsed.confirmation
+        : null;
+      const candidateFields = confirmation && confirmation.confirmed === true
+        ? normalizeConfirmationFieldRequests(confirmation.overwritten_protected_fields)
+        : [];
+      if (parsed && parsed.status === "ok" && candidateFields.length) {
+        applyProof = parsed;
+        applyProofPath = candidate.filePath;
+        overwrittenFields = candidateFields;
+        break;
+      }
+    } catch (error) {
+      warnings.push("Confirmed overwrite merge skipped one unreadable state apply proof.");
+    }
+  }
+
+  if (!applyProof || !overwrittenFields.length) {
+    return overrides;
+  }
+
+  const afterValues = applyProof.after_values && typeof applyProof.after_values === "object"
+    ? applyProof.after_values
+    : {};
+  const safeRenderContext = applyProof.safe_render_context && typeof applyProof.safe_render_context === "object"
+    ? applyProof.safe_render_context
+    : {};
+  const personalizationFields = applyProof.personalization
+    && applyProof.personalization.fields
+    && typeof applyProof.personalization.fields === "object"
+    ? applyProof.personalization.fields
+    : {};
+  const beforeValues = applyProof.before_values && typeof applyProof.before_values === "object"
+    ? applyProof.before_values
+    : {};
+  const createdAt = asString(applyProof.created_at) || stateNow();
+
+  for (const fieldKey of overwrittenFields) {
+    const nextValue = asString(safeRenderContext[fieldKey]) || asString(personalizationFields[fieldKey]) || asString(afterValues[fieldKey]);
+    if (!nextValue) {
+      warnings.push("Confirmed overwrite proof did not include an after value for " + fieldKey + ".");
+      continue;
+    }
+
+    overrides[fieldKey] = Object.assign({}, overrides[fieldKey] || {}, {
+      source: "confirmed_overwrite",
+      protected: true,
+      field_key: fieldKey,
+      before: asString(beforeValues[fieldKey]) || asString(overrides[fieldKey] && overrides[fieldKey].before) || "",
+      after: nextValue,
+      value: nextValue,
+      manifest: applyProofPath,
+      updated_at: createdAt,
+      overwrite_policy: "ask_before_overwrite",
+      overwritten_at: createdAt,
+      previous_value: asString(beforeValues[fieldKey]) || "",
+      last_overwrite_confirmation: {
+        proof_path: applyProofPath,
+        proof_id: asString(applyProof.apply_id) || null
+      }
+    });
+  }
+
+  return overrides;
+}
+
 function buildStateSummary(state, statePath) {
   const userOverrides = state && state.user_overrides && typeof state.user_overrides === "object" ? state.user_overrides : {};
   const protectedFields = Object.values(userOverrides)
@@ -634,9 +724,34 @@ function buildFieldDiffEntry(fieldKey, currentValues, proposedValues, userOverri
   };
 }
 
-function buildStatePlan(state, prompt) {
+function normalizeFieldListInput(value) {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => String(entry || "").split(","))
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function normalizeOverwriteFieldRequests(value) {
+  return Array.from(new Set(
+    normalizeFieldListInput(value).filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+  ));
+}
+
+function buildStatePlan(state, prompt, options) {
   const createdAt = stateNow();
   const planId = "state-plan-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
+  const overwriteFieldsRequested = normalizeOverwriteFieldRequests(options && options.overwriteFields);
   const currentPersonalization = state.personalization && typeof state.personalization === "object"
     ? state.personalization
     : {};
@@ -667,6 +782,7 @@ function buildStatePlan(state, prompt) {
   const excludedFields = [];
   const preservedProtectedFields = [];
   const requiresConfirmationFields = [];
+  let confirmationRequired = null;
 
   for (const fieldKey of allFieldKeys) {
     const entry = buildFieldDiffEntry(fieldKey, currentFields, proposedFields, userOverrides);
@@ -674,8 +790,20 @@ function buildStatePlan(state, prompt) {
       && entry.change_type !== "unchanged"
       && userOverrides[fieldKey]
       && asString(userOverrides[fieldKey].value) !== proposedValueOrEmpty(proposedFields[fieldKey]);
+    const overwriteRequested = hasProtectedValueChange && overwriteFieldsRequested.includes(fieldKey);
 
-    if (hasProtectedValueChange) {
+    if (overwriteRequested) {
+      entry.effective_value = proposedValueOrEmpty(proposedFields[fieldKey]);
+      entry.change_type = "overwrite_protected_requested";
+      entry.included_in_apply = true;
+      entry.excluded_reason = null;
+      entry.overwrite_policy = "requires_explicit_confirmation";
+      includedFields.push(fieldKey);
+      requiresConfirmationFields.push(fieldKey);
+      warnings.push(
+        "Protected field " + fieldKey + " is included in apply scope only after explicit overwrite confirmation."
+      );
+    } else if (hasProtectedValueChange) {
       entry.effective_value = asString(userOverrides[fieldKey].value);
       entry.change_type = "preserve_protected";
       entry.included_in_apply = false;
@@ -721,6 +849,16 @@ function buildStatePlan(state, prompt) {
   }
   warnings.push("Plan/diff is read-only in State v1.");
 
+  if (requiresConfirmationFields.length) {
+    confirmationRequired = {
+      required: true,
+      fields: Array.from(new Set(requiresConfirmationFields)),
+      reason: "protected_user_override_overwrite_requested",
+      message: "Protected field " + Array.from(new Set(requiresConfirmationFields)).join(", ")
+        + " will be overwritten only if explicitly confirmed."
+    };
+  }
+
   return {
     schema: STATE_PLAN_SCHEMA,
     version: STATE_PLAN_VERSION,
@@ -762,10 +900,11 @@ function buildStatePlan(state, prompt) {
     },
     conflicts,
     preservation: {
-      protected_fields_preserved: true,
-      requires_user_confirmation: conflicts.length > 0
+      protected_fields_preserved: preservedProtectedFields.length > 0,
+      requires_user_confirmation: Boolean(confirmationRequired) || conflicts.length > 0
     },
-    can_apply_without_confirmation: conflicts.length === 0,
+    can_apply_without_confirmation: conflicts.length === 0 && !confirmationRequired,
+    confirmation_required: confirmationRequired,
     warnings: Array.from(new Set(warnings))
   };
 }
@@ -828,7 +967,11 @@ async function buildState(projectState) {
     ownership: buildOwnershipRecord(resources),
     resources,
     personalization: extractPersonalization(generateProof),
-    user_overrides: parseFrontendSafeEditOverrides(runtimePath, warnings),
+    user_overrides: mergeConfirmedOverwriteOverrides(
+      runtimePath,
+      parseFrontendSafeEditOverrides(runtimePath, warnings),
+      warnings
+    ),
     drift: {
       status: "not_checked",
       warnings: ["Drift detection is not implemented in State v1."]
@@ -943,7 +1086,9 @@ function planState(options) {
   }
 
   const state = safeJsonRead(statePaths.currentPath);
-  const plan = buildStatePlan(state, prompt);
+  const plan = buildStatePlan(state, prompt, {
+    overwriteFields: options.overwriteFields
+  });
   plan.source.state_path = statePaths.currentPath;
 
   const planPath = path.join(statePaths.plansPath, "state-plan-" + timestampCompact() + ".json");
@@ -986,6 +1131,7 @@ function planState(options) {
     protected_fields: protectedFields,
     requires_user_confirmation: plan.preservation.requires_user_confirmation,
     can_apply_without_confirmation: plan.can_apply_without_confirmation,
+    confirmation_required: plan.confirmation_required || null,
     applies_changes: false,
     provider_called: false,
     no_wp_mutation: true,
@@ -1049,6 +1195,11 @@ function buildBlockedApplyProof(projectState, reason, code, conflicts, statePath
     ignored_fields: [],
     preserved_protected_fields: [],
     conflicts: Array.isArray(conflicts) ? conflicts : [],
+    confirmation: {
+      required: false,
+      confirmed: false,
+      required_fields: []
+    },
     before_values: {},
     after_values: {},
     agent_manifest: null,
@@ -1058,6 +1209,12 @@ function buildBlockedApplyProof(projectState, reason, code, conflicts, statePath
     no_wp_mutation: true,
     mutation_scope: "launcher_project_metadata_only"
   };
+}
+
+function normalizeConfirmationFieldRequests(value) {
+  return Array.from(new Set(
+    normalizeFieldListInput(value).filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+  ));
 }
 
 function buildBlockedRollbackProof(projectState, reason, code, conflicts, statePath, sourceApplyId, sourceApplyPath) {
@@ -1568,7 +1725,7 @@ function buildRollbackUiSummary(statePaths, state) {
   };
 }
 
-function validateStatePlanForApply(state, plan) {
+function validateStatePlanForApply(state, plan, options) {
   if (!plan || typeof plan !== "object") {
     throw new Error("State apply could not read the selected plan.");
   }
@@ -1594,11 +1751,45 @@ function validateStatePlanForApply(state, plan) {
   const includedPlanFields = hasExplicitFieldScope
     ? normalizedFieldScope.included_fields
     : null;
+  const confirmedOverwriteFields = normalizeConfirmationFieldRequests(options && options.confirmOverwriteFields);
+  const confirmationRequired = plan && plan.confirmation_required && typeof plan.confirmation_required === "object"
+    ? plan.confirmation_required
+    : null;
+  const requiredConfirmationFields = confirmationRequired && confirmationRequired.required === true
+    ? normalizeConfirmationFieldRequests(confirmationRequired.fields)
+    : [];
 
-  if (plan.can_apply_without_confirmation !== true || (Array.isArray(plan.conflicts) && plan.conflicts.length > 0)) {
+  if (Array.isArray(plan.conflicts) && plan.conflicts.length > 0) {
     const blockedError = new Error("Plan has protected user override conflicts and requires explicit confirmation.");
     blockedError.blockedCode = "state_plan_requires_confirmation";
     blockedError.blockedConflicts = Array.isArray(plan.conflicts) ? plan.conflicts : [];
+    throw blockedError;
+  }
+
+  if (requiredConfirmationFields.length) {
+    const missingFields = requiredConfirmationFields.filter((fieldKey) => !confirmedOverwriteFields.includes(fieldKey));
+    if (missingFields.length) {
+      const blockedError = new Error("Plan requires explicit overwrite confirmation for protected fields.");
+      blockedError.blockedCode = "state_plan_requires_overwrite_confirmation";
+      blockedError.blockedConflicts = requiredConfirmationFields.map((fieldKey) => ({
+        type: "protected_user_override_overwrite_requested",
+        severity: "requires_confirmation",
+        field_key: fieldKey,
+        overwrite_policy: "requires_explicit_confirmation",
+        message: "Protected field " + fieldKey + " will be overwritten only if explicitly confirmed."
+      }));
+      blockedError.confirmation = {
+        required: true,
+        confirmed: false,
+        required_fields: requiredConfirmationFields,
+        confirmed_fields: confirmedOverwriteFields
+      };
+      throw blockedError;
+    }
+  } else if (plan.can_apply_without_confirmation !== true) {
+    const blockedError = new Error("Plan requires confirmation before apply.");
+    blockedError.blockedCode = "state_plan_requires_confirmation";
+    blockedError.blockedConflicts = [];
     throw blockedError;
   }
 
@@ -1622,6 +1813,10 @@ function validateStatePlanForApply(state, plan) {
     }
 
     if (!scopedKeys.includes(fieldKey)) {
+      continue;
+    }
+
+    if (requiredConfirmationFields.includes(fieldKey) && confirmedOverwriteFields.includes(fieldKey)) {
       continue;
     }
 
@@ -1661,6 +1856,7 @@ async function applyStatePlan(options) {
   const warnings = [];
   const conflicts = [];
   const beforeCounts = state ? null : null;
+  const confirmedOverwriteFields = normalizeConfirmationFieldRequests(options.confirmOverwriteFields);
 
   if (!state) {
     throw new Error(
@@ -1674,7 +1870,9 @@ async function applyStatePlan(options) {
   writeJsonFile(beforeStateCopyPath, state);
 
   try {
-    validateStatePlanForApply(state, plan);
+    validateStatePlanForApply(state, plan, {
+      confirmOverwriteFields: confirmedOverwriteFields
+    });
   } catch (error) {
     if (error.blockedCode) {
       const blockedProof = buildBlockedApplyProof(
@@ -1686,6 +1884,11 @@ async function applyStatePlan(options) {
       );
       blockedProof.plan_id = plan && plan.plan_id ? plan.plan_id : null;
       blockedProof.plan_path = planPath;
+      blockedProof.confirmation = error.confirmation || {
+        required: Boolean(plan && plan.confirmation_required && plan.confirmation_required.required),
+        confirmed: false,
+        required_fields: normalizeConfirmationFieldRequests(plan && plan.confirmation_required && plan.confirmation_required.fields)
+      };
       const blockedProofPath = path.join(safeRuntimePath, "proofs", "state-apply-blocked-" + timestampCompact() + ".json");
       writeJsonFile(blockedProofPath, blockedProof);
 
@@ -1709,6 +1912,7 @@ async function applyStatePlan(options) {
   const proofPath = path.join(safeRuntimePath, "proofs", "state-apply-" + applyTimestamp + ".json");
   const effectiveBeforeValues = deriveEffectiveCurrentValues(state);
   const normalizedFieldScope = normalizePlanFieldScope(plan);
+  const requiredConfirmationFields = normalizeConfirmationFieldRequests(plan && plan.confirmation_required && plan.confirmation_required.fields);
   let applyContext = null;
   const appliedFields = [];
   const ignoredFields = [];
@@ -1733,6 +1937,7 @@ async function applyStatePlan(options) {
   const preservedProtectedFields = normalizedFieldScope.preserved_protected_fields.length
     ? normalizedFieldScope.preserved_protected_fields
     : extractProtectedFields(state.user_overrides || {});
+  const overwrittenProtectedFields = requiredConfirmationFields.filter((fieldKey) => appliedFields.includes(fieldKey));
   let enteredMutationBoundary = false;
   let executeData = null;
   let preconditions = null;
@@ -1843,6 +2048,13 @@ async function applyStatePlan(options) {
       applied_fields: appliedFields,
       ignored_fields: ignoredFields,
       preserved_protected_fields: preservedProtectedFields,
+      confirmation: {
+        required: requiredConfirmationFields.length > 0,
+        confirmed: requiredConfirmationFields.length > 0,
+        confirmed_fields: confirmedOverwriteFields,
+        confirmation_source: requiredConfirmationFields.length > 0 ? "cli_confirm_overwrite" : null,
+        overwritten_protected_fields: overwrittenProtectedFields
+      },
       render_context_fields: applyContext.renderContextFields,
       safe_render_context: applyContext.safeRenderContext,
       preserved_render_values: applyContext.preservedRenderValues,
@@ -1896,6 +2108,38 @@ async function applyStatePlan(options) {
     });
 
     const refreshedState = refreshResult.state;
+    if (overwrittenProtectedFields.length) {
+      const refreshedOverrides = refreshedState.user_overrides && typeof refreshedState.user_overrides === "object"
+        ? refreshedState.user_overrides
+        : {};
+      for (const fieldKey of overwrittenProtectedFields) {
+        const nextValue = asString(applyContext.safeRenderContext[fieldKey]) || asString(promptPersonalization.fields[fieldKey]);
+        if (!nextValue) {
+          continue;
+        }
+
+        refreshedOverrides[fieldKey] = Object.assign({}, refreshedOverrides[fieldKey] || {}, {
+          source: "confirmed_overwrite",
+          protected: true,
+          field_key: fieldKey,
+          before: asString(effectiveBeforeValues[fieldKey]) || "",
+          after: nextValue,
+          value: nextValue,
+          manifest: proofPath,
+          updated_at: createdAt,
+          overwrite_policy: "ask_before_overwrite",
+          overwritten_at: createdAt,
+          previous_value: asString(effectiveBeforeValues[fieldKey]) || "",
+          last_overwrite_confirmation: {
+            proof_path: proofPath,
+            proof_id: applyId
+          }
+        });
+      }
+      refreshedState.user_overrides = refreshedOverrides;
+      writeJsonFile(refreshResult.statePath, refreshedState);
+      writeJsonFile(refreshResult.snapshotPath, refreshedState);
+    }
     const afterValues = deriveEffectiveCurrentValues(refreshedState);
     const applyRecord = Object.assign({}, baseApplyRecord, {
       after_values: afterValues,
@@ -1944,6 +2188,12 @@ async function applyStatePlan(options) {
       applied_fields,
       ignored_fields,
       preserved_protected_fields: preservedProtectedFields,
+      confirmation: {
+        required: requiredConfirmationFields.length > 0,
+        confirmed: false,
+        required_fields: requiredConfirmationFields,
+        confirmed_fields: confirmedOverwriteFields
+      },
       render_context_fields: applyContext ? applyContext.renderContextFields : [],
       safe_render_context: applyContext ? applyContext.safeRenderContext : {},
       preserved_render_values: applyContext ? applyContext.preservedRenderValues : {},
