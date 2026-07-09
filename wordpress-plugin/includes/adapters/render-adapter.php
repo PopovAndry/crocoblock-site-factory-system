@@ -189,6 +189,32 @@ class Factory_Render_Adapter {
 		}
 	}
 
+	public function apply_safe_field_refresh( array $blueprint, array $page_keys = [ 'home', 'native_filters', 'contact' ], bool $sync_front_page = true ): array {
+		$this->execution_results = [];
+
+		foreach ( $page_keys as $page_key ) {
+			if ( ! is_string( $page_key ) || '' === trim( $page_key ) ) {
+				continue;
+			}
+
+			$result = $this->refresh_existing_configured_page( $blueprint, trim( $page_key ) );
+
+			if ( is_array( $result ) ) {
+				$this->execution_results[] = $result;
+			}
+		}
+
+		if ( $sync_front_page ) {
+			$front_page_result = $this->sync_front_page( $blueprint );
+
+			if ( is_array( $front_page_result ) ) {
+				$this->execution_results[] = $front_page_result;
+			}
+		}
+
+		return $this->execution_results;
+	}
+
 	public function get_execution_results(): array {
 		return $this->execution_results;
 	}
@@ -513,6 +539,94 @@ class Factory_Render_Adapter {
 			'page',
 			$this->humanize_key( $page_key ) . ' page',
 			$page_key
+		);
+	}
+
+	private function refresh_existing_configured_page( array $blueprint, string $page_key ): ?array {
+		$page = $this->get_configured_page( $blueprint, $page_key );
+
+		if ( empty( $page ) ) {
+			return null;
+		}
+
+		$page_slug  = $page['slug'] ?? '';
+		$page_title = $page['title'] ?? ucwords( str_replace( '-', ' ', $page_slug ) );
+		$content    = $this->get_configured_page_content( $blueprint, $page_key );
+		$label      = $this->humanize_key( $page_key ) . ' page';
+
+		if ( ! $page_slug || ! $page_title ) {
+			return null;
+		}
+
+		$existing = get_page_by_path( $page_slug );
+
+		if ( ! $existing instanceof WP_Post ) {
+			return $this->execution_item(
+				'error',
+				'update',
+				$page_slug,
+				"{$label} missing for safe field refresh: {$page_slug}",
+				'page'
+			);
+		}
+
+		$target_state = [
+			'post_title'   => $page_title,
+			'post_name'    => $page_slug,
+			'post_status'  => 'publish',
+			'post_content' => $content,
+		];
+		$current_state = $this->get_current_page_state( $existing );
+
+		if ( factory_is_post_user_modified( $existing->ID, $current_state, $target_state ) ) {
+			factory_mark_post_user_modified( $existing->ID );
+
+			return $this->execution_item(
+				'warning',
+				'skip',
+				$page_slug,
+				"Manual edits detected; preserved generated page during safe field refresh: {$existing->post_title}",
+				'page'
+			);
+		}
+
+		$diff = factory_diff_arrays( $current_state, $target_state );
+
+		if ( empty( $diff ) ) {
+			$this->mark_page_factory_managed( $existing->ID, $page_key ?: $page_slug, $target_state );
+
+			return $this->execution_item(
+				'ok',
+				'skip',
+				$page_slug,
+				"{$label} up-to-date during safe field refresh: {$page_slug}",
+				'page'
+			);
+		}
+
+		$post_data              = $target_state;
+		$post_data['ID']        = $existing->ID;
+		$post_data['post_type'] = 'page';
+		$post_id                = wp_update_post( $post_data );
+
+		if ( is_wp_error( $post_id ) || ! $post_id ) {
+			return $this->execution_item(
+				'error',
+				'update',
+				$page_slug,
+				"{$label} update failed during safe field refresh: {$page_slug}",
+				'page'
+			);
+		}
+
+		$this->mark_page_factory_managed( (int) $post_id, $page_key ?: $page_slug, $target_state );
+
+		return $this->execution_item(
+			'ok',
+			'update',
+			$page_slug,
+			"{$label} updated during safe field refresh: {$page_slug}",
+			'page'
 		);
 	}
 
