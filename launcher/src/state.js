@@ -133,6 +133,18 @@ function timestampCompact() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function shouldFallbackToCookieAuth(error) {
+  if (!error) {
+    return false;
+  }
+
+  if (typeof error.statusCode === "number") {
+    return error.statusCode === 401 || error.statusCode === 403;
+  }
+
+  return /stored application password/i.test(String(error.message || ""));
+}
+
 function stateNow() {
   return new Date().toISOString();
 }
@@ -1525,6 +1537,10 @@ async function getAgentJson(projectState, targetUrl, proofId, warnings) {
 
     return await fetchJsonWithBasicAuth(targetUrl, projectState.env.WP_ADMIN_USER, projectState.env.WP_APP_PASSWORD);
   } catch (error) {
+    if (!shouldFallbackToCookieAuth(error)) {
+      throw error;
+    }
+
     const cookieHeader = await loginWithAdminCookie(projectState);
     const restNonce = await createRestNonce(projectState, proofId);
     warnings.push("State apply auth fell back to admin cookie context.");
@@ -1551,6 +1567,10 @@ async function postAgentJson(projectState, targetUrl, payload, proofId, warnings
       timeoutMs: requestTimeoutMs
     });
   } catch (error) {
+    if (!shouldFallbackToCookieAuth(error)) {
+      throw error;
+    }
+
     const cookieHeader = await loginWithAdminCookie(projectState);
     const restNonce = await createRestNonce(projectState, proofId);
     warnings.push("State apply auth fell back to admin cookie context.");

@@ -72,6 +72,15 @@ function createBasicAuthHeader(username, password) {
   return "Basic " + Buffer.from(String(username) + ":" + String(password), "utf8").toString("base64");
 }
 
+function createAgentRequestError(targetUrl, response) {
+  const error = new Error("Agent endpoint request failed: " + targetUrl + " (HTTP " + String(response.statusCode) + ")");
+  error.statusCode = response.statusCode || 0;
+  error.responseJson = response.json;
+  error.responseBody = response.body;
+  error.targetUrl = targetUrl;
+  return error;
+}
+
 async function fetchJsonWithBasicAuth(targetUrl, username, password, options) {
   const headers = Object.assign({}, options && options.headers ? options.headers : {}, {
     Authorization: createBasicAuthHeader(username, password)
@@ -79,7 +88,7 @@ async function fetchJsonWithBasicAuth(targetUrl, username, password, options) {
   const response = await requestJson(targetUrl, Object.assign({}, options || {}, { headers }));
 
   if ((response.statusCode < 200 || response.statusCode >= 300) || !response.json) {
-    throw new Error("Agent endpoint request failed: " + targetUrl + " (HTTP " + String(response.statusCode) + ")");
+    throw createAgentRequestError(targetUrl, response);
   }
 
   return response;
@@ -93,13 +102,14 @@ async function fetchJsonWithCookie(targetUrl, cookieHeader, restNonce, options) 
   const response = await requestJson(targetUrl, Object.assign({}, options || {}, { headers }));
 
   if ((response.statusCode < 200 || response.statusCode >= 300) || !response.json) {
-    throw new Error("Agent endpoint request failed: " + targetUrl + " (HTTP " + String(response.statusCode) + ")");
+    throw createAgentRequestError(targetUrl, response);
   }
 
   return response;
 }
 
 module.exports = {
+  createAgentRequestError,
   createBasicAuthHeader,
   fetchJsonWithBasicAuth,
   fetchJsonWithCookie,
