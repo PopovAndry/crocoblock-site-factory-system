@@ -119,6 +119,121 @@ function factory_rest_agent_safe_field_allowlist(): array {
 	return [ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
 }
 
+function factory_rest_agent_safe_field_length_limits(): array {
+	return [
+		'agency_name'   => 120,
+		'hero_title'    => 160,
+		'hero_subtitle' => 300,
+		'hero_cta_text' => 80,
+	];
+}
+
+function factory_rest_agent_validate_safe_field_payload( $fields ): array {
+	$allowlist = factory_rest_agent_safe_field_allowlist();
+	$limits    = factory_rest_agent_safe_field_length_limits();
+	$unknown   = [];
+	$invalid   = [];
+	$reasons   = [];
+	$valid     = [];
+
+	if ( ! is_array( $fields ) ) {
+		return [
+			'ok'               => false,
+			'unknown_fields'   => [],
+			'invalid_fields'   => [ 'fields' ],
+			'rejected_fields'  => [ 'fields' ],
+			'rejected_reasons' => [
+				'fields' => 'fields must be an object of allowlisted string values.',
+			],
+			'valid_fields'     => [],
+		];
+	}
+
+	if ( wp_is_numeric_array( $fields ) ) {
+		return [
+			'ok'               => false,
+			'unknown_fields'   => [],
+			'invalid_fields'   => [ 'fields' ],
+			'rejected_fields'  => [ 'fields' ],
+			'rejected_reasons' => [
+				'fields' => 'fields must be an associative object, not an array.',
+			],
+			'valid_fields'     => [],
+		];
+	}
+
+	if ( empty( $fields ) ) {
+		return [
+			'ok'               => false,
+			'unknown_fields'   => [],
+			'invalid_fields'   => [ 'fields' ],
+			'rejected_fields'  => [ 'fields' ],
+			'rejected_reasons' => [
+				'fields' => 'fields must not be empty.',
+			],
+			'valid_fields'     => [],
+		];
+	}
+
+	foreach ( $fields as $field_key => $raw_value ) {
+		$field_key = sanitize_key( (string) $field_key );
+
+		if ( ! in_array( $field_key, $allowlist, true ) ) {
+			$unknown[] = $field_key;
+			$reasons[ $field_key ] = 'field is not allowlisted for safe field apply.';
+			continue;
+		}
+
+		if ( ! is_string( $raw_value ) ) {
+			$invalid[] = $field_key;
+			$reasons[ $field_key ] = 'value must be a plain string.';
+			continue;
+		}
+
+		$value = trim( wp_unslash( $raw_value ) );
+
+		if ( '' === $value ) {
+			$invalid[] = $field_key;
+			$reasons[ $field_key ] = 'value must not be empty.';
+			continue;
+		}
+
+		if ( preg_match( '/<[^>]*>/', $value ) ) {
+			$invalid[] = $field_key;
+			$reasons[ $field_key ] = 'HTML or markup is not allowed.';
+			continue;
+		}
+
+		if ( false !== strpos( $value, '<' ) || false !== strpos( $value, '>' ) ) {
+			$invalid[] = $field_key;
+			$reasons[ $field_key ] = 'angle-bracket markup is not allowed.';
+			continue;
+		}
+
+		$max_length = (int) ( $limits[ $field_key ] ?? 0 );
+		if ( $max_length > 0 && function_exists( 'mb_strlen' ) ? mb_strlen( $value ) > $max_length : strlen( $value ) > $max_length ) {
+			$invalid[] = $field_key;
+			$reasons[ $field_key ] = 'value exceeds max length of ' . $max_length . ' characters.';
+			continue;
+		}
+
+		$valid[ $field_key ] = $value;
+	}
+
+	$unknown = array_values( array_unique( array_filter( $unknown ) ) );
+	$invalid = array_values( array_unique( array_filter( $invalid ) ) );
+	$rejected = array_values( array_unique( array_merge( $unknown, $invalid ) ) );
+
+	return [
+		'ok'               => empty( $unknown ) && empty( $invalid ) && ! empty( $valid ),
+		'unknown_fields'   => $unknown,
+		'invalid_fields'   => $invalid,
+		'rejected_fields'  => $rejected,
+		'rejected_reasons' => $reasons,
+		'valid_fields'     => $valid,
+	];
+}
+
 function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_REST_Response {
 	if ( ! function_exists( 'factory_frontend_safe_edit_collect_save_context' ) ) {
 		return new WP_REST_Response(
@@ -167,47 +282,46 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 	}
 
 	$fields         = $request->get_param( 'fields' );
-	$raw_fields     = is_array( $fields ) ? $fields : [];
+	$raw_fields     = $fields;
 	$allowlist      = factory_rest_agent_safe_field_allowlist();
 	$context_param  = $request->get_param( 'context' );
 	$client_context = is_array( $context_param ) ? $context_param : [];
 	$before_values  = $context['current_values'];
-	$unsupported    = factory_frontend_safe_edit_validate_save_fields( $raw_fields, [] );
-	$disallowed     = [];
+	$validated      = factory_rest_agent_validate_safe_field_payload( $raw_fields );
 
-	foreach ( array_keys( $raw_fields ) as $field_key ) {
-		if ( ! in_array( $field_key, $allowlist, true ) ) {
-			$disallowed[] = sanitize_key( (string) $field_key );
-		}
-	}
-
-	$unsupported = array_values( array_unique( array_filter( array_merge( $unsupported, $disallowed ) ) ) );
-
-	if ( ! empty( $unsupported ) ) {
+	if ( ! $validated['ok'] ) {
 		return new WP_REST_Response(
 			[
-				'status'             => 'blocked',
-				'code'               => 'agent_safe_fields_unsupported_fields',
-				'message'            => 'Safe field apply rejected unsupported fields. No site changes were made.',
-				'applies_changes'    => false,
-				'apply_method'       => 'field_only_safe_apply',
-				'unsupported_fields' => $unsupported,
-				'current_values'     => $before_values,
+				'status'           => 'error',
+				'code'             => 'agent_safe_fields_invalid_values',
+				'message'          => 'Safe field apply rejected malformed values before mutation.',
+				'applies_changes'  => false,
+				'apply_method'     => 'field_only_safe_apply',
+				'no_wp_mutation'   => true,
+				'rejected_fields'  => $validated['rejected_fields'],
+				'rejected_reasons' => $validated['rejected_reasons'],
+				'unknown_fields'   => $validated['unknown_fields'],
+				'invalid_fields'   => $validated['invalid_fields'],
+				'current_values'   => $before_values,
 			],
 			400
 		);
 	}
 
-	$normalized = factory_frontend_safe_edit_normalize_save_values( $raw_fields, $before_values );
+	$normalized = factory_frontend_safe_edit_normalize_save_values( $validated['valid_fields'], $before_values );
 
 	if ( ! empty( $normalized['invalid_fields'] ) ) {
 		return new WP_REST_Response(
 			[
-				'status'          => 'blocked',
+				'status'          => 'error',
 				'code'            => 'agent_safe_fields_invalid_values',
-				'message'         => 'Safe field apply rejected invalid values. No site changes were made.',
+				'message'         => 'Safe field apply rejected malformed values before mutation.',
 				'applies_changes' => false,
 				'apply_method'    => 'field_only_safe_apply',
+				'no_wp_mutation'  => true,
+				'rejected_fields' => array_keys( $normalized['invalid_fields'] ),
+				'rejected_reasons'=> $normalized['invalid_fields'],
+				'unknown_fields'  => [],
 				'invalid_fields'  => $normalized['invalid_fields'],
 				'current_values'  => $before_values,
 			],
@@ -216,12 +330,7 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 	}
 
 	$requested_fields = array_values(
-		array_filter(
-			array_values( array_unique( $normalized['submitted_fields'] ) ),
-			static function ( $field_key ) use ( $allowlist ): bool {
-				return in_array( $field_key, $allowlist, true );
-			}
-		)
+		array_values( array_unique( $normalized['submitted_fields'] ) )
 	);
 	$preview_values = $normalized['values'];
 	$diff_summary   = factory_frontend_safe_edit_build_diff_summary( $before_values, $preview_values );
