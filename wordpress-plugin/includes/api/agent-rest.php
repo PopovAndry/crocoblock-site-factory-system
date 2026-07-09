@@ -48,6 +48,16 @@ function factory_register_agent_rest_routes(): void {
 			'permission_callback' => 'factory_rest_require_manage_options',
 		]
 	);
+
+	register_rest_route(
+		'factory/v1',
+		'/agent/safe-fields/apply',
+		[
+			'methods'             => 'POST',
+			'callback'            => 'factory_rest_agent_safe_fields_apply',
+			'permission_callback' => 'factory_rest_require_manage_options',
+		]
+	);
 }
 
 function factory_rest_agent_health(): WP_REST_Response {
@@ -94,12 +104,326 @@ function factory_rest_agent_capabilities(): WP_REST_Response {
 				'dependency_status'  => true,
 				'ai_read_only_chain' => true,
 				'controlled_generate' => true,
+				'safe_fields_apply'  => true,
 				'frontend_safe_edit' => true,
 				'proof_manifest'     => true,
 				'rollback_alpha'     => false,
 			],
 			'frontend_safe_edit_fields' => array_values( $fields ),
 			'supported_verticals'       => [ 'real_estate' ],
+		]
+	);
+}
+
+function factory_rest_agent_safe_field_allowlist(): array {
+	return [ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
+}
+
+function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_REST_Response {
+	if ( ! function_exists( 'factory_frontend_safe_edit_collect_save_context' ) ) {
+		return new WP_REST_Response(
+			[
+				'status'          => 'error',
+				'code'            => 'agent_safe_fields_apply_unavailable',
+				'message'         => 'Safe field apply helpers are unavailable.',
+				'applies_changes' => false,
+				'apply_method'    => 'field_only_safe_apply',
+			],
+			500
+		);
+	}
+
+	$context = factory_frontend_safe_edit_collect_save_context();
+
+	if ( is_wp_error( $context ) ) {
+		return new WP_REST_Response(
+			[
+				'status'          => 'blocked',
+				'code'            => $context->get_error_code(),
+				'message'         => $context->get_error_message(),
+				'applies_changes' => false,
+				'apply_method'    => 'field_only_safe_apply',
+			],
+			(int) ( $context->get_error_data()['status'] ?? 409 )
+		);
+	}
+
+	$ownership = $context['ownership'];
+
+	if ( ! empty( $ownership['blocked'] ) ) {
+		return new WP_REST_Response(
+			[
+				'status'           => 'blocked',
+				'code'             => 'agent_safe_fields_ownership_blocked',
+				'message'          => 'Safe field apply is blocked by current ownership state. No site changes were made.',
+				'applies_changes'  => false,
+				'apply_method'     => 'field_only_safe_apply',
+				'blocking_reasons' => array_values( array_unique( $ownership['blocking_reasons'] ?? [] ) ),
+				'ownership'        => $ownership,
+				'current_values'   => $context['current_values'],
+			],
+			409
+		);
+	}
+
+	$fields         = $request->get_param( 'fields' );
+	$raw_fields     = is_array( $fields ) ? $fields : [];
+	$allowlist      = factory_rest_agent_safe_field_allowlist();
+	$context_param  = $request->get_param( 'context' );
+	$client_context = is_array( $context_param ) ? $context_param : [];
+	$before_values  = $context['current_values'];
+	$unsupported    = factory_frontend_safe_edit_validate_save_fields( $raw_fields, [] );
+	$disallowed     = [];
+
+	foreach ( array_keys( $raw_fields ) as $field_key ) {
+		if ( ! in_array( $field_key, $allowlist, true ) ) {
+			$disallowed[] = sanitize_key( (string) $field_key );
+		}
+	}
+
+	$unsupported = array_values( array_unique( array_filter( array_merge( $unsupported, $disallowed ) ) ) );
+
+	if ( ! empty( $unsupported ) ) {
+		return new WP_REST_Response(
+			[
+				'status'             => 'blocked',
+				'code'               => 'agent_safe_fields_unsupported_fields',
+				'message'            => 'Safe field apply rejected unsupported fields. No site changes were made.',
+				'applies_changes'    => false,
+				'apply_method'       => 'field_only_safe_apply',
+				'unsupported_fields' => $unsupported,
+				'current_values'     => $before_values,
+			],
+			400
+		);
+	}
+
+	$normalized = factory_frontend_safe_edit_normalize_save_values( $raw_fields, $before_values );
+
+	if ( ! empty( $normalized['invalid_fields'] ) ) {
+		return new WP_REST_Response(
+			[
+				'status'          => 'blocked',
+				'code'            => 'agent_safe_fields_invalid_values',
+				'message'         => 'Safe field apply rejected invalid values. No site changes were made.',
+				'applies_changes' => false,
+				'apply_method'    => 'field_only_safe_apply',
+				'invalid_fields'  => $normalized['invalid_fields'],
+				'current_values'  => $before_values,
+			],
+			400
+		);
+	}
+
+	$requested_fields = array_values(
+		array_filter(
+			array_values( array_unique( $normalized['submitted_fields'] ) ),
+			static function ( $field_key ) use ( $allowlist ): bool {
+				return in_array( $field_key, $allowlist, true );
+			}
+		)
+	);
+	$preview_values = $normalized['values'];
+	$diff_summary   = factory_frontend_safe_edit_build_diff_summary( $before_values, $preview_values );
+	$changed_fields = array_map(
+		static function ( array $item ): string {
+			return (string) ( $item['field'] ?? '' );
+		},
+		$diff_summary['changed_fields'] ?? []
+	);
+	$changed_fields = array_values(
+		array_filter(
+			array_unique( $changed_fields ),
+			static function ( $field_key ) use ( $allowlist ): bool {
+				return in_array( $field_key, $allowlist, true );
+			}
+		)
+	);
+	$ignored_fields = array_values( array_diff( $requested_fields, $changed_fields ) );
+
+	if ( empty( $changed_fields ) ) {
+		return new WP_REST_Response(
+			[
+				'status'             => 'ok',
+				'code'               => 'agent_safe_fields_no_changes',
+				'message'            => 'Safe field apply found no changed values. No site changes were made.',
+				'applies_changes'    => false,
+				'apply_method'       => 'field_only_safe_apply',
+				'requested_fields'   => $requested_fields,
+				'applied_fields'     => [],
+				'ignored_fields'     => $ignored_fields,
+				'before_values'      => $before_values,
+				'after_values'       => $before_values,
+				'field_only_apply'   => [
+					'endpoint'         => '/wp-json/factory/v1/agent/safe-fields/apply',
+					'requested_fields' => $requested_fields,
+					'applied_fields'   => [],
+					'ignored_fields'   => $ignored_fields,
+					'agent_manifest'   => '',
+					'fallback_used'    => false,
+				],
+			]
+		);
+	}
+
+	$applied_variables = [];
+
+	foreach ( $changed_fields as $field_key ) {
+		$applied_variables[ $field_key ] = (string) ( $preview_values[ $field_key ] ?? '' );
+	}
+
+	$updated_blueprint = factory_rest_apply_real_estate_preset_variables(
+		$context['blueprint'],
+		$applied_variables
+	);
+	$runtime_snapshot_before = factory_frontend_safe_edit_capture_runtime_snapshot();
+	$apply_boundary_started  = false;
+
+	try {
+		update_option( FACTORY_BLUEPRINT_OPTION, $updated_blueprint );
+		$apply_boundary_started = true;
+
+		$adapter = new Factory_Render_Adapter();
+		$execution = $adapter->apply_safe_field_refresh( $updated_blueprint, [ 'home', 'native_filters', 'contact' ], true );
+		$report = factory_validate_blueprint_state( $updated_blueprint, false );
+		$manifest_path = factory_save_run_manifest(
+			'Launcher state field-only apply: ' . implode( ',', $changed_fields ),
+			'real-estate-safe-fields',
+			$updated_blueprint,
+			[
+				'version' => 1,
+				'summary' => [
+					'create'  => 0,
+					'update'  => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'update' === ( $item['action'] ?? '' );
+							}
+						)
+					),
+					'skip'    => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'skip' === ( $item['action'] ?? '' );
+							}
+						)
+					),
+					'warning' => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'warning' === ( $item['status'] ?? '' );
+							}
+						)
+					),
+					'error'   => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'error' === ( $item['status'] ?? '' );
+							}
+						)
+					),
+				],
+				'items'   => [],
+			],
+			$report,
+			(string) ( $report['status'] ?? 'ok' ),
+			$execution,
+			[
+				'apply_source'       => 'launcher_state_field_only_apply',
+				'safe_fields_apply'  => [
+					'requested_fields' => $requested_fields,
+					'applied_fields'   => $changed_fields,
+					'ignored_fields'   => $ignored_fields,
+					'context'          => $client_context,
+				],
+				'prompt_context'     => [
+					'prompt'            => 'Launcher state field-only apply: ' . implode( ',', $changed_fields ),
+					'preset_variables'  => $applied_variables,
+					'applied_variables' => $applied_variables,
+					'notes'             => [
+						'Narrow Agent safe field apply updates only allowlisted safe variables.',
+						'No properties, attachments, theme state, or dependency state are regenerated in this path.',
+					],
+				],
+			]
+		);
+	} catch ( Throwable $e ) {
+		return new WP_REST_Response(
+			[
+				'status'                  => 'error',
+				'code'                    => $apply_boundary_started
+					? 'agent_safe_fields_apply_failed_after_boundary'
+					: 'agent_safe_fields_apply_failed',
+				'message'                 => $apply_boundary_started
+					? 'Safe field apply failed after entering the mutation boundary. Partial mutation may have occurred.'
+					: 'Safe field apply failed before completion.',
+				'applies_changes'         => $apply_boundary_started,
+				'apply_method'            => 'field_only_safe_apply',
+				'requested_fields'        => $requested_fields,
+				'applied_fields'          => [],
+				'ignored_fields'          => $ignored_fields,
+				'before_values'           => $before_values,
+				'after_values'            => $before_values,
+				'runtime_snapshot_before' => $runtime_snapshot_before,
+				'mutation_status'         => $apply_boundary_started ? 'unknown_after_apply_started' : 'not_started',
+				'field_only_apply'        => [
+					'endpoint'         => '/wp-json/factory/v1/agent/safe-fields/apply',
+					'requested_fields' => $requested_fields,
+					'applied_fields'   => [],
+					'ignored_fields'   => $ignored_fields,
+					'agent_manifest'   => '',
+					'fallback_used'    => false,
+				],
+			],
+			500
+		);
+	}
+
+	$updated_context = factory_frontend_safe_edit_collect_save_context();
+	$after_values = is_wp_error( $updated_context )
+		? factory_frontend_safe_edit_get_current_values( $updated_blueprint )
+		: $updated_context['current_values'];
+	$ownership_after = is_wp_error( $updated_context )
+		? $ownership
+		: $updated_context['ownership'];
+	$runtime_snapshot_after = factory_frontend_safe_edit_capture_runtime_snapshot();
+	$results_summary = function_exists( 'factory_build_manifest_results' )
+		? factory_build_manifest_results( $report )
+		: [ 'summary' => [ 'ok' => 0, 'warning' => 0, 'error' => 0 ] ];
+
+	return new WP_REST_Response(
+		[
+			'status'                  => 'ok',
+			'code'                    => 'agent_safe_fields_applied',
+			'message'                 => 'Safe field apply updated the allowlisted generated content fields.',
+			'applies_changes'         => true,
+			'apply_method'            => 'field_only_safe_apply',
+			'requested_fields'        => $requested_fields,
+			'applied_fields'          => $changed_fields,
+			'ignored_fields'          => $ignored_fields,
+			'before_values'           => $before_values,
+			'after_values'            => $after_values,
+			'ownership_before'        => $ownership,
+			'ownership_after'         => $ownership_after,
+			'runtime_snapshot_before' => $runtime_snapshot_before,
+			'runtime_snapshot_after'  => $runtime_snapshot_after,
+			'manifest_file'           => basename( $manifest_path ),
+			'manifest_path'           => $manifest_path,
+			'execution_count'         => count( $execution ),
+			'validation_count'        => count( $report['checks'] ?? [] ),
+			'results_summary'         => $results_summary['summary'] ?? [],
+			'field_only_apply'        => [
+				'endpoint'         => '/wp-json/factory/v1/agent/safe-fields/apply',
+				'requested_fields' => $requested_fields,
+				'applied_fields'   => $changed_fields,
+				'ignored_fields'   => $ignored_fields,
+				'agent_manifest'   => $manifest_path,
+				'fallback_used'    => false,
+			],
 		]
 	);
 }

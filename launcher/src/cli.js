@@ -590,6 +590,7 @@ async function runState(parsed) {
     console.log("  Status: " + String(result.status));
     console.log("  Code: " + String(result.code));
     if (result.status === "blocked") {
+      console.log("  Apply method: " + String((result.proof && result.proof.apply_method) || "unknown"));
       console.log("  Conflicts: " + String((result.conflicts || []).length));
       if (result.proof && result.proof.confirmation && result.proof.confirmation.required) {
         console.log("  Confirmation required fields: " + ((result.proof.confirmation.required_fields || []).length ? result.proof.confirmation.required_fields.join(", ") : "None"));
@@ -598,8 +599,10 @@ async function runState(parsed) {
       console.log("  State path: " + result.statePath);
       return;
     }
+    console.log("  Apply method: " + String((result.apply && result.apply.apply_method) || "unknown"));
     console.log("  Applied fields: " + ((result.apply.applied_fields || []).length ? result.apply.applied_fields.join(", ") : "None"));
     console.log("  Ignored fields: " + ((result.apply.ignored_fields || []).length ? result.apply.ignored_fields.join(", ") : "None"));
+    console.log("  Field-only manifest: " + String(result.apply.field_only_apply && result.apply.field_only_apply.agent_manifest || "Unavailable"));
     console.log("  Overwritten protected fields: " + ((result.apply.confirmation && result.apply.confirmation.overwritten_protected_fields || []).length ? result.apply.confirmation.overwritten_protected_fields.join(", ") : "None"));
     console.log("  Proof path: " + result.proofPath);
     console.log("  State path: " + result.statePath);

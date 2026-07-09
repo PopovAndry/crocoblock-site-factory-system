@@ -476,6 +476,8 @@ function createLauncherServer(options) {
           project: summarizeProjectForSite(result.project),
           status: result.status,
           code: result.code,
+          apply_method: result.apply ? result.apply.apply_method : (result.proof ? result.proof.apply_method : null),
+          field_only_apply: result.apply ? (result.apply.field_only_apply || null) : (result.proof ? (result.proof.field_only_apply || null) : null),
           apply: result.apply || result.proof,
           proof_path: result.proofPath,
           state_path: result.statePath,

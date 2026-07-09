@@ -222,8 +222,9 @@ function findLatestMatchingFile(directoryPath, prefix, extension) {
   return candidates.length ? candidates[0].filePath : null;
 }
 
-function findLatestPersonalizationProof(projectState, runtimePath) {
+function findPersonalizationProofEntries(projectState, runtimePath) {
   const proofsPath = path.join(runtimePath, "proofs");
+  const candidates = new Map();
   const preferredIds = [
     asString(projectState.project.generation && projectState.project.generation.last_rollback_proof_id),
     asString(projectState.project.generation && projectState.project.generation.last_apply_proof_id),
@@ -233,32 +234,47 @@ function findLatestPersonalizationProof(projectState, runtimePath) {
   for (const proofId of preferredIds) {
     const proofPath = path.join(proofsPath, proofId + ".json");
     if (fs.existsSync(proofPath)) {
-      return {
+      candidates.set(proofPath, {
         proofPath,
-        proof: safeJsonRead(proofPath)
-      };
+        proof: safeJsonRead(proofPath),
+        mtimeMs: fs.statSync(proofPath).mtimeMs
+      });
     }
   }
 
-  const latestRollbackPath = findLatestMatchingFile(proofsPath, "state-rollback-", ".json");
-  const latestApplyPath = findLatestMatchingFile(proofsPath, "state-apply-", ".json");
-  const latestGeneratePath = findLatestMatchingFile(proofsPath, "generate-", ".json");
-  const candidates = [latestRollbackPath, latestApplyPath, latestGeneratePath]
-    .filter(Boolean)
-    .map((filePath) => ({
-      filePath,
-      mtimeMs: fs.statSync(filePath).mtimeMs
-    }))
-    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+  if (fs.existsSync(proofsPath)) {
+    for (const entry of fs.readdirSync(proofsPath, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) {
+        continue;
+      }
 
-  if (!candidates.length) {
-    return null;
+      if (
+        !entry.name.startsWith("generate-")
+        && !entry.name.startsWith("state-apply-")
+        && !entry.name.startsWith("state-rollback-")
+      ) {
+        continue;
+      }
+
+      const proofPath = path.join(proofsPath, entry.name);
+      if (candidates.has(proofPath)) {
+        continue;
+      }
+
+      candidates.set(proofPath, {
+        proofPath,
+        proof: safeJsonRead(proofPath),
+        mtimeMs: fs.statSync(proofPath).mtimeMs
+      });
+    }
   }
 
-  return {
-    proofPath: candidates[0].filePath,
-    proof: safeJsonRead(candidates[0].filePath)
-  };
+  return Array.from(candidates.values()).sort((left, right) => left.mtimeMs - right.mtimeMs);
+}
+
+function findLatestPersonalizationProof(projectState, runtimePath) {
+  const entries = findPersonalizationProofEntries(projectState, runtimePath);
+  return entries.length ? entries[entries.length - 1] : null;
 }
 
 function resolveAgentRunsDirectory(runtimePath) {
@@ -500,6 +516,57 @@ function extractPersonalization(generateProof) {
     applied_fields: [],
     ignored_fields: [],
     warnings: []
+  };
+}
+
+function mergeEffectivePersonalization(previousState, personalization, userOverrides) {
+  const previousPersonalization = previousState && previousState.personalization && typeof previousState.personalization === "object"
+    ? previousState.personalization
+    : {};
+  const nextPersonalization = personalization && typeof personalization === "object"
+    ? personalization
+    : {};
+  const mergedFields = Object.assign(
+    {},
+    previousPersonalization.fields && typeof previousPersonalization.fields === "object" ? previousPersonalization.fields : {},
+    nextPersonalization.fields && typeof nextPersonalization.fields === "object" ? nextPersonalization.fields : {}
+  );
+
+  for (const fieldKey of STATE_APPLY_ALLOWLIST) {
+    const override = userOverrides && typeof userOverrides === "object" ? userOverrides[fieldKey] : null;
+    const overrideValue = override && typeof override === "object" ? asString(override.value) : "";
+    if (overrideValue) {
+      mergedFields[fieldKey] = overrideValue;
+    }
+  }
+
+  const filteredFields = {};
+  for (const fieldKey of STATE_APPLY_ALLOWLIST) {
+    const value = asString(mergedFields[fieldKey]);
+    if (value) {
+      filteredFields[fieldKey] = value;
+    }
+  }
+
+  const previousIgnored = Array.isArray(previousPersonalization.ignored_fields) ? previousPersonalization.ignored_fields : [];
+  const nextIgnored = Array.isArray(nextPersonalization.ignored_fields) ? nextPersonalization.ignored_fields : [];
+  const ignoredFields = Array.from(new Set(previousIgnored.concat(nextIgnored)))
+    .filter((fieldKey) => !Object.prototype.hasOwnProperty.call(filteredFields, fieldKey));
+  const previousWarnings = Array.isArray(previousPersonalization.warnings) ? previousPersonalization.warnings : [];
+  const nextWarnings = Array.isArray(nextPersonalization.warnings) ? nextPersonalization.warnings : [];
+
+  return {
+    source: asString(nextPersonalization.source) || asString(previousPersonalization.source) || "unknown",
+    provider_called: nextPersonalization.provider_called === true || previousPersonalization.provider_called === true,
+    fields: filteredFields,
+    design_profile: nextPersonalization.design_profile && typeof nextPersonalization.design_profile === "object"
+      ? nextPersonalization.design_profile
+      : (previousPersonalization.design_profile && typeof previousPersonalization.design_profile === "object"
+        ? previousPersonalization.design_profile
+        : {}),
+    applied_fields: Object.keys(filteredFields),
+    ignored_fields: ignoredFields,
+    warnings: Array.from(new Set(previousWarnings.concat(nextWarnings)))
   };
 }
 
@@ -916,7 +983,10 @@ function proposedValueOrEmpty(value) {
 async function buildState(projectState) {
   const warnings = [];
   const runtimePath = projectState.runtimePath;
-  const generateProofEntry = findLatestPersonalizationProof(projectState, runtimePath);
+  const currentStatePath = path.join(runtimePath, "state", "current.json");
+  const previousState = fs.existsSync(currentStatePath) ? safeJsonRead(currentStatePath) : null;
+  const personalizationProofEntries = findPersonalizationProofEntries(projectState, runtimePath);
+  const generateProofEntry = personalizationProofEntries.length ? personalizationProofEntries[personalizationProofEntries.length - 1] : null;
   const generateProof = generateProofEntry ? generateProofEntry.proof : null;
   const latestAgentManifest = findLatestAgentManifest(runtimePath, generateProof, warnings);
   const proofStem = "state-refresh-" + timestampCompact();
@@ -944,6 +1014,27 @@ async function buildState(projectState) {
     page_count: pageCount != null ? pageCount : Number(fallbackCounts.pages || 0)
   };
 
+  const userOverrides = mergeConfirmedOverwriteOverrides(
+    runtimePath,
+    parseFrontendSafeEditOverrides(runtimePath, warnings),
+    warnings
+  );
+  let personalization = {
+    source: "unknown",
+    provider_called: false,
+    fields: {},
+    design_profile: {},
+    applied_fields: [],
+    ignored_fields: [],
+    warnings: []
+  };
+
+  for (const entry of personalizationProofEntries) {
+    personalization = mergeEffectivePersonalization({ personalization }, extractPersonalization(entry.proof), {});
+  }
+
+  personalization = mergeEffectivePersonalization(previousState, personalization, userOverrides);
+
   const state = {
     schema: STATE_SCHEMA,
     version: STATE_VERSION,
@@ -966,12 +1057,8 @@ async function buildState(projectState) {
     },
     ownership: buildOwnershipRecord(resources),
     resources,
-    personalization: extractPersonalization(generateProof),
-    user_overrides: mergeConfirmedOverwriteOverrides(
-      runtimePath,
-      parseFrontendSafeEditOverrides(runtimePath, warnings),
-      warnings
-    ),
+    personalization,
+    user_overrides: userOverrides,
     drift: {
       status: "not_checked",
       warnings: ["Drift detection is not implemented in State v1."]
@@ -1389,6 +1476,47 @@ function buildPromptPersonalization(fields, designProfile, source) {
   };
 }
 
+function resolveStateApplyMethod(plan, normalizedFieldScope) {
+  if (!plan || typeof plan !== "object") {
+    return {
+      method: "unsupported",
+      reason: "missing_plan"
+    };
+  }
+
+  if (!plan.field_scope || typeof plan.field_scope !== "object") {
+    return {
+      method: "unsupported",
+      reason: "missing_field_scope"
+    };
+  }
+
+  const includedFields = Array.isArray(normalizedFieldScope && normalizedFieldScope.included_fields)
+    ? normalizedFieldScope.included_fields
+    : [];
+
+  if (!includedFields.length) {
+    return {
+      method: "unsupported",
+      reason: "no_included_fields"
+    };
+  }
+
+  const unsupported = includedFields.filter((fieldKey) => !STATE_APPLY_ALLOWLIST.includes(fieldKey));
+  if (unsupported.length) {
+    return {
+      method: "unsupported",
+      reason: "unsupported_included_fields",
+      fields: unsupported
+    };
+  }
+
+  return {
+    method: "field_only_safe_apply",
+    reason: "safe_allowlist_only"
+  };
+}
+
 async function getAgentJson(projectState, targetUrl, proofId, warnings) {
   try {
     if (!projectState.env.WP_APP_PASSWORD) {
@@ -1529,6 +1657,43 @@ async function validateStateApplyPreconditions(projectState, proofId, warnings) 
     health,
     capabilities,
     dependencyStatus
+  };
+}
+
+async function validateFieldOnlyApplyPreconditions(projectState, proofId, warnings) {
+  if ((projectState.project.runtime && projectState.project.runtime.status) !== "provisioned") {
+    throw new Error("Launcher project must be provisioned before state apply.");
+  }
+
+  if ((projectState.project.agent && projectState.project.agent.status) !== "installed") {
+    throw new Error("Site Factory Agent must be installed before state apply.");
+  }
+
+  await waitForUrl(projectState.project.wp_url);
+
+  const restBase = asString(projectState.project.agent && projectState.project.agent.rest_base);
+  if (!restBase) {
+    throw new Error("Launcher project is missing agent.rest_base.");
+  }
+
+  const health = (await getAgentJson(projectState, restBase + "/agent/health", proofId, warnings)).json || {};
+  if (asString(health.status) !== "ok") {
+    throw new Error("Agent health check did not return ok.");
+  }
+
+  const capabilities = (await getAgentJson(projectState, restBase + "/agent/capabilities", proofId, warnings)).json || {};
+  if (!capabilities.capabilities || capabilities.capabilities.safe_fields_apply !== true) {
+    throw new Error("Agent capabilities do not advertise safe_fields_apply=true.");
+  }
+
+  if (capabilities.capabilities.frontend_safe_edit !== true) {
+    throw new Error("Agent capabilities do not advertise frontend_safe_edit=true.");
+  }
+
+  return {
+    restBase,
+    health,
+    capabilities
   };
 }
 
@@ -1866,6 +2031,8 @@ async function applyStatePlan(options) {
     );
   }
 
+  const normalizedFieldScope = normalizePlanFieldScope(plan);
+  const applyMethodDecision = resolveStateApplyMethod(plan, normalizedFieldScope);
   const beforeStateCopyPath = path.join(statePaths.appliesPath, "state-before-" + timestampCompact() + ".json");
   writeJsonFile(beforeStateCopyPath, state);
 
@@ -1884,6 +2051,15 @@ async function applyStatePlan(options) {
       );
       blockedProof.plan_id = plan && plan.plan_id ? plan.plan_id : null;
       blockedProof.plan_path = planPath;
+      blockedProof.apply_method = applyMethodDecision.method;
+      blockedProof.field_only_apply = {
+        endpoint: "/wp-json/factory/v1/agent/safe-fields/apply",
+        requested_fields: Array.isArray(normalizedFieldScope.included_fields) ? normalizedFieldScope.included_fields : [],
+        applied_fields: [],
+        ignored_fields: Array.isArray(normalizedFieldScope.excluded_fields) ? normalizedFieldScope.excluded_fields : [],
+        agent_manifest: "",
+        fallback_used: false
+      };
       blockedProof.confirmation = error.confirmation || {
         required: Boolean(plan && plan.confirmation_required && plan.confirmation_required.required),
         confirmed: false,
@@ -1911,7 +2087,6 @@ async function applyStatePlan(options) {
   const applyPath = path.join(statePaths.appliesPath, "state-apply-" + applyTimestamp + ".json");
   const proofPath = path.join(safeRuntimePath, "proofs", "state-apply-" + applyTimestamp + ".json");
   const effectiveBeforeValues = deriveEffectiveCurrentValues(state);
-  const normalizedFieldScope = normalizePlanFieldScope(plan);
   const requiredConfirmationFields = normalizeConfirmationFieldRequests(plan && plan.confirmation_required && plan.confirmation_required.fields);
   let applyContext = null;
   const appliedFields = [];
@@ -1938,9 +2113,44 @@ async function applyStatePlan(options) {
     ? normalizedFieldScope.preserved_protected_fields
     : extractProtectedFields(state.user_overrides || {});
   const overwrittenProtectedFields = requiredConfirmationFields.filter((fieldKey) => appliedFields.includes(fieldKey));
+
+  if (applyMethodDecision.method !== "field_only_safe_apply") {
+    const blockedProof = buildBlockedApplyProof(
+      projectState,
+      "State apply requires a broader mutation path that is not enabled in this slice.",
+      "state_plan_broader_apply_not_enabled",
+      [],
+      statePaths.currentPath
+    );
+    blockedProof.plan_id = plan && plan.plan_id ? plan.plan_id : null;
+    blockedProof.plan_path = planPath;
+    blockedProof.apply_method = applyMethodDecision.method;
+    blockedProof.field_only_apply = {
+      endpoint: "/wp-json/factory/v1/agent/safe-fields/apply",
+      requested_fields: appliedFields,
+      applied_fields: [],
+      ignored_fields: ignoredFields,
+      agent_manifest: "",
+      fallback_used: false
+    };
+    const blockedProofPath = path.join(safeRuntimePath, "proofs", "state-apply-blocked-" + timestampCompact() + ".json");
+    writeJsonFile(blockedProofPath, blockedProof);
+
+    return {
+      project: projectState.project,
+      status: "blocked",
+      code: blockedProof.code,
+      conflicts: [],
+      proof: blockedProof,
+      proofPath: blockedProofPath,
+      statePath: statePaths.currentPath
+    };
+  }
+
   let enteredMutationBoundary = false;
   let executeData = null;
   let preconditions = null;
+  let runtimeCountsBefore = null;
   let afterCounts = null;
   let refreshResult = null;
   let homeHtmlBefore = null;
@@ -1948,7 +2158,7 @@ async function applyStatePlan(options) {
 
   try {
     applyContext = buildEffectiveRenderContext(state, plan, normalizedFieldScope);
-    preconditions = await validateStateApplyPreconditions(projectState, applyId, warnings);
+    preconditions = await validateFieldOnlyApplyPreconditions(projectState, applyId, warnings);
     const promptPersonalization = buildPromptPersonalization(
       applyContext.safeRenderContext,
       plan.proposed && plan.proposed.design_profile && typeof plan.proposed.design_profile === "object"
@@ -1957,79 +2167,50 @@ async function applyStatePlan(options) {
       asString(plan.source && plan.source.prompt_personalization_source) || "local_interpreter"
     );
     const proposedFields = applyContext.applyIntentFields;
-    const prompt = asString(plan.prompt);
-    if (!prompt) {
-      throw new Error("Selected state plan is missing its prompt.");
-    }
-
     homeHtmlBefore = await readHomeHtml(projectState.project.wp_url);
-    const runtimeCountsBefore = await readRuntimeCounts(projectState, applyId + "-before", warnings);
-    const rerun = await rerunPlanningChain(projectState, prompt, promptPersonalization, applyId, warnings);
-    const gate = rerun.results.generate_gate || {};
-    const preflight = rerun.results.generate_preflight || {};
-    const confirmation = rerun.results.generate_confirmation || {};
+    runtimeCountsBefore = await readRuntimeCounts(projectState, applyId + "-before", warnings);
 
-    if (!toBooleanTrue(gate.can_generate)) {
-      throw new Error("State apply gate blocked controlled apply.");
-    }
-
-    if (!toBooleanTrue(preflight.preflight_ready)) {
-      throw new Error("State apply preflight blocked controlled apply.");
-    }
-
-    if (!toBooleanTrue(confirmation.confirmation_ready)) {
-      throw new Error("State apply confirmation blocked controlled apply.");
-    }
-
-    if (Array.isArray(confirmation.blocking_reasons) && confirmation.blocking_reasons.length > 0) {
-      throw new Error("State apply confirmation returned blocking reasons.");
-    }
-
-    const previewPayload = {
-      prompt,
-      site_plan: rerun.results.site_plan,
-      blueprint_candidate: rerun.results.blueprint_candidate,
-      preview_diff: rerun.results.preview_diff,
-      generate_gate: gate,
-      generate_preflight: preflight,
-      generate_confirmation: confirmation,
-      execute: false,
-      site_type: "real_estate",
-      vertical: "real_estate",
-      context: rerun.context
+    const executePayload = {
+      fields: applyContext.applyIntentFields,
+      context: {
+        source: "launcher_state_apply",
+        plan_id: asString(plan.plan_id) || null,
+        apply_id: applyId,
+        preserved_fields: applyContext.preservedRenderValues,
+        confirmation: {
+          required: requiredConfirmationFields.length > 0,
+          confirmed: requiredConfirmationFields.length > 0,
+          confirmed_fields: confirmedOverwriteFields,
+          overwritten_protected_fields: overwrittenProtectedFields
+        }
+      }
     };
-    const previewResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", previewPayload, applyId, warnings);
-    const previewData = previewResponse.json || {};
 
-    if (toBooleanTrue(previewData.applies_changes)) {
-      throw new Error("Controlled apply preview unexpectedly reported applies_changes=true.");
-    }
-
-    if (toBooleanTrue(previewData.provider_called)) {
-      throw new Error("Controlled apply preview unexpectedly reported provider_called=true.");
-    }
-
-    if (!previewData.confirmation_required_phrase) {
-      throw new Error("Controlled apply preview did not return a confirmation phrase.");
-    }
-
-    const executePayload = Object.assign({}, previewPayload, {
-      execute: true,
-      confirmation_phrase: previewData.confirmation_required_phrase
-    });
-    enteredMutationBoundary = true;
-    const executeResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", executePayload, applyId, warnings);
+    enteredMutationBoundary = Object.keys(executePayload.fields).length > 0;
+    const executeResponse = await postAgentJson(
+      projectState,
+      preconditions.restBase + "/agent/safe-fields/apply",
+      executePayload,
+      applyId,
+      warnings
+    );
     executeData = executeResponse.json || {};
 
     afterCounts = await readRuntimeCounts(projectState, applyId + "-after", warnings);
     homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
 
-    const mutationStarted = toBooleanTrue(executeData.applies_changes)
-      || asString(executeData.mutation_status) === "unknown_after_apply_started"
-      || asString(executeData.mutation_status) === "completed";
+    if (toBooleanTrue(executeData.provider_called)) {
+      throw new Error("Field-only state apply unexpectedly reported provider_called=true.");
+    }
 
-    if (!mutationStarted) {
-      throw new Error("Controlled apply did not enter the mutation boundary: " + String(executeData.message || executeData.code || "unknown apply error"));
+    if (asString(executeData.status) === "blocked") {
+      throw new Error("Field-only state apply was blocked: " + String(executeData.message || executeData.code || "unknown block"));
+    }
+
+    const mutationStarted = toBooleanTrue(executeData.applies_changes);
+
+    if (!mutationStarted && asString(executeData.code) !== "agent_safe_fields_no_changes") {
+      throw new Error("Field-only state apply did not report a completed narrow mutation: " + String(executeData.message || executeData.code || "unknown apply error"));
     }
 
     const baseApplyRecord = {
@@ -2041,12 +2222,13 @@ async function applyStatePlan(options) {
       created_at: createdAt,
       plan_id: asString(plan.plan_id) || null,
       plan_path: planPath,
-      applies_changes: true,
+      applies_changes: mutationStarted,
       provider_called: false,
       status: "ok",
-      code: "state_plan_applied",
-      applied_fields: appliedFields,
-      ignored_fields: ignoredFields,
+      code: asString(executeData.code) === "agent_safe_fields_no_changes" ? "state_plan_no_changes" : "state_plan_applied",
+      apply_method: "field_only_safe_apply",
+      applied_fields: Array.isArray(executeData.applied_fields) ? executeData.applied_fields : appliedFields,
+      ignored_fields: Array.isArray(executeData.ignored_fields) ? executeData.ignored_fields : ignoredFields,
       preserved_protected_fields: preservedProtectedFields,
       confirmation: {
         required: requiredConfirmationFields.length > 0,
@@ -2058,6 +2240,14 @@ async function applyStatePlan(options) {
       render_context_fields: applyContext.renderContextFields,
       safe_render_context: applyContext.safeRenderContext,
       preserved_render_values: applyContext.preservedRenderValues,
+      field_only_apply: Object.assign({
+        endpoint: "/wp-json/factory/v1/agent/safe-fields/apply",
+        requested_fields: Object.keys(applyContext.applyIntentFields),
+        applied_fields: Array.isArray(executeData.applied_fields) ? executeData.applied_fields : appliedFields,
+        ignored_fields: Array.isArray(executeData.ignored_fields) ? executeData.ignored_fields : ignoredFields,
+        agent_manifest: asString(executeData.manifest_path) || "",
+        fallback_used: false
+      }, executeData.field_only_apply && typeof executeData.field_only_apply === "object" ? executeData.field_only_apply : {}),
       conflicts: [],
       before_values: effectiveBeforeValues,
       after_values: {},
@@ -2068,8 +2258,8 @@ async function applyStatePlan(options) {
         provider_called: false,
         fields: proposedFields,
         design_profile: promptPersonalization.design_profile,
-        applied_fields: appliedFields,
-        ignored_fields: ignoredFields,
+        applied_fields: Array.isArray(executeData.applied_fields) ? executeData.applied_fields : appliedFields,
+        ignored_fields: Array.isArray(executeData.ignored_fields) ? executeData.ignored_fields : ignoredFields,
         render_context_fields: applyContext.renderContextFields,
         warnings: warnings.slice()
       },
@@ -2084,7 +2274,7 @@ async function applyStatePlan(options) {
     writeJsonFile(proofPath, baseApplyRecord);
 
     projectState.project.generation = Object.assign({}, projectState.project.generation || {}, {
-      status: asString(executeData.status) || "ok",
+      status: mutationStarted ? (asString(executeData.status) || "ok") : "ok",
       last_apply_proof_id: path.basename(proofPath, ".json")
     });
     projectState.project.generated_site = Object.assign({}, defaultGeneratedSiteMetadata(), projectState.project.generated_site || {}, {
@@ -2094,8 +2284,8 @@ async function applyStatePlan(options) {
         provider_called: false,
         fields: proposedFields,
         design_profile: promptPersonalization.design_profile,
-        applied_fields: appliedFields,
-        ignored_fields: ignoredFields,
+        applied_fields: Array.isArray(executeData.applied_fields) ? executeData.applied_fields : appliedFields,
+        ignored_fields: Array.isArray(executeData.ignored_fields) ? executeData.ignored_fields : ignoredFields,
         render_context_fields: applyContext.renderContextFields,
         warnings: warnings.slice()
       }
@@ -2185,6 +2375,7 @@ async function applyStatePlan(options) {
       provider_called: false,
       status: enteredMutationBoundary ? "failed" : "blocked",
       code: enteredMutationBoundary ? "state_plan_apply_failed_after_boundary" : "state_plan_apply_failed",
+      apply_method: "field_only_safe_apply",
       applied_fields,
       ignored_fields,
       preserved_protected_fields: preservedProtectedFields,
@@ -2197,10 +2388,18 @@ async function applyStatePlan(options) {
       render_context_fields: applyContext ? applyContext.renderContextFields : [],
       safe_render_context: applyContext ? applyContext.safeRenderContext : {},
       preserved_render_values: applyContext ? applyContext.preservedRenderValues : {},
+      field_only_apply: {
+        endpoint: "/wp-json/factory/v1/agent/safe-fields/apply",
+        requested_fields: applyContext ? Object.keys(applyContext.applyIntentFields || {}) : appliedFields,
+        applied_fields: executeData && Array.isArray(executeData.applied_fields) ? executeData.applied_fields : [],
+        ignored_fields: executeData && Array.isArray(executeData.ignored_fields) ? executeData.ignored_fields : ignoredFields,
+        agent_manifest: executeData && executeData.manifest_path ? executeData.manifest_path : "",
+        fallback_used: false
+      },
       conflicts,
       before_values: effectiveBeforeValues,
       after_values: {},
-      before_counts: beforeCounts,
+      before_counts: runtimeCountsBefore,
       after_counts,
       agent_manifest: executeData && executeData.manifest_path ? executeData.manifest_path : null,
       state_before_path: beforeStateCopyPath,

@@ -453,10 +453,12 @@
     statePlanResult.innerHTML = [
       "<strong>Managed state apply " + escapeHtml(result.status || "unknown") + ".</strong>",
       "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
+      "<p><span>Apply method:</span> " + escapeHtml(result.apply_method || apply.apply_method || "unknown") + "</p>",
       "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
       "<p><span>State path:</span> " + escapeHtml(result.state_path || "Unavailable") + "</p>",
       "<p><span>Applied fields:</span> " + escapeHtml((apply.applied_fields || []).length ? apply.applied_fields.join(", ") : "None") + "</p>",
       "<p><span>Ignored fields:</span> " + escapeHtml((apply.ignored_fields || []).length ? apply.ignored_fields.join(", ") : "None") + "</p>",
+      "<p><span>Field-only manifest:</span> " + escapeHtml((result.field_only_apply && result.field_only_apply.agent_manifest) || (apply.field_only_apply && apply.field_only_apply.agent_manifest) || "Unavailable") + "</p>",
       confirmation && confirmation.required
         ? "<p><span>Overwrite confirmation:</span> " + escapeHtml(confirmation.confirmed ? "confirmed" : "required") + "</p>"
         : "",
