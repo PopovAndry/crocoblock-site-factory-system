@@ -1127,6 +1127,93 @@ function derivePersonalizationValues(state) {
   return values;
 }
 
+function normalizePlanFieldScope(plan) {
+  const fieldScope = plan && plan.field_scope && typeof plan.field_scope === "object" ? plan.field_scope : {};
+  return {
+    mode: asString(fieldScope.mode) || "preserve_protected_by_default",
+    included_fields: Array.isArray(fieldScope.included_fields)
+      ? fieldScope.included_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+      : [],
+    excluded_fields: Array.isArray(fieldScope.excluded_fields)
+      ? fieldScope.excluded_fields.filter((fieldKey) => typeof fieldKey === "string")
+      : [],
+    preserved_protected_fields: Array.isArray(fieldScope.preserved_protected_fields)
+      ? fieldScope.preserved_protected_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+      : [],
+    requires_confirmation_fields: Array.isArray(fieldScope.requires_confirmation_fields)
+      ? fieldScope.requires_confirmation_fields.filter((fieldKey) => typeof fieldKey === "string")
+      : []
+  };
+}
+
+function buildApplyIntentFields(plan, normalizedFieldScope) {
+  const proposed = plan && plan.proposed && plan.proposed.personalization && typeof plan.proposed.personalization === "object"
+    ? plan.proposed.personalization
+    : {};
+  const applyIntentFields = {};
+
+  for (const fieldKey of normalizedFieldScope.included_fields) {
+    const value = asString(proposed[fieldKey]);
+    if (value) {
+      applyIntentFields[fieldKey] = value;
+    }
+  }
+
+  return applyIntentFields;
+}
+
+function buildEffectiveRenderContext(state, plan, normalizedFieldScope) {
+  const currentValues = deriveEffectiveCurrentValues(state);
+  const applyIntentFields = buildApplyIntentFields(plan, normalizedFieldScope);
+  const safeRenderContext = {};
+  const preservedRenderValues = {};
+  const missingPreservedFields = [];
+
+  for (const fieldKey of STATE_APPLY_ALLOWLIST) {
+    if (Object.prototype.hasOwnProperty.call(applyIntentFields, fieldKey)) {
+      safeRenderContext[fieldKey] = asString(applyIntentFields[fieldKey]);
+      continue;
+    }
+
+    if (normalizedFieldScope.preserved_protected_fields.includes(fieldKey)) {
+      const preservedValue = asString(currentValues[fieldKey]);
+      if (!preservedValue) {
+        missingPreservedFields.push(fieldKey);
+        continue;
+      }
+      safeRenderContext[fieldKey] = preservedValue;
+      preservedRenderValues[fieldKey] = preservedValue;
+      continue;
+    }
+
+    const currentValue = asString(currentValues[fieldKey]);
+    if (currentValue) {
+      safeRenderContext[fieldKey] = currentValue;
+    }
+  }
+
+  if (missingPreservedFields.length) {
+    const blockedError = new Error(
+      "Missing preserved render value for protected field(s): " + missingPreservedFields.join(", ")
+    );
+    blockedError.blockedCode = "state_plan_missing_preserved_render_value";
+    blockedError.blockedConflicts = missingPreservedFields.map((fieldKey) => ({
+      type: "missing_preserved_render_value",
+      severity: "blocked",
+      field_key: fieldKey,
+      message: "Protected field " + fieldKey + " is excluded from apply but has no effective render value."
+    }));
+    throw blockedError;
+  }
+
+  return {
+    applyIntentFields,
+    safeRenderContext,
+    renderContextFields: Object.keys(safeRenderContext),
+    preservedRenderValues
+  };
+}
+
 function buildPromptPersonalization(fields, designProfile, source) {
   const safeFields = {};
   for (const key of STATE_APPLY_ALLOWLIST) {
@@ -1502,9 +1589,10 @@ function validateStatePlanForApply(state, plan) {
     throw new Error("Selected plan is invalid because provider_called=true.");
   }
 
-  const planFieldScope = plan.field_scope && typeof plan.field_scope === "object" ? plan.field_scope : null;
-  const includedPlanFields = planFieldScope && Array.isArray(planFieldScope.included_fields)
-    ? planFieldScope.included_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+  const hasExplicitFieldScope = Boolean(plan && plan.field_scope && typeof plan.field_scope === "object");
+  const normalizedFieldScope = normalizePlanFieldScope(plan);
+  const includedPlanFields = hasExplicitFieldScope
+    ? normalizedFieldScope.included_fields
     : null;
 
   if (plan.can_apply_without_confirmation !== true || (Array.isArray(plan.conflicts) && plan.conflicts.length > 0)) {
@@ -1620,17 +1708,12 @@ async function applyStatePlan(options) {
   const applyPath = path.join(statePaths.appliesPath, "state-apply-" + applyTimestamp + ".json");
   const proofPath = path.join(safeRuntimePath, "proofs", "state-apply-" + applyTimestamp + ".json");
   const effectiveBeforeValues = deriveEffectiveCurrentValues(state);
-  const promptPersonalization = buildPromptPersonalizationFromPlan(plan);
-  const proposedFields = promptPersonalization.fields;
+  const normalizedFieldScope = normalizePlanFieldScope(plan);
+  let applyContext = null;
   const appliedFields = [];
   const ignoredFields = [];
-  const planFieldScope = plan.field_scope && typeof plan.field_scope === "object" ? plan.field_scope : null;
-  const scopedIncludedFields = planFieldScope && Array.isArray(planFieldScope.included_fields)
-    ? planFieldScope.included_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
-    : null;
-  const scopedExcludedFields = planFieldScope && Array.isArray(planFieldScope.excluded_fields)
-    ? planFieldScope.excluded_fields
-    : [];
+  const scopedIncludedFields = normalizedFieldScope.included_fields.length ? normalizedFieldScope.included_fields : null;
+  const scopedExcludedFields = normalizedFieldScope.excluded_fields;
 
   for (const [key, value] of Object.entries(plan.proposed && plan.proposed.personalization && typeof plan.proposed.personalization === "object" ? plan.proposed.personalization : {})) {
     const isIncluded = scopedIncludedFields ? scopedIncludedFields.includes(key) : STATE_APPLY_ALLOWLIST.includes(key);
@@ -1647,8 +1730,8 @@ async function applyStatePlan(options) {
     }
   }
 
-  const preservedProtectedFields = planFieldScope && Array.isArray(planFieldScope.preserved_protected_fields)
-    ? planFieldScope.preserved_protected_fields
+  const preservedProtectedFields = normalizedFieldScope.preserved_protected_fields.length
+    ? normalizedFieldScope.preserved_protected_fields
     : extractProtectedFields(state.user_overrides || {});
   let enteredMutationBoundary = false;
   let executeData = null;
@@ -1659,7 +1742,16 @@ async function applyStatePlan(options) {
   let homeHtmlAfter = null;
 
   try {
+    applyContext = buildEffectiveRenderContext(state, plan, normalizedFieldScope);
     preconditions = await validateStateApplyPreconditions(projectState, applyId, warnings);
+    const promptPersonalization = buildPromptPersonalization(
+      applyContext.safeRenderContext,
+      plan.proposed && plan.proposed.design_profile && typeof plan.proposed.design_profile === "object"
+        ? plan.proposed.design_profile
+        : {},
+      asString(plan.source && plan.source.prompt_personalization_source) || "local_interpreter"
+    );
+    const proposedFields = applyContext.applyIntentFields;
     const prompt = asString(plan.prompt);
     if (!prompt) {
       throw new Error("Selected state plan is missing its prompt.");
@@ -1751,6 +1843,9 @@ async function applyStatePlan(options) {
       applied_fields: appliedFields,
       ignored_fields: ignoredFields,
       preserved_protected_fields: preservedProtectedFields,
+      render_context_fields: applyContext.renderContextFields,
+      safe_render_context: applyContext.safeRenderContext,
+      preserved_render_values: applyContext.preservedRenderValues,
       conflicts: [],
       before_values: effectiveBeforeValues,
       after_values: {},
@@ -1763,6 +1858,7 @@ async function applyStatePlan(options) {
         design_profile: promptPersonalization.design_profile,
         applied_fields: appliedFields,
         ignored_fields: ignoredFields,
+        render_context_fields: applyContext.renderContextFields,
         warnings: warnings.slice()
       },
       agent_manifest: asString(executeData.manifest_path) || null,
@@ -1788,6 +1884,7 @@ async function applyStatePlan(options) {
         design_profile: promptPersonalization.design_profile,
         applied_fields: appliedFields,
         ignored_fields: ignoredFields,
+        render_context_fields: applyContext.renderContextFields,
         warnings: warnings.slice()
       }
     });
@@ -1847,6 +1944,9 @@ async function applyStatePlan(options) {
       applied_fields,
       ignored_fields,
       preserved_protected_fields: preservedProtectedFields,
+      render_context_fields: applyContext ? applyContext.renderContextFields : [],
+      safe_render_context: applyContext ? applyContext.safeRenderContext : {},
+      preserved_render_values: applyContext ? applyContext.preservedRenderValues : {},
       conflicts,
       before_values: effectiveBeforeValues,
       after_values: {},
