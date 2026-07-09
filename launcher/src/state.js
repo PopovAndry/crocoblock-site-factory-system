@@ -28,6 +28,9 @@ const {
   derivePromptPersonalization,
   summarizeAppliedFieldKeys
 } = require("./prompt-personalization");
+const {
+  createLiveDesiredStateCandidate
+} = require("./ai");
 const { runCommand } = require("./runtime-tools");
 
 const STATE_SCHEMA = "factory_state";
@@ -1169,6 +1172,19 @@ function normalizeOverwriteFieldRequests(value) {
   ));
 }
 
+function filterFieldsByKeys(fields, allowedKeys) {
+  const source = fields && typeof fields === "object" ? fields : {};
+  const next = {};
+
+  for (const fieldKey of allowedKeys || []) {
+    if (Object.prototype.hasOwnProperty.call(source, fieldKey)) {
+      next[fieldKey] = source[fieldKey];
+    }
+  }
+
+  return next;
+}
+
 function buildStatePlan(state, prompt, options) {
   const createdAt = stateNow();
   const planId = "state-plan-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
@@ -1176,17 +1192,24 @@ function buildStatePlan(state, prompt, options) {
   const currentPersonalization = state.personalization && typeof state.personalization === "object"
     ? state.personalization
     : {};
-  const currentFields = currentPersonalization.fields && typeof currentPersonalization.fields === "object"
+  const rawCurrentFields = currentPersonalization.fields && typeof currentPersonalization.fields === "object"
     ? currentPersonalization.fields
     : {};
   const userOverrides = state.user_overrides && typeof state.user_overrides === "object"
     ? state.user_overrides
     : {};
   const protectedFields = extractProtectedFields(userOverrides);
-  const proposedPersonalization = derivePromptPersonalization(prompt);
-  const proposedFields = proposedPersonalization.fields && typeof proposedPersonalization.fields === "object"
+  const proposedPersonalization = options && options.proposedPersonalization && typeof options.proposedPersonalization === "object"
+    ? options.proposedPersonalization
+    : derivePromptPersonalization(prompt);
+  const rawProposedFields = proposedPersonalization.fields && typeof proposedPersonalization.fields === "object"
     ? proposedPersonalization.fields
     : {};
+  const limitFieldKeys = Array.isArray(options && options.limitFieldKeys) && options.limitFieldKeys.length
+    ? options.limitFieldKeys
+    : null;
+  const currentFields = limitFieldKeys ? filterFieldsByKeys(rawCurrentFields, limitFieldKeys) : rawCurrentFields;
+  const proposedFields = limitFieldKeys ? filterFieldsByKeys(rawProposedFields, limitFieldKeys) : rawProposedFields;
   const allFieldKeys = Array.from(new Set(
     Object.keys(currentFields)
       .concat(Object.keys(proposedFields))
@@ -1288,11 +1311,17 @@ function buildStatePlan(state, prompt, options) {
     wp_url: state.wp_url,
     created_at: createdAt,
     applies_changes: false,
-    provider_called: false,
+    provider_called: proposedPersonalization.provider_called === true,
     source: {
       state_path: null,
       current_state_updated_at: state.updated_at || null,
-      prompt_personalization_source: proposedPersonalization.source || "local_interpreter"
+      prompt_personalization_source: proposedPersonalization.source || "local_interpreter",
+      ai_source: asString(options && options.aiSource) || proposedPersonalization.source || "local_interpreter",
+      provider: asString(options && options.provider) || null,
+      model: asString(options && options.model) || null,
+      estimate_id: asString(options && options.estimateId) || null,
+      ai_candidate_valid: options && options.aiCandidateValid === true,
+      ai_candidate_proof_path: asString(options && options.aiCandidateProofPath) || null
     },
     prompt: String(prompt || ""),
     current: {
@@ -1540,7 +1569,7 @@ function readStateStatus(options) {
   };
 }
 
-function planState(options) {
+async function planState(options) {
   const projectsRoot = resolveProjectsRoot(options.projectsRoot);
   const projectState = readProjectBySlug(options.slug, projectsRoot);
   const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
@@ -1560,8 +1589,49 @@ function planState(options) {
   }
 
   const state = safeJsonRead(statePaths.currentPath);
+  let liveCandidateResult = null;
+  let proposedPersonalization = null;
+  let limitFieldKeys = null;
+  let aiSource = "local";
+  let provider = null;
+  let model = null;
+  let estimateId = null;
+  let aiCandidateValid = false;
+  let aiCandidateProofPath = null;
+
+  if (String(options.aiSource || "").trim().toLowerCase() === "live") {
+    liveCandidateResult = await createLiveDesiredStateCandidate(projectState, {
+      prompt,
+      estimate: options.estimate,
+      confirmLive: options.confirmLive === true
+    });
+    proposedPersonalization = buildPromptPersonalization(
+      liveCandidateResult.candidate.fields,
+      liveCandidateResult.candidate.design_profile,
+      liveCandidateResult.candidate.source || "live_provider",
+      true
+    );
+    limitFieldKeys = STATE_APPLY_ALLOWLIST;
+    aiSource = "live";
+    provider = liveCandidateResult.candidate.provider || "openai";
+    model = liveCandidateResult.candidate.model || null;
+    estimateId = liveCandidateResult.estimate.estimate_id || null;
+    aiCandidateValid = true;
+    aiCandidateProofPath = liveCandidateResult.proofPath;
+  } else {
+    proposedPersonalization = derivePromptPersonalization(prompt);
+  }
+
   const plan = buildStatePlan(state, prompt, {
-    overwriteFields: options.overwriteFields
+    overwriteFields: options.overwriteFields,
+    proposedPersonalization,
+    limitFieldKeys,
+    aiSource,
+    provider,
+    model,
+    estimateId,
+    aiCandidateValid,
+    aiCandidateProofPath
   });
   plan.source.state_path = statePaths.currentPath;
 
@@ -1586,10 +1656,19 @@ function planState(options) {
     plan_id: plan.plan_id,
     prompt_personalization: {
       source: plan.source.prompt_personalization_source,
-      provider_called: false,
+      provider_called: plan.provider_called === true,
       fields: plan.proposed.personalization,
       design_profile: plan.proposed.design_profile,
       applied_fields: appliedFieldKeys
+    },
+    ai_source: plan.source.ai_source || plan.source.prompt_personalization_source,
+    provider: plan.source.provider || null,
+    model: plan.source.model || null,
+    estimate_id: plan.source.estimate_id || null,
+    ai_candidate_proof_path: plan.source.ai_candidate_proof_path || null,
+    ai_candidate_validation: {
+      valid: plan.source.ai_candidate_valid === true || plan.provider_called !== true,
+      source: plan.source.prompt_personalization_source
     },
     diff_summary: {
       field_changes: plan.diff.field_changes.length,
@@ -1607,7 +1686,7 @@ function planState(options) {
     can_apply_without_confirmation: plan.can_apply_without_confirmation,
     confirmation_required: plan.confirmation_required || null,
     applies_changes: false,
-    provider_called: false,
+    provider_called: plan.provider_called === true,
     no_wp_mutation: true,
     mutation_scope: "launcher_project_metadata_only",
     created_at: plan.created_at,
@@ -1623,7 +1702,8 @@ function planState(options) {
     plan,
     planPath,
     proof,
-    proofPath
+    proofPath,
+    aiCandidateProofPath
   };
 }
 
@@ -1844,7 +1924,7 @@ function buildEffectiveRenderContext(state, plan, normalizedFieldScope) {
   };
 }
 
-function buildPromptPersonalization(fields, designProfile, source) {
+function buildPromptPersonalization(fields, designProfile, source, providerCalled) {
   const safeFields = {};
   for (const key of STATE_APPLY_ALLOWLIST) {
     if (Object.prototype.hasOwnProperty.call(fields || {}, key)) {
@@ -1855,7 +1935,7 @@ function buildPromptPersonalization(fields, designProfile, source) {
   return {
     source: asString(source) || "local_interpreter",
     applies_changes: true,
-    provider_called: false,
+    provider_called: providerCalled === true,
     fields: safeFields,
     design_profile: designProfile && typeof designProfile === "object" ? designProfile : {},
     warnings: []
@@ -2301,8 +2381,8 @@ function validateStatePlanForApply(state, plan, options) {
     throw new Error("Selected plan is invalid because applies_changes=true.");
   }
 
-  if (toBooleanTrue(plan.provider_called)) {
-    throw new Error("Selected plan is invalid because provider_called=true.");
+  if (toBooleanTrue(plan.provider_called) && !(plan.source && plan.source.ai_candidate_valid === true)) {
+    throw new Error("Selected plan is invalid because provider_called=true without a validated desired-state candidate.");
   }
 
   const hasExplicitFieldScope = Boolean(plan && plan.field_scope && typeof plan.field_scope === "object");

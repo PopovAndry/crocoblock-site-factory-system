@@ -11,7 +11,7 @@ const {
   resolveProjectsRoot
 } = require("./project-store");
 const { planProject } = require("./plan");
-const { configureAi, estimateAi, getAiStatus } = require("./ai");
+const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
 const { readStateStatus, refreshState, planState, applyStatePlan, rollbackStateApply } = require("./state");
@@ -161,7 +161,7 @@ function renderHomePage(config) {
     "        <div><span>Last estimate</span><strong id=\"launcher-ai-last-estimate\">Not recorded</strong></div>",
     "        <div><span>Total tokens</span><strong id=\"launcher-total-tokens\">0</strong></div>",
     "      </div>",
-    "      <p class=\"project-note\">Live AI calls are disabled in this alpha slice.</p>",
+    "      <p class=\"project-note\">Live AI calls stay disabled until a project is explicitly configured, estimated, and live-enabled for desired-state planning.</p>",
     "    </section>",
     "    <section class=\"panel-grid\">",
     "      <section class=\"panel\">",
@@ -433,11 +433,14 @@ function createLauncherServer(options) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const result = planState({
+        const result = await planState({
           slug,
           projectsRoot,
           prompt: payload.prompt,
-          overwriteFields: payload.overwrite_fields
+          overwriteFields: payload.overwrite_fields,
+          aiSource: payload.ai_source,
+          confirmLive: payload.confirm_live === true,
+          estimate: payload.estimate
         });
 
         sendJson(response, 200, {
@@ -446,6 +449,11 @@ function createLauncherServer(options) {
           plan: result.plan,
           plan_path: result.planPath,
           proof_path: result.proofPath,
+          ai_source: result.plan.source && result.plan.source.ai_source || result.plan.source.prompt_personalization_source || "local_interpreter",
+          provider_called: result.plan.provider_called === true,
+          estimate_id: result.plan.source && result.plan.source.estimate_id || null,
+          candidate_summary: result.plan.proposed ? result.plan.proposed.personalization : null,
+          ai_candidate_proof_path: result.aiCandidateProofPath || null,
           field_scope: result.plan.field_scope || null,
           preserved_protected_fields: result.plan.field_scope && Array.isArray(result.plan.field_scope.preserved_protected_fields)
             ? result.plan.field_scope.preserved_protected_fields
@@ -553,6 +561,23 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/ai\/enable-live$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = enableLiveAi({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: result.project,
+          ai: result.ai,
+          proof: result.proof,
+          proof_path: result.proofPath
+        });
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
@@ -586,11 +611,14 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/state\/apply$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/rollback$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/ai\/enable-live$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500;
       sendJson(response, statusCode, {
         ok: false,
-        error: error.message
+        error: error.message,
+        code: error.code || null,
+        proof_path: error.proofPath || null
       });
     }
   });

@@ -84,14 +84,17 @@ function defaultAiMetadata() {
     mode: "mock",
     provider: "mock",
     model_profile: "balanced",
+    model: "local_interpreter",
     key_status: "not_required",
     key_source: null,
     key_env_name: null,
     key_masked: "",
+    key_present: false,
     key_tested: false,
     key_tested_at: null,
     live_calls_enabled: false,
     last_estimate: null,
+    last_live_call: null,
     updated_at: timestampIso()
   };
 }

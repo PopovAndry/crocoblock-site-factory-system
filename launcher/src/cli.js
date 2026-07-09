@@ -12,7 +12,7 @@ const { installAgent } = require("./install-agent");
 const { planProject } = require("./plan");
 const { readDependencies } = require("./dependencies");
 const { installDependency } = require("./install-dependency");
-const { configureAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
+const { configureAi, enableLiveAi, estimateAi, getAiStatus, getModelProfile } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus } = require("./site");
 const { refreshState, readStateStatus, planState, applyStatePlan, rollbackStateApply } = require("./state");
@@ -64,13 +64,14 @@ function printUsage() {
     "  node launcher/src/cli.js ai --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --mode mock --model-profile balanced [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --provider openai --model-profile balanced --key-env FACTORY_OPENAI_API_KEY [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js ai --slug kyiv-realty enable-live [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty estimate --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js generate --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty refresh [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--overwrite-field hero_title] [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--overwrite-field hero_title] [--ai live --confirm-live --estimate latest] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--confirm-overwrite hero_title] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty rollback --apply latest [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
@@ -262,12 +263,15 @@ function printAiStatus(result) {
   console.log("  Mode: " + result.ai.mode);
   console.log("  Provider: " + result.ai.provider);
   console.log("  Model profile: " + result.ai.model_profile + " (" + profile.label + ")");
+  console.log("  Model: " + String(result.ai.model || "unknown"));
   console.log("  Key status: " + result.ai.key_status);
   console.log("  Key source: " + String(result.ai.key_source || "none"));
   console.log("  Key env name: " + String(result.ai.key_env_name || "none"));
+  console.log("  Key present: " + String(result.ai.key_present === true));
   console.log("  Key masked: " + String(result.ai.key_masked || "not stored"));
-  console.log("  Live calls enabled: false");
-  console.log("  Last estimate: " + (result.ai.last_estimate ? String(result.ai.last_estimate.estimated_total_tokens || result.ai.last_estimate.total || 0) + " tokens" : "Not recorded"));
+  console.log("  Live calls enabled: " + String(result.ai.live_calls_enabled === true));
+  console.log("  Last estimate: " + (result.ai.last_estimate ? String(result.ai.last_estimate.estimated_total_tokens || result.ai.last_estimate.total || 0) + " tokens [" + String(result.ai.last_estimate.estimate_id || "no-id") + "]" : "Not recorded"));
+  console.log("  Last live call: " + (result.ai.last_live_call ? String(result.ai.last_live_call.status || "unknown") + " [" + String(result.ai.last_live_call.call_id || "no-id") + "]" : "Not recorded"));
 }
 
 function printAiConfigureResult(result) {
@@ -277,11 +281,12 @@ function printAiConfigureResult(result) {
   console.log("  Mode: " + result.ai.mode);
   console.log("  Provider: " + result.ai.provider);
   console.log("  Model profile: " + result.ai.model_profile);
+  console.log("  Model: " + String(result.ai.model || "unknown"));
   console.log("  Key status: " + result.ai.key_status);
   console.log("  Key source: " + String(result.ai.key_source || "none"));
   console.log("  Key env name: " + String(result.ai.key_env_name || "none"));
   console.log("  Key masked: " + String(result.ai.key_masked || "not stored"));
-  console.log("  Live calls enabled: false");
+  console.log("  Live calls enabled: " + String(result.ai.live_calls_enabled === true));
   console.log("  Proof file: " + result.proofPath);
 }
 
@@ -293,10 +298,26 @@ function printAiEstimateResult(result) {
   console.log("  Provider: " + result.ai.provider);
   console.log("  Key status: " + result.ai.key_status);
   console.log("  Model profile: " + result.ai.model_profile);
+  console.log("  Model: " + String(result.ai.model || "unknown"));
+  console.log("  Estimate ID: " + String(result.estimate.estimate_id));
   console.log("  Estimated input tokens: " + String(result.estimate.estimated_input_tokens));
   console.log("  Estimated output tokens: " + String(result.estimate.estimated_output_tokens));
   console.log("  Estimated total tokens: " + String(result.estimate.estimated_total_tokens));
+  console.log("  Estimated cost: " + String(result.estimate.estimated_cost == null ? "Unavailable" : result.estimate.estimated_cost));
   console.log("  Uncertainty: " + result.estimate.uncertainty);
+  console.log("  Provider called: false");
+  console.log("  Proof file: " + result.proofPath);
+}
+
+function printAiLiveEnableResult(result) {
+  console.log("Enabled launcher live AI gate:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  Provider: " + result.ai.provider);
+  console.log("  Model profile: " + result.ai.model_profile);
+  console.log("  Model: " + String(result.ai.model || "unknown"));
+  console.log("  Key status: " + result.ai.key_status);
+  console.log("  Live calls enabled: " + String(result.ai.live_calls_enabled === true));
   console.log("  Proof file: " + result.proofPath);
 }
 
@@ -340,8 +361,16 @@ async function runAi(parsed) {
       printAiEstimateResult(result);
       return;
     }
+    case "enable-live": {
+      const result = enableLiveAi({
+        slug: parsed.flags.slug,
+        projectsRoot: parsed.flags["projects-root"]
+      });
+      printAiLiveEnableResult(result);
+      return;
+    }
     default:
-      throw new Error("ai requires a subcommand: status | configure | estimate.");
+      throw new Error("ai requires a subcommand: status | configure | estimate | enable-live.");
   }
 }
 
@@ -565,11 +594,14 @@ async function runState(parsed) {
   }
 
   if (subcommand === "plan") {
-    const result = planState({
+    const result = await planState({
       slug: parsed.flags.slug,
       projectsRoot: parsed.flags["projects-root"],
       prompt: parsed.flags.prompt,
-      overwriteFields: parsed.flags["overwrite-field"]
+      overwriteFields: parsed.flags["overwrite-field"],
+      aiSource: parsed.flags.ai,
+      confirmLive: parsed.flags["confirm-live"] === true,
+      estimate: parsed.flags.estimate
     });
     const protectedFields = Array.isArray(result.plan.current && result.plan.current.protected_fields)
       ? result.plan.current.protected_fields
@@ -582,7 +614,17 @@ async function runState(parsed) {
     console.log("  Slug: " + result.project.slug);
     console.log("  Plan ID: " + result.plan.plan_id);
     console.log("  Applies changes: false");
-    console.log("  Provider called: false");
+    console.log("  Provider called: " + String(result.plan.provider_called === true));
+    console.log("  AI source: " + String(result.plan.source && result.plan.source.ai_source || result.plan.source.prompt_personalization_source || "local_interpreter"));
+    if (result.plan.source && result.plan.source.provider) {
+      console.log("  Provider: " + String(result.plan.source.provider));
+    }
+    if (result.plan.source && result.plan.source.model) {
+      console.log("  Model: " + String(result.plan.source.model));
+    }
+    if (result.plan.source && result.plan.source.estimate_id) {
+      console.log("  Estimate ID: " + String(result.plan.source.estimate_id));
+    }
     console.log("  Field changes: " + String(result.plan.diff.field_changes.length));
     console.log("  Preserved protected fields: " + ((fieldScope.preserved_protected_fields || []).length ? fieldScope.preserved_protected_fields.join(", ") : "None"));
     console.log("  Excluded fields: " + ((fieldScope.excluded_fields || []).length ? fieldScope.excluded_fields.join(", ") : "None"));
@@ -597,6 +639,9 @@ async function runState(parsed) {
     }
     console.log("  Plan path: " + result.planPath);
     console.log("  Proof path: " + result.proofPath);
+    if (result.aiCandidateProofPath) {
+      console.log("  AI candidate proof path: " + result.aiCandidateProofPath);
+    }
     return;
   }
 
@@ -712,6 +757,10 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error.message);
+  if (error && error.code) {
+    console.error(String(error.code) + ": " + error.message);
+  } else {
+    console.error(error.message);
+  }
   process.exitCode = 1;
 });
