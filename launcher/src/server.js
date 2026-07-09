@@ -401,6 +401,8 @@ function createLauncherServer(options) {
           project: stateProject,
           state_path: result.statePath,
           summary: result.summary,
+          effective_safe_fields: result.exists && result.state ? result.state.effective_safe_fields || null : null,
+          latest_apply_method: result.summary ? result.summary.latest_apply_method || null : null,
           warnings: result.warnings,
           rollback: result.rollback || null
         });
@@ -421,6 +423,7 @@ function createLauncherServer(options) {
           snapshot_path: result.snapshotPath,
           proof_path: result.proofPath,
           summary: result.summary,
+          effective_safe_fields: result.state.effective_safe_fields || null,
           warnings: result.state.warnings
         });
         return;

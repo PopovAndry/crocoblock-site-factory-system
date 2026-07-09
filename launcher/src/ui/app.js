@@ -286,6 +286,8 @@
     const summary = payload.summary;
     const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
     const rollback = payload.rollback || null;
+    const effectiveSafeFields = Array.isArray(summary.effective_safe_fields) ? summary.effective_safe_fields : [];
+    const effectiveWarnings = Array.isArray(summary.effective_safe_field_warnings) ? summary.effective_safe_field_warnings : [];
     managedState.innerHTML = [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
@@ -301,7 +303,12 @@
       "    <div><dt>Personalization</dt><dd>" + escapeHtml(summary.personalization_source || "unknown") + "</dd></div>",
       "    <div><dt>User overrides</dt><dd>" + escapeHtml(String(summary.user_overrides_count)) + "</dd></div>",
       "    <div><dt>Protected fields</dt><dd>" + escapeHtml(summary.protected_fields.length ? summary.protected_fields.join(", ") : "None") + "</dd></div>",
+      "    <div><dt>Last apply</dt><dd>" + escapeHtml(summary.latest_apply_method || "None") + "</dd></div>",
+      "    <div><dt>Effective fields</dt><dd>" + escapeHtml(String(summary.effective_safe_fields_count || 0)) + "</dd></div>",
       "  </dl>",
+      effectiveSafeFields.length
+        ? "  <ul class=\"warning-list\">" + effectiveSafeFields.map((field) => "<li><strong>" + escapeHtml(field.field_key) + ":</strong> " + escapeHtml(field.value) + " <em>[" + escapeHtml(field.source + (field.protected ? ", protected" : "") + ", render:" + field.rendered_check) + "]</em></li>").join("") + "</ul>"
+        : "",
       rollback && rollback.available && rollback.safe
         ? "  <p><button type=\"button\" class=\"button\" id=\"state-rollback-button\" data-apply-path=\"" + escapeHtml(rollback.apply_path || "latest") + "\">Rollback Last Apply</button></p>"
         : "",
@@ -312,6 +319,7 @@
         ? "  <p class=\"project-note\">" + escapeHtml(rollback.message || "No rollback-ready apply is available.") + "</p>"
         : "",
       "  <p class=\"project-note\">State path: " + escapeHtml(summary.state_path) + "</p>",
+      effectiveWarnings.length ? "  <ul class=\"warning-list\">" + effectiveWarnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       "</article>"
     ].join("\n");

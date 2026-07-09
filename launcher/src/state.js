@@ -582,6 +582,294 @@ function mergeEffectivePersonalization(previousState, personalization, userOverr
   };
 }
 
+function collectStateApplyProofEntries(runtimePath, warnings) {
+  const proofsPath = path.join(runtimePath, "proofs");
+  if (!fs.existsSync(proofsPath)) {
+    return [];
+  }
+
+  const entries = [];
+  for (const entry of fs.readdirSync(proofsPath, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith("state-apply-") || !entry.name.endsWith(".json")) {
+      continue;
+    }
+
+    const proofPath = path.join(proofsPath, entry.name);
+    try {
+      entries.push({
+        proofPath,
+        proof: safeJsonRead(proofPath),
+        mtimeMs: fs.statSync(proofPath).mtimeMs
+      });
+    } catch (error) {
+      warnings.push("Could not parse state apply proof " + entry.name + ".");
+    }
+  }
+
+  return entries.sort((left, right) => left.mtimeMs - right.mtimeMs);
+}
+
+function normalizeEffectiveFieldSource(source) {
+  const normalized = asString(source);
+  switch (normalized) {
+    case "frontend_safe_edit":
+    case "confirmed_overwrite":
+    case "safe_field_apply":
+    case "personalization":
+      return normalized;
+    default:
+      return normalized ? "personalization" : "unknown";
+  }
+}
+
+function buildLatestPersonalizationFieldMap(personalizationProofEntries) {
+  const fieldMap = {};
+
+  for (const entry of personalizationProofEntries) {
+    const personalization = extractPersonalization(entry.proof);
+    const fieldSource = normalizeEffectiveFieldSource(personalization.source);
+    const proofId = asString(entry.proof && (entry.proof.proof_id || entry.proof.apply_id || entry.proof.rollback_id)) || null;
+
+    for (const fieldKey of STATE_APPLY_ALLOWLIST) {
+      const value = asString(personalization.fields && personalization.fields[fieldKey]);
+      if (!value) {
+        continue;
+      }
+
+      fieldMap[fieldKey] = {
+        value,
+        source: fieldSource,
+        proof_id: proofId,
+        proof_path: entry.proofPath
+      };
+    }
+  }
+
+  return fieldMap;
+}
+
+function buildLatestFieldOnlyApplyFieldMap(runtimePath, warnings) {
+  const entries = collectStateApplyProofEntries(runtimePath, warnings);
+  const fieldMap = {};
+  let latestApply = null;
+
+  for (const entry of entries) {
+    const proof = entry.proof && typeof entry.proof === "object" ? entry.proof : {};
+    if (asString(proof.status) !== "ok" || asString(proof.apply_method) !== "field_only_safe_apply") {
+      continue;
+    }
+
+    const appliedFields = Array.isArray(proof.applied_fields) ? proof.applied_fields : [];
+    const afterValues = proof.after_values && typeof proof.after_values === "object" ? proof.after_values : {};
+    const safeRenderContext = proof.safe_render_context && typeof proof.safe_render_context === "object" ? proof.safe_render_context : {};
+    const effectiveAfter = proof.effective_safe_fields_after
+      && proof.effective_safe_fields_after.fields
+      && typeof proof.effective_safe_fields_after.fields === "object"
+        ? proof.effective_safe_fields_after.fields
+        : {};
+
+    latestApply = {
+      apply_id: asString(proof.apply_id) || null,
+      apply_method: "field_only_safe_apply",
+      proof_path: entry.proofPath,
+      applied_fields: appliedFields.slice()
+    };
+
+    for (const fieldKey of appliedFields) {
+      if (!STATE_APPLY_ALLOWLIST.includes(fieldKey)) {
+        continue;
+      }
+
+      const effectiveEntry = effectiveAfter[fieldKey] && typeof effectiveAfter[fieldKey] === "object"
+        ? effectiveAfter[fieldKey]
+        : null;
+      const value = asString(afterValues[fieldKey])
+        || asString(effectiveEntry && effectiveEntry.value)
+        || asString(safeRenderContext[fieldKey])
+        || asString(proof.personalization && proof.personalization.fields && proof.personalization.fields[fieldKey]);
+
+      if (!value) {
+        continue;
+      }
+
+      fieldMap[fieldKey] = {
+        value,
+        source: "safe_field_apply",
+        protected: false,
+        last_apply_id: asString(proof.apply_id) || null,
+        last_proof_path: entry.proofPath
+      };
+    }
+  }
+
+  return {
+    fieldMap,
+    latestApply
+  };
+}
+
+function buildEffectiveSafeFields(previousState, personalization, userOverrides, personalizationFieldMap, fieldOnlyApplyMeta, homeHtmlBody, warnings) {
+  const previousEffective = previousState
+    && previousState.effective_safe_fields
+    && previousState.effective_safe_fields.fields
+    && typeof previousState.effective_safe_fields.fields === "object"
+      ? previousState.effective_safe_fields.fields
+      : {};
+  const effectiveFields = {};
+  const effectiveWarnings = [];
+
+  for (const fieldKey of STATE_APPLY_ALLOWLIST) {
+    const override = userOverrides && typeof userOverrides === "object" ? userOverrides[fieldKey] : null;
+    const applyMeta = fieldOnlyApplyMeta && fieldOnlyApplyMeta.fieldMap ? fieldOnlyApplyMeta.fieldMap[fieldKey] : null;
+    const personalizationValue = asString(personalization && personalization.fields && personalization.fields[fieldKey]);
+    const personalizationMeta = personalizationFieldMap ? personalizationFieldMap[fieldKey] : null;
+    const previousEntry = previousEffective[fieldKey] && typeof previousEffective[fieldKey] === "object"
+      ? previousEffective[fieldKey]
+      : {};
+
+    let value = "";
+    let source = "unknown";
+    let protectedField = false;
+    let lastApplyId = null;
+    let lastProofPath = null;
+    let overwritePolicy = null;
+    let lastOverwriteConfirmation = null;
+
+    if (override && override.protected === true && asString(override.value)) {
+      value = asString(override.value);
+      source = normalizeEffectiveFieldSource(override.source);
+      protectedField = true;
+      overwritePolicy = asString(override.overwrite_policy) || "ask_before_overwrite";
+      lastOverwriteConfirmation = override.last_overwrite_confirmation && typeof override.last_overwrite_confirmation === "object"
+        ? override.last_overwrite_confirmation
+        : null;
+      lastApplyId = lastOverwriteConfirmation && asString(lastOverwriteConfirmation.proof_id)
+        ? asString(lastOverwriteConfirmation.proof_id)
+        : (applyMeta && applyMeta.last_apply_id ? applyMeta.last_apply_id : (asString(previousEntry.last_apply_id) || null));
+      lastProofPath = lastOverwriteConfirmation && asString(lastOverwriteConfirmation.proof_path)
+        ? asString(lastOverwriteConfirmation.proof_path)
+        : (asString(override.manifest) || (applyMeta && applyMeta.last_proof_path) || asString(previousEntry.last_proof_path) || null);
+    } else if (applyMeta && asString(applyMeta.value)) {
+      value = asString(applyMeta.value);
+      source = "safe_field_apply";
+      protectedField = false;
+      lastApplyId = applyMeta.last_apply_id || null;
+      lastProofPath = applyMeta.last_proof_path || null;
+    } else if (personalizationValue) {
+      value = personalizationValue;
+      source = normalizeEffectiveFieldSource(personalization && personalization.source);
+      protectedField = false;
+      lastApplyId = personalizationMeta && personalizationMeta.proof_id ? personalizationMeta.proof_id : null;
+      lastProofPath = personalizationMeta && personalizationMeta.proof_path ? personalizationMeta.proof_path : null;
+    }
+
+    let renderedCheck = "not_checked";
+    if (value && typeof homeHtmlBody === "string") {
+      renderedCheck = homeHtmlBody.includes(value) ? "present" : "missing";
+    }
+
+    effectiveFields[fieldKey] = {
+      value,
+      source,
+      protected: protectedField,
+      rendered_check: renderedCheck,
+      last_apply_id: lastApplyId,
+      last_proof_path: lastProofPath
+    };
+
+    if (overwritePolicy) {
+      effectiveFields[fieldKey].overwrite_policy = overwritePolicy;
+    }
+
+    if (lastOverwriteConfirmation) {
+      effectiveFields[fieldKey].last_overwrite_confirmation = lastOverwriteConfirmation;
+    }
+
+    if (renderedCheck === "missing" && value) {
+      effectiveWarnings.push("Effective field " + fieldKey + " is not present in Home HTML.");
+    }
+
+    if (
+      personalizationValue
+      && value
+      && personalizationValue !== value
+      && source !== "personalization"
+    ) {
+      effectiveWarnings.push(
+        "Personalization for " + fieldKey + " differs from the current effective value because the active source is " + source + "."
+      );
+    }
+  }
+
+  if (typeof homeHtmlBody !== "string") {
+    effectiveWarnings.push("Home HTML render checks were not available during state refresh.");
+  }
+
+  warnings.push(...effectiveWarnings);
+
+  return {
+    source: "state_refresh",
+    updated_at: stateNow(),
+    latest_apply_method: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestApply
+      ? fieldOnlyApplyMeta.latestApply.apply_method
+      : null,
+    latest_apply_id: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestApply
+      ? fieldOnlyApplyMeta.latestApply.apply_id
+      : null,
+    latest_apply_proof_path: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestApply
+      ? fieldOnlyApplyMeta.latestApply.proof_path
+      : null,
+    last_applied_fields: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestApply && Array.isArray(fieldOnlyApplyMeta.latestApply.applied_fields)
+      ? fieldOnlyApplyMeta.latestApply.applied_fields
+      : [],
+    fields: effectiveFields,
+    warnings: Array.from(new Set(effectiveWarnings))
+  };
+}
+
+function summarizeEffectiveSafeFields(effectiveSafeFields) {
+  const fields = effectiveSafeFields && effectiveSafeFields.fields && typeof effectiveSafeFields.fields === "object"
+    ? effectiveSafeFields.fields
+    : {};
+  return STATE_APPLY_ALLOWLIST
+    .map((fieldKey) => {
+      const entry = fields[fieldKey] && typeof fields[fieldKey] === "object" ? fields[fieldKey] : null;
+      if (!entry || !asString(entry.value)) {
+        return null;
+      }
+
+      return {
+        field_key: fieldKey,
+        value: asString(entry.value),
+        source: asString(entry.source) || "unknown",
+        protected: entry.protected === true,
+        rendered_check: asString(entry.rendered_check) || "not_checked",
+        last_apply_id: asString(entry.last_apply_id) || null,
+        last_proof_path: asString(entry.last_proof_path) || null
+      };
+    })
+    .filter(Boolean);
+}
+
+function selectEffectiveSafeFieldEntries(effectiveSafeFields, fieldKeys) {
+  const fields = effectiveSafeFields && effectiveSafeFields.fields && typeof effectiveSafeFields.fields === "object"
+    ? effectiveSafeFields.fields
+    : {};
+  const selected = {};
+
+  for (const fieldKey of Array.from(new Set(fieldKeys || []))) {
+    if (!STATE_APPLY_ALLOWLIST.includes(fieldKey)) {
+      continue;
+    }
+
+    if (fields[fieldKey] && typeof fields[fieldKey] === "object") {
+      selected[fieldKey] = fields[fieldKey];
+    }
+  }
+
+  return selected;
+}
+
 function parseFrontendSafeEditOverrides(runtimePath, warnings) {
   const runsPath = resolveAgentRunsDirectory(runtimePath);
   const overrides = {};
@@ -745,13 +1033,19 @@ function buildStateSummary(state, statePath) {
   const protectedFields = Object.values(userOverrides)
     .filter((entry) => entry && entry.protected)
     .map((entry) => entry.field_key);
+  const effectiveSafeFields = state && state.effective_safe_fields && typeof state.effective_safe_fields === "object"
+    ? state.effective_safe_fields
+    : {};
+  const effectiveSafeFieldSummary = summarizeEffectiveSafeFields(effectiveSafeFields);
 
   return {
     schema: state.schema,
     version: state.version,
     generation_status: state.generation && state.generation.status || "unknown",
     last_updated: state.updated_at || null,
-    pages: Array.isArray(state.resources && state.resources.pages) ? state.resources.pages.length : 0,
+    pages: state.resources && state.resources.page_count != null
+      ? Number(state.resources.page_count)
+      : (Array.isArray(state.resources && state.resources.pages) ? state.resources.pages.length : 0),
     property_count: state.resources && state.resources.post_types && state.resources.post_types.property
       ? state.resources.post_types.property.count
       : 0,
@@ -762,6 +1056,12 @@ function buildStateSummary(state, statePath) {
       : [],
     user_overrides_count: Object.keys(userOverrides).length,
     protected_fields: protectedFields,
+    effective_safe_fields_count: effectiveSafeFieldSummary.length,
+    effective_safe_fields: effectiveSafeFieldSummary,
+    effective_safe_field_warnings: Array.isArray(effectiveSafeFields.warnings) ? effectiveSafeFields.warnings : [],
+    latest_apply_method: asString(effectiveSafeFields.latest_apply_method) || null,
+    latest_apply_id: asString(effectiveSafeFields.latest_apply_id) || null,
+    last_applied_fields: Array.isArray(effectiveSafeFields.last_applied_fields) ? effectiveSafeFields.last_applied_fields : [],
     drift_status: state.drift && state.drift.status || "unknown",
     state_path: statePath
   };
@@ -998,16 +1298,28 @@ async function buildState(projectState) {
   const currentStatePath = path.join(runtimePath, "state", "current.json");
   const previousState = fs.existsSync(currentStatePath) ? safeJsonRead(currentStatePath) : null;
   const personalizationProofEntries = findPersonalizationProofEntries(projectState, runtimePath);
-  const generateProofEntry = personalizationProofEntries.length ? personalizationProofEntries[personalizationProofEntries.length - 1] : null;
+  const generateProofEntry = personalizationProofEntries
+    .filter((entry) => path.basename(entry.proofPath).startsWith("generate-"))
+    .slice(-1)[0] || null;
+  const latestPersonalizationProofEntry = personalizationProofEntries.length
+    ? personalizationProofEntries[personalizationProofEntries.length - 1]
+    : null;
   const generateProof = generateProofEntry ? generateProofEntry.proof : null;
   const latestAgentManifest = findLatestAgentManifest(runtimePath, generateProof, warnings);
   const proofStem = "state-refresh-" + timestampCompact();
+  let homeHtmlBody = null;
 
   const pages = await readManagedPages(runtimePath, proofStem, warnings);
   const fallbackCounts = generateProof && generateProof.after_counts ? generateProof.after_counts : {};
   const propertyCount = await countPostType(runtimePath, proofStem, "property", warnings);
   const attachmentCount = await countPostType(runtimePath, proofStem, "attachment", warnings);
   const pageCount = await countPostType(runtimePath, proofStem, "page", warnings);
+
+  try {
+    homeHtmlBody = (await readHomeHtml(projectState.project.wp_url)).body;
+  } catch (error) {
+    warnings.push("Home HTML render check failed during state refresh: " + error.message);
+  }
 
   const resources = {
     pages,
@@ -1031,6 +1343,8 @@ async function buildState(projectState) {
     parseFrontendSafeEditOverrides(runtimePath, warnings),
     warnings
   );
+  const personalizationFieldMap = buildLatestPersonalizationFieldMap(personalizationProofEntries);
+  const fieldOnlyApplyMeta = buildLatestFieldOnlyApplyFieldMap(runtimePath, warnings);
   let personalization = {
     source: "unknown",
     provider_called: false,
@@ -1045,7 +1359,16 @@ async function buildState(projectState) {
     personalization = mergeEffectivePersonalization({ personalization }, extractPersonalization(entry.proof), {});
   }
 
-  personalization = mergeEffectivePersonalization(previousState, personalization, userOverrides);
+  personalization = mergeEffectivePersonalization(previousState, personalization, {});
+  const effectiveSafeFields = buildEffectiveSafeFields(
+    previousState,
+    personalization,
+    userOverrides,
+    personalizationFieldMap,
+    fieldOnlyApplyMeta,
+    homeHtmlBody,
+    warnings
+  );
 
   const state = {
     schema: STATE_SCHEMA,
@@ -1057,6 +1380,7 @@ async function buildState(projectState) {
     updated_at: stateNow(),
     source: {
       latest_generate_proof: generateProofEntry ? generateProofEntry.proofPath : null,
+      latest_personalization_proof: latestPersonalizationProofEntry ? latestPersonalizationProofEntry.proofPath : null,
       latest_agent_manifest: latestAgentManifest
     },
     generation: {
@@ -1071,6 +1395,7 @@ async function buildState(projectState) {
     resources,
     personalization,
     user_overrides: userOverrides,
+    effective_safe_fields: effectiveSafeFields,
     drift: {
       status: "not_checked",
       warnings: ["Drift detection is not implemented in State v1."]
@@ -1117,6 +1442,7 @@ async function refreshState(options) {
     state_path: statePaths.currentPath,
     snapshot_path: snapshotPath,
     summary: buildStateSummary(state, statePaths.currentPath),
+    effective_safe_fields: state.effective_safe_fields || null,
     applies_changes: false,
     mutation_scope: "launcher_project_metadata_only",
     created_at: createdAt,
@@ -1154,13 +1480,20 @@ function readStateStatus(options) {
   }
 
   const state = safeJsonRead(statePaths.currentPath);
+  const warnings = []
+    .concat(Array.isArray(state.warnings) ? state.warnings : [])
+    .concat(
+      state.effective_safe_fields && Array.isArray(state.effective_safe_fields.warnings)
+        ? state.effective_safe_fields.warnings
+        : []
+    );
   return {
     project: projectState.project,
     exists: true,
     statePath: statePaths.currentPath,
     state,
     summary: buildStateSummary(state, statePaths.currentPath),
-    warnings: Array.isArray(state.warnings) ? state.warnings : [],
+    warnings: Array.from(new Set(warnings)),
     rollback: buildRollbackUiSummary(statePaths, state)
   };
 }
@@ -1350,21 +1683,20 @@ function buildBlockedRollbackProof(projectState, reason, code, conflicts, stateP
 }
 
 function deriveEffectiveCurrentValues(state) {
+  const effectiveSafeFields = state && state.effective_safe_fields && state.effective_safe_fields.fields && typeof state.effective_safe_fields.fields === "object"
+    ? state.effective_safe_fields.fields
+    : null;
   const personalizationFields = state.personalization && state.personalization.fields && typeof state.personalization.fields === "object"
     ? state.personalization.fields
-    : {};
-  const userOverrides = state.user_overrides && typeof state.user_overrides === "object"
-    ? state.user_overrides
     : {};
   const values = {};
 
   for (const key of STATE_APPLY_ALLOWLIST) {
-    if (userOverrides[key] && typeof userOverrides[key] === "object" && asString(userOverrides[key].value)) {
-      values[key] = asString(userOverrides[key].value);
-      continue;
+    if (effectiveSafeFields && effectiveSafeFields[key] && typeof effectiveSafeFields[key] === "object") {
+      values[key] = asString(effectiveSafeFields[key].value);
+    } else {
+      values[key] = asString(personalizationFields[key]);
     }
-
-    values[key] = asString(personalizationFields[key]);
   }
 
   return values;
@@ -2351,8 +2683,16 @@ async function applyStatePlan(options) {
       writeJsonFile(refreshResult.snapshotPath, refreshedState);
     }
     const afterValues = deriveEffectiveCurrentValues(refreshedState);
+    const effectiveFieldKeys = appliedFields
+      .concat(preservedProtectedFields)
+      .concat(overwrittenProtectedFields);
     const applyRecord = Object.assign({}, baseApplyRecord, {
       after_values: afterValues,
+      effective_safe_fields_after: refreshedState.effective_safe_fields || null,
+      effective_safe_field_updates: selectEffectiveSafeFieldEntries(
+        refreshedState.effective_safe_fields || null,
+        effectiveFieldKeys
+      ),
       home_html_before_contains: {
         agency_name: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.agency_name)),
         hero_title: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.hero_title))
@@ -2419,6 +2759,8 @@ async function applyStatePlan(options) {
       conflicts,
       before_values: effectiveBeforeValues,
       after_values: {},
+      effective_safe_fields_after: null,
+      effective_safe_field_updates: {},
       before_counts: runtimeCountsBefore,
       after_counts: afterCounts,
       agent_manifest: executeData && executeData.manifest_path ? executeData.manifest_path : null,

@@ -503,6 +503,27 @@ function printStateStatus(result) {
   console.log("  Applied personalization fields: " + (summary.personalization_fields.length ? summary.personalization_fields.join(", ") : "None"));
   console.log("  User overrides count: " + String(summary.user_overrides_count));
   console.log("  Protected fields: " + (summary.protected_fields.length ? summary.protected_fields.join(", ") : "None"));
+  console.log("  Last apply method: " + String(summary.latest_apply_method || "None"));
+  console.log("  Last applied fields: " + (summary.last_applied_fields.length ? summary.last_applied_fields.join(", ") : "None"));
+  console.log("  Effective safe fields:");
+  if (summary.effective_safe_fields.length) {
+    for (const field of summary.effective_safe_fields) {
+      let line = "    - " + field.field_key + ": " + field.value + " [" + field.source;
+      if (field.protected) {
+        line += ", protected";
+      }
+      line += ", render:" + field.rendered_check + "]";
+      console.log(line);
+    }
+  } else {
+    console.log("    None");
+  }
+  if (summary.effective_safe_field_warnings.length) {
+    console.log("  Effective field warnings:");
+    for (const warning of summary.effective_safe_field_warnings) {
+      console.log("    - " + warning);
+    }
+  }
   console.log("  Drift status: " + String(summary.drift_status));
   console.log("  State path: " + summary.state_path);
 }
@@ -529,6 +550,9 @@ async function runState(parsed) {
     console.log("  Personalization source: " + String(result.summary.personalization_source));
     console.log("  User overrides count: " + String(result.summary.user_overrides_count));
     console.log("  Protected fields: " + (result.summary.protected_fields.length ? result.summary.protected_fields.join(", ") : "None"));
+    console.log("  Effective safe fields: " + (result.summary.effective_safe_fields.length
+      ? result.summary.effective_safe_fields.map((field) => field.field_key + " [" + field.source + "]").join(", ")
+      : "None"));
     return;
   }
 
