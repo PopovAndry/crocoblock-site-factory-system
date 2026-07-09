@@ -234,6 +234,50 @@ function factory_rest_agent_validate_safe_field_payload( $fields ): array {
 	];
 }
 
+function factory_rest_agent_validate_safe_field_context_payload( $value, string $context_key ): array {
+	if ( null === $value ) {
+		return [
+			'ok'               => true,
+			'unknown_fields'   => [],
+			'invalid_fields'   => [],
+			'rejected_fields'  => [],
+			'rejected_reasons' => [],
+			'valid_fields'     => [],
+		];
+	}
+
+	if ( is_array( $value ) && empty( $value ) ) {
+		return [
+			'ok'               => true,
+			'unknown_fields'   => [],
+			'invalid_fields'   => [],
+			'rejected_fields'  => [],
+			'rejected_reasons' => [],
+			'valid_fields'     => [],
+		];
+	}
+
+	$validated = factory_rest_agent_validate_safe_field_payload( $value );
+
+	if ( $validated['ok'] ) {
+		return $validated;
+	}
+
+	$reasons = [];
+	foreach ( $validated['rejected_reasons'] as $field_key => $reason ) {
+		$reasons[ $context_key . '.' . $field_key ] = $reason;
+	}
+
+	return [
+		'ok'               => false,
+		'unknown_fields'   => $validated['unknown_fields'],
+		'invalid_fields'   => $validated['invalid_fields'],
+		'rejected_fields'  => $validated['rejected_fields'],
+		'rejected_reasons' => $reasons,
+		'valid_fields'     => [],
+	];
+}
+
 function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_REST_Response {
 	if ( ! function_exists( 'factory_frontend_safe_edit_collect_save_context' ) ) {
 		return new WP_REST_Response(
@@ -286,10 +330,43 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 	$allowlist      = factory_rest_agent_safe_field_allowlist();
 	$context_param  = $request->get_param( 'context' );
 	$client_context = is_array( $context_param ) ? $context_param : [];
+	$safe_render_context = $client_context['safe_render_context'] ?? null;
+	$preserved_fields    = $client_context['preserved_fields'] ?? null;
 	$before_values  = $context['current_values'];
 	$validated      = factory_rest_agent_validate_safe_field_payload( $raw_fields );
+	$validated_render_context = factory_rest_agent_validate_safe_field_context_payload( $safe_render_context, 'safe_render_context' );
+	$validated_preserved_fields = factory_rest_agent_validate_safe_field_context_payload( $preserved_fields, 'preserved_fields' );
 
-	if ( ! $validated['ok'] ) {
+	if ( ! $validated['ok'] || ! $validated_render_context['ok'] || ! $validated_preserved_fields['ok'] ) {
+		$rejected_fields = array_values(
+			array_unique(
+				array_merge(
+					$validated['rejected_fields'],
+					$validated_render_context['rejected_fields'],
+					$validated_preserved_fields['rejected_fields']
+				)
+			)
+		);
+		$unknown_fields = array_values(
+			array_unique(
+				array_merge(
+					$validated['unknown_fields'],
+					$validated_render_context['unknown_fields'],
+					$validated_preserved_fields['unknown_fields']
+				)
+			)
+		);
+		$invalid_fields = array_merge(
+			$validated['invalid_fields'],
+			$validated_render_context['invalid_fields'],
+			$validated_preserved_fields['invalid_fields']
+		);
+		$rejected_reasons = array_merge(
+			$validated['rejected_reasons'],
+			$validated_render_context['rejected_reasons'],
+			$validated_preserved_fields['rejected_reasons']
+		);
+
 		return new WP_REST_Response(
 			[
 				'status'           => 'error',
@@ -298,14 +375,40 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 				'applies_changes'  => false,
 				'apply_method'     => 'field_only_safe_apply',
 				'no_wp_mutation'   => true,
-				'rejected_fields'  => $validated['rejected_fields'],
-				'rejected_reasons' => $validated['rejected_reasons'],
-				'unknown_fields'   => $validated['unknown_fields'],
-				'invalid_fields'   => $validated['invalid_fields'],
+				'rejected_fields'  => $rejected_fields,
+				'rejected_reasons' => $rejected_reasons,
+				'unknown_fields'   => $unknown_fields,
+				'invalid_fields'   => $invalid_fields,
 				'current_values'   => $before_values,
 			],
 			400
 		);
+	}
+
+	$render_context_values = $validated_render_context['valid_fields'];
+	$preserved_render_values = $validated_preserved_fields['valid_fields'];
+
+	foreach ( $preserved_render_values as $field_key => $value ) {
+		if ( isset( $render_context_values[ $field_key ] ) && $render_context_values[ $field_key ] !== $value ) {
+			return new WP_REST_Response(
+				[
+					'status'           => 'error',
+					'code'             => 'agent_safe_fields_invalid_values',
+					'message'          => 'Preserved safe render field values must match the safe render context.',
+					'applies_changes'  => false,
+					'apply_method'     => 'field_only_safe_apply',
+					'no_wp_mutation'   => true,
+					'rejected_fields'  => [ $field_key ],
+					'rejected_reasons' => [
+						'preserved_fields.' . $field_key => 'preserved field value must match safe_render_context for the same key.',
+					],
+					'unknown_fields'   => [],
+					'invalid_fields'   => [ $field_key ],
+					'current_values'   => $before_values,
+				],
+				400
+			);
+		}
 	}
 
 	$normalized = factory_frontend_safe_edit_normalize_save_values( $validated['valid_fields'], $before_values );
@@ -381,9 +484,16 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 		$applied_variables[ $field_key ] = (string) ( $preview_values[ $field_key ] ?? '' );
 	}
 
+	$render_variables = $applied_variables;
+	foreach ( $render_context_values as $field_key => $value ) {
+		if ( in_array( $field_key, $allowlist, true ) ) {
+			$render_variables[ $field_key ] = (string) $value;
+		}
+	}
+
 	$updated_blueprint = factory_rest_apply_real_estate_preset_variables(
 		$context['blueprint'],
-		$applied_variables
+		$render_variables
 	);
 	$runtime_snapshot_before = factory_frontend_safe_edit_capture_runtime_snapshot();
 	$apply_boundary_started  = false;
@@ -447,14 +557,16 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 					'requested_fields' => $requested_fields,
 					'applied_fields'   => $changed_fields,
 					'ignored_fields'   => $ignored_fields,
+					'rendered_fields'  => array_keys( $render_variables ),
 					'context'          => $client_context,
 				],
 				'prompt_context'     => [
 					'prompt'            => 'Launcher state field-only apply: ' . implode( ',', $changed_fields ),
-					'preset_variables'  => $applied_variables,
+					'preset_variables'  => $render_variables,
 					'applied_variables' => $applied_variables,
 					'notes'             => [
 						'Narrow Agent safe field apply updates only allowlisted safe variables.',
+						'Safe render context preserves protected fields for page refresh without broad regeneration.',
 						'No properties, attachments, theme state, or dependency state are regenerated in this path.',
 					],
 				],
@@ -530,9 +642,13 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 				'requested_fields' => $requested_fields,
 				'applied_fields'   => $changed_fields,
 				'ignored_fields'   => $ignored_fields,
+				'rendered_fields'  => array_keys( $render_variables ),
 				'agent_manifest'   => $manifest_path,
 				'fallback_used'    => false,
 			],
+			'render_context_fields'     => array_keys( $render_variables ),
+			'safe_render_context'       => $render_context_values,
+			'preserved_render_values'   => $preserved_render_values,
 		]
 	);
 }

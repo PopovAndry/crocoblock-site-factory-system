@@ -153,6 +153,48 @@ function asString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function decodeHtmlEntities(value) {
+  const input = asString(value);
+  if (!input) {
+    return "";
+  }
+
+  const named = input
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&ndash;/gi, "-")
+    .replace(/&mdash;/gi, "-")
+    .replace(/&minus;/gi, "-")
+    .replace(/&#8211;/g, "-")
+    .replace(/&#8212;/g, "-");
+
+  return named
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/g, (_, num) => String.fromCodePoint(parseInt(num, 10)));
+}
+
+function normalizeRenderedSearchText(value) {
+  return decodeHtmlEntities(String(value || ""))
+    .replace(/[\u2010-\u2015]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function renderedHtmlContainsValue(html, value) {
+  const normalizedHtml = normalizeRenderedSearchText(html);
+  const normalizedValue = normalizeRenderedSearchText(value);
+  if (!normalizedHtml || !normalizedValue) {
+    return false;
+  }
+
+  return normalizedHtml.includes(normalizedValue);
+}
+
 function safeJsonRead(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -765,7 +807,7 @@ function buildEffectiveSafeFields(previousState, personalization, userOverrides,
 
     let renderedCheck = "not_checked";
     if (value && typeof homeHtmlBody === "string") {
-      renderedCheck = homeHtmlBody.includes(value) ? "present" : "missing";
+      renderedCheck = renderedHtmlContainsValue(homeHtmlBody, value) ? "present" : "missing";
     }
 
     effectiveFields[fieldKey] = {
@@ -2461,10 +2503,12 @@ async function applyStatePlan(options) {
     }
   }
 
-  const preservedProtectedFields = normalizedFieldScope.preserved_protected_fields.length
-    ? normalizedFieldScope.preserved_protected_fields
-    : extractProtectedFields(state.user_overrides || {});
   const overwrittenProtectedFields = requiredConfirmationFields.filter((fieldKey) => appliedFields.includes(fieldKey));
+  const preservedProtectedFields = (
+    normalizedFieldScope.preserved_protected_fields.length
+      ? normalizedFieldScope.preserved_protected_fields
+      : extractProtectedFields(state.user_overrides || {})
+  ).filter((fieldKey) => !overwrittenProtectedFields.includes(fieldKey));
 
   if (applyMethodDecision.method !== "field_only_safe_apply") {
     const blockedProof = buildBlockedApplyProof(
@@ -2528,6 +2572,7 @@ async function applyStatePlan(options) {
         source: "launcher_state_apply",
         plan_id: asString(plan.plan_id) || null,
         apply_id: applyId,
+        safe_render_context: applyContext.safeRenderContext,
         preserved_fields: applyContext.preservedRenderValues,
         confirmation: {
           required: requiredConfirmationFields.length > 0,
@@ -2694,14 +2739,14 @@ async function applyStatePlan(options) {
         effectiveFieldKeys
       ),
       home_html_before_contains: {
-        agency_name: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.agency_name)),
-        hero_title: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.hero_title))
+        agency_name: renderedHtmlContainsValue(homeHtmlBefore.body, asString(effectiveBeforeValues.agency_name)),
+        hero_title: renderedHtmlContainsValue(homeHtmlBefore.body, asString(effectiveBeforeValues.hero_title))
       },
       home_html_after_contains: {
-        agency_name: homeHtmlAfter.body.includes(asString(afterValues.agency_name)),
-        hero_title: homeHtmlAfter.body.includes(asString(afterValues.hero_title)),
-        hero_subtitle: homeHtmlAfter.body.includes(asString(afterValues.hero_subtitle)),
-        hero_cta_text: homeHtmlAfter.body.includes(asString(afterValues.hero_cta_text))
+        agency_name: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.agency_name)),
+        hero_title: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.hero_title)),
+        hero_subtitle: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.hero_subtitle)),
+        hero_cta_text: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.hero_cta_text))
       },
       state_after_path: refreshResult.snapshotPath,
       state_current_path: refreshResult.statePath,
@@ -2997,14 +3042,14 @@ async function rollbackStateApply(options) {
       state_current_path: refreshResult.statePath,
       after_values: afterValues,
       home_html_before_contains: {
-        agency_name: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.agency_name)),
-        hero_title: homeHtmlBefore.body.includes(asString(effectiveBeforeValues.hero_title))
+        agency_name: renderedHtmlContainsValue(homeHtmlBefore.body, asString(effectiveBeforeValues.agency_name)),
+        hero_title: renderedHtmlContainsValue(homeHtmlBefore.body, asString(effectiveBeforeValues.hero_title))
       },
       home_html_after_contains: {
-        agency_name: homeHtmlAfter.body.includes(asString(afterValues.agency_name)),
-        hero_title: homeHtmlAfter.body.includes(asString(afterValues.hero_title)),
-        hero_subtitle: homeHtmlAfter.body.includes(asString(afterValues.hero_subtitle)),
-        hero_cta_text: homeHtmlAfter.body.includes(asString(afterValues.hero_cta_text))
+        agency_name: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.agency_name)),
+        hero_title: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.hero_title)),
+        hero_subtitle: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.hero_subtitle)),
+        hero_cta_text: renderedHtmlContainsValue(homeHtmlAfter.body, asString(afterValues.hero_cta_text))
       },
       warnings
     });
