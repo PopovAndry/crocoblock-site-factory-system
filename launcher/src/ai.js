@@ -7,7 +7,6 @@ const crypto = require("crypto");
 const {
   assertSafeRuntimePath,
   defaultAiMetadata,
-  ensureDirectory,
   readProjectBySlug,
   resolveProjectsRoot,
   saveProjectRecord,
@@ -124,28 +123,6 @@ function redactSecret(text, secret) {
   return input.split(value).join(maskSecret(value));
 }
 
-function parseEnvLikeContent(content) {
-  const result = {};
-
-  for (const rawLine of String(content || "").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-
-    const separatorIndex = line.indexOf("=");
-    if (separatorIndex === -1) {
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    const value = line.slice(separatorIndex + 1).trim();
-    result[key] = value;
-  }
-
-  return result;
-}
-
 function stripJsonFences(content) {
   let value = String(content || "").trim();
 
@@ -190,50 +167,56 @@ function getAiSecretsPath(projectState) {
   return path.join(getSecretsDir(projectState), "ai.env");
 }
 
-function readAiSecretReference(projectState) {
-  const secretsPath = getAiSecretsPath(projectState);
+function resolveEnvKeyReference(aiState) {
+  const envName = asString(aiState && aiState.key_env_name);
+  const key = envName ? asString(process.env[envName]) : "";
 
-  if (!fs.existsSync(secretsPath)) {
-    return {
-      exists: false,
-      path: secretsPath,
-      provider: "",
-      key: "",
-      keyEnvName: ""
-    };
-  }
-
-  const parsed = parseEnvLikeContent(fs.readFileSync(secretsPath, "utf8"));
   return {
-    exists: true,
-    path: secretsPath,
-    provider: asString(parsed.FACTORY_AI_PROVIDER),
-    key: asString(parsed.FACTORY_AI_KEY),
-    keyEnvName: asString(parsed.FACTORY_AI_KEY_ENV)
+    keyEnvName: envName,
+    key,
+    keyPresent: Boolean(key)
   };
 }
 
 function hydrateAiState(projectState, ai) {
   const normalized = normalizeAiState(ai);
-  const secret = readAiSecretReference(projectState);
 
   if (normalized.mode === "mock") {
     return Object.assign({}, normalized, {
       key_present: false,
+      key_masked: "",
       live_calls_enabled: false
     });
   }
 
-  const keyPresent = Boolean(secret.key);
+  const envReference = normalized.key_source === "env" ? resolveEnvKeyReference(normalized) : {
+    keyEnvName: asString(normalized.key_env_name),
+    key: "",
+    keyPresent: false
+  };
+
   return Object.assign({}, normalized, {
     provider: "openai",
     model: getOpenAiModel(normalized.model_profile),
-    key_source: normalized.key_source || (keyPresent ? "env" : null),
-    key_env_name: normalized.key_env_name || secret.keyEnvName || null,
-    key_masked: normalized.key_masked || (keyPresent ? maskSecret(secret.key) : ""),
-    key_present: keyPresent,
-    key_status: keyPresent ? (normalized.key_status || "configured_locally") : "missing"
+    key_source: normalized.key_source || (envReference.keyPresent ? "env" : null),
+    key_env_name: normalized.key_env_name || envReference.keyEnvName || null,
+    key_masked: envReference.keyPresent ? maskSecret(envReference.key) : "",
+    key_present: envReference.keyPresent,
+    key_status: envReference.keyPresent ? (normalized.key_status || "configured_locally") : "missing"
   });
+}
+
+function prepareAiStateForStorage(aiState) {
+  const normalized = normalizeAiState(aiState);
+
+  if (normalized.key_source === "env") {
+    return Object.assign({}, normalized, {
+      key_masked: "",
+      key_present: false
+    });
+  }
+
+  return normalized;
 }
 
 function buildAiConfigProof(projectState, aiState, warnings) {
@@ -251,7 +234,7 @@ function buildAiConfigProof(projectState, aiState, warnings) {
     key_masked: aiState.key_masked,
     live_calls_enabled: aiState.live_calls_enabled === true,
     applies_changes: true,
-    mutation_scope: "launcher_project_metadata_and_secret_only",
+    mutation_scope: "launcher_project_metadata_only",
     created_at: nowIso(),
     warnings
   };
@@ -600,16 +583,12 @@ function configureLiveMetadata(projectState, provider, modelProfile, keyEnvName)
     throw new Error("Environment variable " + envName + " is missing or empty.");
   }
 
-  ensureDirectory(getSecretsDir(projectState));
-  fs.writeFileSync(getAiSecretsPath(projectState), [
-    "# Alpha local AI credentials. Do not use for production.",
-    "FACTORY_AI_PROVIDER=openai",
-    "FACTORY_AI_KEY=" + rawKey.trim(),
-    "FACTORY_AI_KEY_ENV=" + envName,
-    ""
-  ].join("\n"), "utf8");
+  const staleSecretsPath = getAiSecretsPath(projectState);
+  if (fs.existsSync(staleSecretsPath)) {
+    fs.unlinkSync(staleSecretsPath);
+  }
 
-  const nextState = hydrateAiState(projectState, {
+  const storedState = {
     mode: "live",
     provider: "openai",
     model_profile: modelProfile,
@@ -617,21 +596,22 @@ function configureLiveMetadata(projectState, provider, modelProfile, keyEnvName)
     key_status: "configured_locally",
     key_source: "env",
     key_env_name: envName,
-    key_masked: maskSecret(rawKey),
-    key_present: true,
+    key_masked: "",
+    key_present: false,
     key_tested: false,
     key_tested_at: null,
     live_calls_enabled: false,
     last_estimate: projectState.project.ai && projectState.project.ai.last_estimate ? projectState.project.ai.last_estimate : null,
     last_live_call: projectState.project.ai && projectState.project.ai.last_live_call ? projectState.project.ai.last_live_call : null,
     updated_at: nowIso()
-  });
+  };
+  const nextState = hydrateAiState(projectState, storedState);
 
-  projectState.project.ai = nextState;
+  projectState.project.ai = storedState;
   saveProjectRecord(projectState, projectState.project);
 
   const proof = buildAiConfigProof(projectState, nextState, [
-    "Live provider metadata is stored locally. Provider calls still require explicit live enablement and per-plan confirmation."
+    "Key-env mode stores only the environment variable reference. No raw provider key is persisted on disk."
   ]);
   const proofPath = writeProof(projectState, proof);
 
@@ -639,8 +619,7 @@ function configureLiveMetadata(projectState, provider, modelProfile, keyEnvName)
     project: projectState.project,
     ai: nextState,
     proof,
-    proofPath,
-    secretsPath: getAiSecretsPath(projectState)
+    proofPath
   };
 }
 
@@ -699,6 +678,7 @@ function estimateAi(options) {
     last_estimate: estimate,
     updated_at: nowIso()
   });
+  projectState.project.ai = prepareAiStateForStorage(projectState.project.ai);
   projectState.project.usage = Object.assign({}, projectState.project.usage || {}, {
     last_estimate: {
       estimate_id: estimate.estimate_id,
@@ -720,6 +700,7 @@ function estimateAi(options) {
       proof_path: proofPath
     })
   });
+  projectState.project.ai = prepareAiStateForStorage(projectState.project.ai);
   saveProjectRecord(projectState, projectState.project);
 
   return {
@@ -747,19 +728,20 @@ function enableLiveAi(options) {
     throw error;
   }
 
-  const nextState = Object.assign({}, ai, {
+  const nextState = Object.assign({}, projectState.project.ai, {
     live_calls_enabled: true,
     updated_at: nowIso()
   });
-  projectState.project.ai = nextState;
+  projectState.project.ai = prepareAiStateForStorage(nextState);
   saveProjectRecord(projectState, projectState.project);
+  const hydratedState = hydrateAiState(projectState, nextState);
 
-  const proof = buildAiLiveToggleProof(projectState, nextState, true);
+  const proof = buildAiLiveToggleProof(projectState, hydratedState, true);
   const proofPath = writeProof(projectState, proof);
 
   return {
     project: projectState.project,
-    ai: nextState,
+    ai: hydratedState,
     proof,
     proofPath
   };
@@ -799,6 +781,13 @@ function validateLiveAiGate(projectState, options) {
     throw error;
   }
 
+  const envReference = resolveEnvKeyReference(ai);
+  if (!envReference.key) {
+    const error = new Error("Live desired-state planning requires a configured API key reference.");
+    error.code = "ai_key_missing";
+    throw error;
+  }
+
   if (!ai.live_calls_enabled) {
     const error = new Error("Live desired-state planning is disabled. Run: node launcher/src/cli.js ai --slug " + projectState.project.slug + " enable-live");
     error.code = "ai_live_calls_disabled";
@@ -811,17 +800,10 @@ function validateLiveAiGate(projectState, options) {
     throw error;
   }
 
-  const secret = readAiSecretReference(projectState);
-  if (!secret.key) {
-    const error = new Error("Live desired-state planning requires a configured API key reference.");
-    error.code = "ai_key_missing";
-    throw error;
-  }
-
   return {
     ai,
     estimate,
-    secret
+    secret: envReference
   };
 }
 
@@ -893,6 +875,7 @@ async function createLiveDesiredStateCandidate(projectState, options) {
       },
       updated_at: nowIso()
     });
+    projectState.project.ai = prepareAiStateForStorage(projectState.project.ai);
     saveProjectRecord(projectState, projectState.project);
     const error = new Error("Live provider request failed. Proof: " + proofPath);
     error.code = "ai_provider_http_error";
@@ -960,6 +943,7 @@ async function createLiveDesiredStateCandidate(projectState, options) {
     },
     updated_at: nowIso()
   });
+  projectState.project.ai = prepareAiStateForStorage(projectState.project.ai);
   saveProjectRecord(projectState, projectState.project);
 
   if (!validation.valid || !candidate) {
