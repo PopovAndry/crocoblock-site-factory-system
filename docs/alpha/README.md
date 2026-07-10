@@ -87,3 +87,21 @@ Start with:
 5. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
 6. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
 7. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
+
+## One-command Read-only Smoke
+
+You can now run a read-only alpha smoke for any Launcher project:
+
+```powershell
+node launcher/src/cli.js alpha-smoke --slug alpha-v01-fresh-smoke-1
+node launcher/src/cli.js alpha-smoke --slug alpha-e2e-smoke-1 --require full-alpha
+```
+
+Requirement modes:
+
+- `generated-site`:
+  pass when the generated site is healthy and secrets hygiene is clean
+- `full-alpha`:
+  pass only when the project also has the live AI safe-apply and rollback proof chain
+
+This means a fresh generated-only project can pass `generated-site` smoke while still remaining partial for `full-alpha`.

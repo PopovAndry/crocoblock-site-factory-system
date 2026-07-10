@@ -43,6 +43,20 @@ Important:
 - do not paste API keys
 - do not run live AI unless intentionally repeating a separate live smoke
 
+Optional shortcut:
+
+```powershell
+node launcher/src/cli.js alpha-smoke --slug alpha-e2e-smoke-1 --require full-alpha
+```
+
+For a fresh generated-only runtime:
+
+```powershell
+node launcher/src/cli.js alpha-smoke --slug alpha-v01-fresh-smoke-1
+```
+
+That should pass generated-site smoke while still reporting partial overall alpha readiness.
+
 ## Step 1: Start Launcher
 
 ```powershell
@@ -88,12 +102,14 @@ Expected:
 Run:
 
 ```powershell
+node launcher/src/cli.js alpha-smoke --slug alpha-e2e-smoke-1 --require full-alpha
 node launcher/src/cli.js state --slug alpha-e2e-smoke-1 refresh
 node launcher/src/cli.js state --slug alpha-e2e-smoke-1 status
 ```
 
 Expected:
 
+- alpha-smoke passes
 - latest effective mutation = `state_apply_rollback_v1`
 - protected fields include `hero_title`
 - effective safe fields are present

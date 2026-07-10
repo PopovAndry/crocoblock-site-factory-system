@@ -17,6 +17,7 @@ const { generateProject } = require("./generate");
 const { getSiteStatus } = require("./site");
 const { refreshState, readStateStatus, planState, applyStatePlan, rollbackStateApply } = require("./state");
 const { generateProofPack } = require("./proof-pack");
+const { runAlphaSmoke } = require("./alpha-smoke");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -76,7 +77,8 @@ function printUsage() {
     "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--confirm-overwrite hero_title] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty rollback --apply latest [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js proof-pack --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js proof-pack --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js alpha-smoke --slug kyiv-realty [--require generated-site|full-alpha] [--json] [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -760,6 +762,57 @@ async function runProofPack(flags) {
   console.log("  Markdown proof pack: " + result.markdownPath);
 }
 
+async function runAlphaSmokeCli(flags) {
+  if (!flags.slug) {
+    throw new Error("alpha-smoke requires --slug <slug>.");
+  }
+
+  const result = await runAlphaSmoke({
+    slug: flags.slug,
+    projectsRoot: flags["projects-root"],
+    requirement: flags.require,
+    json: flags.json === true
+  });
+
+  if (flags.json === true) {
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.exit_code_recommended;
+    return;
+  }
+
+  console.log("Alpha smoke: " + result.slug);
+  console.log("  Requirement: " + result.requirement);
+  console.log("  Status: " + String(result.status || "unknown").toUpperCase());
+  console.log("  Generated site: " + String(result.readiness && result.readiness.generated_site_ready && result.readiness.generated_site_ready.status || "unknown"));
+  console.log("  AI safe apply history: " + String(result.readiness && result.readiness.ai_safe_apply_history_ready && result.readiness.ai_safe_apply_history_ready.status || "unknown"));
+  console.log("  Secrets: " + String(result.readiness && result.readiness.secrets_ready && result.readiness.secrets_ready.status || "unknown"));
+  console.log("  Overall alpha evaluator: " + String(result.readiness && result.readiness.alpha_evaluator_ready && result.readiness.alpha_evaluator_ready.status || "unknown"));
+  console.log("  Counts: pages=" + String(result.counts.pages) + " properties=" + String(result.counts.properties) + " attachments=" + String(result.counts.attachments));
+  console.log("  URLs: home=" + String(result.urls.home.status) + " properties=" + String(result.urls.properties.status) + " contact=" + String(result.urls.contact.status));
+  console.log("  Proof pack: " + String(result.proofs.proof_pack_json || "Unavailable"));
+  console.log("  Summary proof: " + String(result.proofs.alpha_smoke_summary || "Unavailable"));
+  if (result.readiness && result.readiness.ai_safe_apply_history_ready && Array.isArray(result.readiness.ai_safe_apply_history_ready.missing_proof_categories) && result.readiness.ai_safe_apply_history_ready.missing_proof_categories.length) {
+    console.log("  Missing AI history: " + result.readiness.ai_safe_apply_history_ready.missing_proof_categories.join(", "));
+  }
+  if (Array.isArray(result.notes) && result.notes.length) {
+    for (const note of result.notes) {
+      console.log("  Note: " + note);
+    }
+  }
+  if (Array.isArray(result.blockers) && result.blockers.length) {
+    for (const blocker of result.blockers) {
+      console.log("  Blocker: " + blocker);
+    }
+  }
+  if (Array.isArray(result.warnings) && result.warnings.length) {
+    for (const warning of result.warnings) {
+      console.log("  Warning: " + warning);
+    }
+  }
+
+  process.exitCode = result.exit_code_recommended;
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -802,6 +855,9 @@ async function main() {
       return;
     case "proof-pack":
       await runProofPack(parsed.flags);
+      return;
+    case "alpha-smoke":
+      await runAlphaSmokeCli(parsed.flags);
       return;
     default:
       printUsage();

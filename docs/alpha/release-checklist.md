@@ -25,6 +25,7 @@ Run only these commands:
 
 ```powershell
 node launcher/src/cli.js start --port 3847
+node launcher/src/cli.js alpha-smoke --slug alpha-e2e-smoke-1 --require full-alpha
 node launcher/src/cli.js proof-pack --slug alpha-e2e-smoke-1
 node launcher/src/cli.js state --slug alpha-e2e-smoke-1 refresh
 node launcher/src/cli.js state --slug alpha-e2e-smoke-1 status
@@ -64,6 +65,20 @@ Readiness is now split intentionally:
 - `alpha_evaluator_ready` is `ready` only when both of those are satisfied along with secrets hygiene.
 
 For a fresh generated-only project, `generated_site_ready` may be green while `ai_safe_apply_history_ready` remains false. That is not a site failure.
+
+One-command shortcuts:
+
+```powershell
+node launcher/src/cli.js alpha-smoke --slug alpha-v01-fresh-smoke-1
+node launcher/src/cli.js alpha-smoke --slug alpha-v01-fresh-smoke-1 --require full-alpha
+node launcher/src/cli.js alpha-smoke --slug alpha-e2e-smoke-1 --require full-alpha
+```
+
+Expected:
+
+- `alpha-v01-fresh-smoke-1` passes `generated-site`
+- `alpha-v01-fresh-smoke-1` does not pass `full-alpha` until live AI safe-apply/rollback history is intentionally proven
+- `alpha-e2e-smoke-1` passes `full-alpha`
 
 ## D. UI Checklist
 
