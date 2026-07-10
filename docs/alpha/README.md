@@ -14,22 +14,28 @@ The alpha proves a Terraform-like flow across the Standalone Factory Launcher, t
 - refresh managed state
 - plan a new prompt against current state
 - block apply when a protected frontend override would be overwritten
+- run live AI for desired-state planning only
+- apply a desired-state plan through `field_only_safe_apply`
+- roll back a safe apply
+- repair rollback-aware effective state reporting
+- keep AI key handling env-only without persisting raw keys to `secrets/ai.env`
 
 This alpha does **not** prove:
 
-- live AI provider calls
 - production readiness
 - full rollback of a WordPress site or database
-- field-scoped apply
-- overwrite confirmation UX
 - full drift detection
 - multi-vertical generation
 - Elementor or WooCommerce generation
+- AI-driven WordPress mutation outside the state plan/apply pipeline
+- bundled premium dependency distribution
 
 Use honest names when presenting this alpha:
 
 - `Terraform-like alpha`
 - `local deterministic prompt personalization`
+- `live AI desired-state planning`
+- `field_only_safe_apply`
 - `State Apply rollback v1`
 
 Do not describe it as a full AI website generator or a production-ready system.
@@ -44,7 +50,7 @@ The current alpha demo was proven on:
 
 Current checkpoint:
 
-- `4a882be` `Ensure generated hero title has safe edit marker`
+- `dbd0a63` `Fix rollback effective state reporting`
 
 ## Proof Artifacts
 
@@ -56,6 +62,8 @@ Primary proof artifacts live under:
 
 Start with:
 
+- [live-ai-safe-apply-demo-script.md](live-ai-safe-apply-demo-script.md)
+- [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md)
 - [demo-script.md](demo-script.md)
 - [proof-pack.md](proof-pack.md)
 - [known-limitations.md](known-limitations.md)
@@ -63,7 +71,8 @@ Start with:
 
 ## How To Read This Folder
 
-1. Read [demo-script.md](demo-script.md) for the human walkthrough.
-2. Read [proof-pack.md](proof-pack.md) for exact artifacts and expected values.
-3. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
-4. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
+1. Read [live-ai-safe-apply-demo-script.md](live-ai-safe-apply-demo-script.md) for the current evaluator walkthrough.
+2. Read [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md) for the current proof chain and reviewer notes.
+3. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
+4. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
+5. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.

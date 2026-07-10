@@ -2,21 +2,23 @@
 
 This alpha is intentionally narrow. These limitations are real and should be presented directly.
 
-## Core Product Limits
+## AI Limits
 
-- There is no live AI yet.
-- Prompt personalization is a local deterministic interpreter, not a live provider response.
-- The system is not production ready.
-- There is no multi-vertical support yet.
-- Elementor and WooCommerce generation are not part of this alpha path.
+- Live AI is enabled only for desired-state candidate planning.
+- Live AI must not mutate WordPress directly.
+- Live AI still requires explicit estimate, `enable-live`, and `--confirm-live` gates.
+- Local deterministic prompt personalization still exists and remains the default path.
 
 ## State / Apply / Rollback Limits
 
-- Safe apply after a protected `hero_title` frontend override requires field-scoped planning or an overwrite confirmation flow.
+- `field_only_safe_apply` covers only the current safe allowlist:
+  - `agency_name`
+  - `hero_title`
+  - `hero_subtitle`
+  - `hero_cta_text`
 - `State Apply rollback v1` restores safe personalization fields only. It is not a full database, media, or full-site snapshot restore.
 - Full drift detection is not implemented yet.
-- Apply currently reuses the existing controlled generate mutation path, not a narrow field-only apply contract.
-- Overwrite confirmation UX is not implemented yet.
+- Rollback-aware reporting is fixed, but this is still a Launcher-managed state layer rather than a full Terraform state engine.
 
 ## Dependency / Install Limits
 
@@ -28,9 +30,15 @@ This alpha is intentionally narrow. These limitations are real and should be pre
 
 - There is no production UX polish yet.
 - The embedded WordPress console is not the product surface; the Launcher is the intended control plane.
-- PowerShell console output may show mojibake for Ukrainian prompt text, but JSON proof files were UTF-8 intact during Phase 13f.
+- PowerShell console output may still show mojibake for Ukrainian prompt text in some terminals even when JSON proofs are UTF-8.
 
 ## Frontend Editing Limits
 
 - Frontend Safe Edit currently proves supported-field preview/save/proof on a generated site.
 - This alpha does not add new frontend edit fields beyond the current safe allowlist.
+
+## Scope Limits
+
+- No multi-vertical support yet.
+- Elementor and WooCommerce generation are not part of this alpha path.
+- The proof-pack command is a read-only summarizer. It does not replace the underlying mutation proofs.

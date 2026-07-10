@@ -16,6 +16,7 @@ const { configureAi, enableLiveAi, estimateAi, getAiStatus, getModelProfile } = 
 const { generateProject } = require("./generate");
 const { getSiteStatus } = require("./site");
 const { refreshState, readStateStatus, planState, applyStatePlan, rollbackStateApply } = require("./state");
+const { generateProofPack } = require("./proof-pack");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -74,7 +75,8 @@ function printUsage() {
     "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--overwrite-field hero_title] [--ai live --confirm-live --estimate latest] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--confirm-overwrite hero_title] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty rollback --apply latest [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]"
+    "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js proof-pack --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]"
   ].join("\n"));
 }
 
@@ -719,6 +721,38 @@ async function runState(parsed) {
   throw new Error("state requires a subcommand: refresh | status | plan | apply | rollback.");
 }
 
+async function runProofPack(flags) {
+  if (!flags.slug) {
+    throw new Error("proof-pack requires --slug <slug>.");
+  }
+
+  const result = await generateProofPack({
+    slug: flags.slug,
+    projectsRoot: flags["projects-root"]
+  });
+
+  console.log("Alpha proof pack generated:");
+  console.log("  Site name: " + result.project.site_name);
+  console.log("  Slug: " + result.project.slug);
+  console.log("  WordPress URL: " + result.project.wp_url);
+  console.log("  Readiness: " + String(result.proofPack.readiness_status));
+  console.log("  Latest effective mutation: " + String(
+    result.proofPack.current_state_summary
+    && result.proofPack.current_state_summary.summary
+    && result.proofPack.current_state_summary.summary.latest_effective_mutation_method || "None"
+  ));
+  console.log("  Protected fields: " + (
+    result.proofPack.current_state_summary
+    && result.proofPack.current_state_summary.summary
+    && Array.isArray(result.proofPack.current_state_summary.summary.protected_fields)
+    && result.proofPack.current_state_summary.summary.protected_fields.length
+      ? result.proofPack.current_state_summary.summary.protected_fields.join(", ")
+      : "None"
+  ));
+  console.log("  JSON proof pack: " + result.jsonPath);
+  console.log("  Markdown proof pack: " + result.markdownPath);
+}
+
 async function main() {
   const parsed = parseArguments(process.argv);
 
@@ -758,6 +792,9 @@ async function main() {
       return;
     case "state":
       await runState(parsed);
+      return;
+    case "proof-pack":
+      await runProofPack(parsed.flags);
       return;
     default:
       printUsage();
