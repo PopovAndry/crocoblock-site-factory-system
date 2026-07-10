@@ -248,6 +248,91 @@ function buildMarkdown(pack) {
   return lines.join("\n");
 }
 
+function buildProofPackSummary(proofPack, filePaths) {
+  const summary = proofPack && typeof proofPack === "object" ? proofPack : {};
+  const currentStateSummary = summary.current_state_summary && typeof summary.current_state_summary === "object"
+    ? summary.current_state_summary
+    : {};
+  const stateSummary = currentStateSummary.summary && typeof currentStateSummary.summary === "object"
+    ? currentStateSummary.summary
+    : {};
+  const siteSummary = summary.site_summary && typeof summary.site_summary === "object"
+    ? summary.site_summary
+    : {};
+
+  return {
+    proof_id: asString(summary.proof_id) || null,
+    slug: asString(summary.slug) || null,
+    wp_url: asString(summary.wp_url) || null,
+    generated_at: asString(summary.generated_at) || null,
+    readiness_status: asString(summary.readiness_status) || "unknown",
+    pass: summary.pass === true,
+    json_path: filePaths && filePaths.jsonPath ? filePaths.jsonPath : null,
+    markdown_path: filePaths && filePaths.markdownPath ? filePaths.markdownPath : null,
+    current_effective_mutation: asString(stateSummary.latest_effective_mutation_method) || null,
+    latest_rollback_proof_path: asString(stateSummary.latest_rollback_proof_path) || null,
+    protected_fields: Array.isArray(stateSummary.protected_fields) ? stateSummary.protected_fields : [],
+    counts: {
+      pages: Number(stateSummary.pages || 0),
+      properties: Number(stateSummary.property_count || 0),
+      attachments: Number(stateSummary.attachment_count || 0)
+    },
+    url_status: siteSummary.url_status || {},
+    safety_claims: summary.safety_claims || {},
+    warnings: Array.isArray(summary.warnings) ? summary.warnings : []
+  };
+}
+
+async function getProofPackStatus(options) {
+  const projectsRoot = resolveProjectsRoot(options.projectsRoot);
+  const projectState = readProjectBySlug(options.slug, projectsRoot);
+  const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  const proofsPath = path.join(safeRuntimePath, "proofs");
+  const latestJson = findLatestJsonFile(proofsPath, "alpha-proof-pack-");
+  const stateStatus = readStateStatus({
+    slug: projectState.project.slug,
+    projectsRoot
+  });
+  const siteStatusResult = await getSiteStatus({
+    slug: projectState.project.slug,
+    projectsRoot,
+    persistProject: false,
+    checkUrls: true
+  });
+
+  if (!latestJson) {
+    return {
+      project: projectState.project,
+      exists: false,
+      proofPack: null,
+      summary: null,
+      jsonPath: null,
+      markdownPath: null,
+      stateSummary: stateStatus,
+      siteSummary: siteStatusResult.site,
+      warnings: ["Alpha proof pack has not been generated yet."]
+    };
+  }
+
+  const markdownPath = latestJson.filePath.replace(/\.json$/i, ".md");
+  const summary = buildProofPackSummary(latestJson.proof, {
+    jsonPath: latestJson.filePath,
+    markdownPath: fs.existsSync(markdownPath) ? markdownPath : null
+  });
+
+  return {
+    project: projectState.project,
+    exists: true,
+    proofPack: latestJson.proof,
+    summary,
+    jsonPath: latestJson.filePath,
+    markdownPath: fs.existsSync(markdownPath) ? markdownPath : null,
+    stateSummary: stateStatus,
+    siteSummary: siteStatusResult.site,
+    warnings: Array.isArray(summary.warnings) ? summary.warnings : []
+  };
+}
+
 async function generateProofPack(options) {
   const projectsRoot = resolveProjectsRoot(options.projectsRoot);
   const projectState = readProjectBySlug(options.slug, projectsRoot);
@@ -412,11 +497,17 @@ async function generateProofPack(options) {
   return {
     project: projectState.project,
     proofPack,
+    summary: buildProofPackSummary(proofPack, {
+      jsonPath,
+      markdownPath
+    }),
     jsonPath,
     markdownPath
   };
 }
 
 module.exports = {
-  generateProofPack
+  buildProofPackSummary,
+  generateProofPack,
+  getProofPackStatus
 };

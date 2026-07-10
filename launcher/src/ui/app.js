@@ -14,6 +14,10 @@
   const generateResult = document.getElementById("generate-result");
   const siteStatus = document.getElementById("site-status");
   const managedState = document.getElementById("managed-state");
+  const proofPackStatus = document.getElementById("proof-pack-status");
+  const proofPackRefreshButton = document.getElementById("proof-pack-refresh-button");
+  const proofPackGenerateButton = document.getElementById("proof-pack-generate-button");
+  const proofPackResult = document.getElementById("proof-pack-result");
   const refreshStateButton = document.getElementById("refresh-state-button");
   const statePlanForm = document.getElementById("state-plan-form");
   const statePlanPrompt = document.getElementById("state-plan-prompt");
@@ -46,6 +50,10 @@
     managedState.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
   }
 
+  function setProofPackEmpty(message) {
+    proofPackStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
   function renderProjects(projects) {
     projectsCache = projects.slice();
 
@@ -58,6 +66,7 @@
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
       setSiteStatusEmpty("No generated site result yet.");
       setManagedStateEmpty("Refresh state after generate or frontend edits.");
+      setProofPackEmpty("Generate a proof pack after state and site data are available.");
       milestoneGenerate.disabled = true;
       totalTokens.textContent = "0";
       aiMode.textContent = "mock";
@@ -348,6 +357,7 @@
           await loadProjects();
           await loadManagedState(generateProjectSlug.value);
           await loadSiteStatus(generateProjectSlug.value);
+          await loadProofPack(generateProjectSlug.value);
         } catch (error) {
           showResult(stateRollbackResult, { error: error.message }, true);
         } finally {
@@ -355,6 +365,65 @@
         }
       });
     }
+  }
+
+  function renderProofPackStatus(payload) {
+    const summary = payload.summary || null;
+    const stateSummary = payload.state_summary || {};
+    const siteSummary = payload.site_summary || {};
+    const effectiveSafeFieldPayload = payload.effective_safe_fields && typeof payload.effective_safe_fields === "object"
+      ? payload.effective_safe_fields
+      : {};
+    const siteCounts = siteSummary.counts_summary && siteSummary.counts_summary.after
+      ? siteSummary.counts_summary.after
+      : {};
+    const effectiveFields = Array.isArray(effectiveSafeFieldPayload.fields)
+      ? effectiveSafeFieldPayload.fields
+      : [];
+    const protectedFields = Array.isArray(summary && summary.protected_fields)
+      ? summary.protected_fields
+      : (Array.isArray(stateSummary.protected_fields) ? stateSummary.protected_fields : []);
+    const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+
+    if (!payload.exists || !summary) {
+      setProofPackEmpty("No alpha proof pack has been generated yet. Use Generate Proof Pack to collect the current evaluator summary.");
+      return;
+    }
+
+    proofPackStatus.innerHTML = [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(summary.readiness_status || "unknown") + "</span>",
+      "  </div>",
+      "  <dl>",
+      "    <div><dt>Proof pack</dt><dd>" + escapeHtml(summary.proof_id || "Unavailable") + "</dd></div>",
+      "    <div><dt>Generated</dt><dd>" + escapeHtml(summary.generated_at || "Unavailable") + "</dd></div>",
+      "    <div><dt>JSON path</dt><dd>" + escapeHtml(payload.json_path || "Unavailable") + "</dd></div>",
+      "    <div><dt>Markdown path</dt><dd>" + escapeHtml(payload.markdown_path || "Unavailable") + "</dd></div>",
+      "    <div><dt>Effective mutation</dt><dd>" + escapeHtml(stateSummary.latest_effective_mutation_method || summary.current_effective_mutation || "Unavailable") + "</dd></div>",
+      "    <div><dt>Latest rollback proof</dt><dd>" + escapeHtml(stateSummary.latest_rollback_proof_path || summary.latest_rollback_proof_path || "Unavailable") + "</dd></div>",
+      "    <div><dt>Protected fields</dt><dd>" + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</dd></div>",
+      "    <div><dt>Pages</dt><dd>" + escapeHtml(String(stateSummary.pages || (summary.counts && summary.counts.pages) || siteCounts.pages || 0)) + "</dd></div>",
+      "    <div><dt>Properties</dt><dd>" + escapeHtml(String(stateSummary.property_count || (summary.counts && summary.counts.properties) || siteCounts.properties || 0)) + "</dd></div>",
+      "    <div><dt>Attachments</dt><dd>" + escapeHtml(String(stateSummary.attachment_count || (summary.counts && summary.counts.attachments) || siteCounts.attachments || 0)) + "</dd></div>",
+      "    <div><dt>Home</dt><dd>" + escapeHtml(String((summary.url_status && summary.url_status.home) || (siteSummary.url_status && siteSummary.url_status.home) || "Unavailable")) + "</dd></div>",
+      "    <div><dt>Properties URL</dt><dd>" + escapeHtml(String((summary.url_status && summary.url_status.properties) || (siteSummary.url_status && siteSummary.url_status.properties) || "Unavailable")) + "</dd></div>",
+      "    <div><dt>Contact URL</dt><dd>" + escapeHtml(String((summary.url_status && summary.url_status.contact) || (siteSummary.url_status && siteSummary.url_status.contact) || "Unavailable")) + "</dd></div>",
+      "  </dl>",
+      effectiveFields.length
+        ? "  <ul class=\"warning-list\">" + effectiveFields.map((field) => "<li><strong>" + escapeHtml(field.field_key) + ":</strong> " + escapeHtml(field.value) + " <em>[" + escapeHtml(field.source + (field.protected ? ", protected" : "") + ", render:" + field.rendered_check) + "]</em></li>").join("") + "</ul>"
+        : "",
+      "  <ul class=\"warning-list\">",
+      "    <li>Live AI planning only</li>",
+      "    <li>Field-only safe apply proven</li>",
+      "    <li>Rollback proven</li>",
+      "    <li>No raw key persistence</li>",
+      "    <li>secrets/ai.env absent</li>",
+      "  </ul>",
+      warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
+      "</article>"
+    ].join("\n");
   }
 
   function renderStatePlanResult(result) {
@@ -445,6 +514,7 @@
           await loadProjects();
           await loadManagedState(generateProjectSlug.value);
           await loadSiteStatus(generateProjectSlug.value);
+          await loadProofPack(generateProjectSlug.value);
         } catch (error) {
           showResult(statePlanResult, { error: error.message }, true);
         } finally {
@@ -542,12 +612,29 @@
     renderManagedState(payload);
   }
 
+  async function loadProofPack(slug) {
+    const selectedSlug = String(slug || "").trim();
+    if (!selectedSlug) {
+      setProofPackEmpty("Select a project to view the alpha proof pack.");
+      return;
+    }
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/proof-pack");
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Unable to load alpha proof pack.");
+    }
+
+    renderProofPackStatus(payload);
+  }
+
   async function loadProjects() {
     const response = await fetch("/api/projects");
     const payload = await response.json();
     renderProjects(payload.projects || []);
     await loadSiteStatus(generateProjectSlug.value);
     await loadManagedState(generateProjectSlug.value);
+    await loadProofPack(generateProjectSlug.value);
   }
 
   planProjectSlug.addEventListener("change", () => {
@@ -558,7 +645,8 @@
   generateProjectSlug.addEventListener("change", () => {
     Promise.all([
       loadSiteStatus(generateProjectSlug.value),
-      loadManagedState(generateProjectSlug.value)
+      loadManagedState(generateProjectSlug.value),
+      loadProofPack(generateProjectSlug.value)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
@@ -675,6 +763,7 @@
       summary: result.summary,
       warnings: result.warnings || []
     });
+    await loadProofPack(slug);
   });
 
   statePlanForm.addEventListener("submit", async (event) => {
@@ -701,6 +790,59 @@
     }
 
     renderStatePlanResult(result);
+  });
+
+  proofPackRefreshButton.addEventListener("click", async () => {
+    const slug = String(generateProjectSlug.value || "").trim();
+    if (!slug) {
+      setProofPackEmpty("Select a project to refresh the alpha proof pack.");
+      return;
+    }
+
+    try {
+      await loadProofPack(slug);
+    } catch (error) {
+      showResult(proofPackResult, { error: error.message }, true);
+    }
+  });
+
+  proofPackGenerateButton.addEventListener("click", async () => {
+    const slug = String(generateProjectSlug.value || "").trim();
+    if (!slug) {
+      setProofPackEmpty("Select a project before generating a proof pack.");
+      return;
+    }
+
+    proofPackGenerateButton.disabled = true;
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/proof-pack/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({})
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        showResult(proofPackResult, result, true);
+        return;
+      }
+
+      proofPackResult.hidden = false;
+      proofPackResult.className = "result-box result-box-success";
+      proofPackResult.innerHTML = [
+        "<strong>Alpha proof pack generated.</strong>",
+        "<p><span>JSON:</span> " + escapeHtml(result.json_path || "Unavailable") + "</p>",
+        "<p><span>Markdown:</span> " + escapeHtml(result.markdown_path || "Unavailable") + "</p>",
+        "<p><span>Readiness:</span> " + escapeHtml(result.summary && result.summary.readiness_status || "unknown") + "</p>"
+      ].join("");
+
+      await loadProofPack(slug);
+    } catch (error) {
+      showResult(proofPackResult, { error: error.message }, true);
+    } finally {
+      proofPackGenerateButton.disabled = false;
+    }
   });
 
   loadProjects().catch((error) => {

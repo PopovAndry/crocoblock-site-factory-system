@@ -15,6 +15,7 @@ const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
 const { readStateStatus, refreshState, planState, applyStatePlan, rollbackStateApply } = require("./state");
+const { generateProofPack, getProofPackStatus } = require("./proof-pack");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -201,6 +202,16 @@ function renderHomePage(config) {
     "        </form>",
     "        <div id=\"state-plan-result\" class=\"result-box\" hidden></div>",
     "        <div id=\"state-rollback-result\" class=\"result-box\" hidden></div>",
+    "        <div class=\"panel-header\">",
+    "          <h2>Alpha Proof Pack</h2>",
+    "          <p>Read-only evaluator summary for the Launcher-first AI safe-edit alpha.</p>",
+    "        </div>",
+    "        <div id=\"proof-pack-status\" class=\"project-list\"></div>",
+    "        <div class=\"managed-state-actions\">",
+    "          <button type=\"button\" class=\"button\" id=\"proof-pack-refresh-button\">Refresh</button>",
+    "          <button type=\"button\" class=\"button\" id=\"proof-pack-generate-button\">Generate Proof Pack</button>",
+    "        </div>",
+    "        <div id=\"proof-pack-result\" class=\"result-box\" hidden></div>",
     "      </section>",
     "    </section>",
     "  </main>",
@@ -409,6 +420,49 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/proof-pack$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await getProofPackStatus({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          exists: result.exists,
+          project: summarizeProjectForSite(result.project),
+          proof_pack: result.proofPack,
+          summary: result.summary,
+          json_path: result.jsonPath,
+          markdown_path: result.markdownPath,
+          state_summary: result.stateSummary && result.stateSummary.summary ? result.stateSummary.summary : null,
+          effective_safe_fields: result.stateSummary && result.stateSummary.state && result.stateSummary.state.effective_safe_fields
+            ? result.stateSummary.state.effective_safe_fields
+            : null,
+          site_summary: result.siteSummary || null,
+          warnings: result.warnings || []
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/proof-pack\/generate$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await generateProofPack({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          proof_pack: result.proofPack,
+          summary: result.summary,
+          json_path: result.jsonPath,
+          markdown_path: result.markdownPath
+        });
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = await refreshState({
@@ -606,6 +660,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/proof-pack\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/apply$/.test(requestUrl.pathname) ||
