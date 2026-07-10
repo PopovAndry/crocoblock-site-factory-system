@@ -62,6 +62,9 @@ Primary proof artifacts live under:
 
 Start with:
 
+- [release-checklist.md](release-checklist.md)
+- [evaluator-script.md](evaluator-script.md)
+- [alpha-v0.1-release-notes.md](alpha-v0.1-release-notes.md)
 - [live-ai-safe-apply-demo-script.md](live-ai-safe-apply-demo-script.md)
 - [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md)
 - [demo-script.md](demo-script.md)
@@ -71,8 +74,10 @@ Start with:
 
 ## How To Read This Folder
 
-1. Read [live-ai-safe-apply-demo-script.md](live-ai-safe-apply-demo-script.md) for the current evaluator walkthrough.
-2. Read [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md) for the current proof chain and reviewer notes.
-3. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
-4. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
-5. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
+1. Read [release-checklist.md](release-checklist.md) for the release gate and pass/fail checklist.
+2. Read [evaluator-script.md](evaluator-script.md) for the final read-only evaluator walkthrough.
+3. Read [alpha-v0.1-release-notes.md](alpha-v0.1-release-notes.md) for the alpha release summary and scope.
+4. Read [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md) for the current proof chain and reviewer notes.
+5. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
+6. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
+7. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
