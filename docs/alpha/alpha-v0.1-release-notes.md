@@ -41,6 +41,7 @@ It packages the currently proven path into a reviewable proof surface without ad
 - rollback was proven separately and is not triggered by proof-pack review
 - `--key-env` handling is env-only
 - raw OpenAI key is not persisted to `secrets/ai.env`
+- proof-pack readiness is now split so a fresh generated-only project is not mislabeled as broken when it simply lacks AI safe-apply history
 
 ## Known Limitations
 
@@ -49,6 +50,7 @@ It packages the currently proven path into a reviewable proof surface without ad
 - drift detection is still incomplete
 - live AI remains gated and is not part of the evaluator path
 - proof-pack summarizes existing proof history; it does not replace the underlying proofs
+- a generated-only runtime can be `generated_site_ready` while still being only `partial` for full alpha evaluation
 
 ## How To Verify
 

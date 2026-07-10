@@ -371,6 +371,13 @@
     const summary = payload.summary || null;
     const stateSummary = payload.state_summary || {};
     const siteSummary = payload.site_summary || {};
+    const readiness = summary && summary.readiness && typeof summary.readiness === "object"
+      ? summary.readiness
+      : (payload.readiness && typeof payload.readiness === "object" ? payload.readiness : {});
+    const generatedReadiness = readiness.generated_site_ready || {};
+    const aiHistoryReadiness = readiness.ai_safe_apply_history_ready || {};
+    const secretsReadiness = readiness.secrets_ready || {};
+    const evaluatorReadiness = readiness.alpha_evaluator_ready || {};
     const effectiveSafeFieldPayload = payload.effective_safe_fields && typeof payload.effective_safe_fields === "object"
       ? payload.effective_safe_fields
       : {};
@@ -383,6 +390,9 @@
     const protectedFields = Array.isArray(summary && summary.protected_fields)
       ? summary.protected_fields
       : (Array.isArray(stateSummary.protected_fields) ? stateSummary.protected_fields : []);
+    const missingProofCategories = Array.isArray(summary && summary.missing_proof_categories)
+      ? summary.missing_proof_categories
+      : [];
     const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
 
     if (!payload.exists || !summary) {
@@ -399,6 +409,10 @@
       "  <dl>",
       "    <div><dt>Proof pack</dt><dd>" + escapeHtml(summary.proof_id || "Unavailable") + "</dd></div>",
       "    <div><dt>Generated</dt><dd>" + escapeHtml(summary.generated_at || "Unavailable") + "</dd></div>",
+      "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(evaluatorReadiness.status || summary.readiness_status || "unknown") + "</dd></div>",
+      "    <div><dt>Generated site</dt><dd>" + escapeHtml(generatedReadiness.status || "unknown") + "</dd></div>",
+      "    <div><dt>AI history</dt><dd>" + escapeHtml(aiHistoryReadiness.status || "unknown") + "</dd></div>",
+      "    <div><dt>Secrets</dt><dd>" + escapeHtml(secretsReadiness.status || "unknown") + "</dd></div>",
       "    <div><dt>JSON path</dt><dd>" + escapeHtml(payload.json_path || "Unavailable") + "</dd></div>",
       "    <div><dt>Markdown path</dt><dd>" + escapeHtml(payload.markdown_path || "Unavailable") + "</dd></div>",
       "    <div><dt>Effective mutation</dt><dd>" + escapeHtml(stateSummary.latest_effective_mutation_method || summary.current_effective_mutation || "Unavailable") + "</dd></div>",
@@ -413,6 +427,12 @@
       "  </dl>",
       effectiveFields.length
         ? "  <ul class=\"warning-list\">" + effectiveFields.map((field) => "<li><strong>" + escapeHtml(field.field_key) + ":</strong> " + escapeHtml(field.value) + " <em>[" + escapeHtml(field.source + (field.protected ? ", protected" : "") + ", render:" + field.rendered_check) + "]</em></li>").join("") + "</ul>"
+        : "",
+      evaluatorReadiness.reason
+        ? "  <p class=\"project-note\">" + escapeHtml(evaluatorReadiness.reason) + "</p>"
+        : "",
+      missingProofCategories.length
+        ? "  <p class=\"project-note\">Missing proof categories: " + escapeHtml(missingProofCategories.join(", ")) + "</p>"
         : "",
       "  <ul class=\"warning-list\">",
       "    <li>Live AI planning only</li>",
@@ -834,7 +854,8 @@
         "<strong>Alpha proof pack generated.</strong>",
         "<p><span>JSON:</span> " + escapeHtml(result.json_path || "Unavailable") + "</p>",
         "<p><span>Markdown:</span> " + escapeHtml(result.markdown_path || "Unavailable") + "</p>",
-        "<p><span>Readiness:</span> " + escapeHtml(result.summary && result.summary.readiness_status || "unknown") + "</p>"
+        "<p><span>Readiness:</span> " + escapeHtml(result.summary && result.summary.readiness_status || "unknown") + "</p>",
+        "<p><span>Overall:</span> " + escapeHtml(result.summary && result.summary.readiness && result.summary.readiness.alpha_evaluator_ready && result.summary.readiness.alpha_evaluator_ready.status || "unknown") + "</p>"
       ].join("");
 
       await loadProofPack(slug);

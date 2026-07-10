@@ -433,6 +433,8 @@ function createLauncherServer(options) {
           project: summarizeProjectForSite(result.project),
           proof_pack: result.proofPack,
           summary: result.summary,
+          readiness: result.summary ? result.summary.readiness : null,
+          missing_proof_categories: result.summary ? result.summary.missing_proof_categories : [],
           json_path: result.jsonPath,
           markdown_path: result.markdownPath,
           state_summary: result.stateSummary && result.stateSummary.summary ? result.stateSummary.summary : null,
@@ -457,6 +459,8 @@ function createLauncherServer(options) {
           project: summarizeProjectForSite(result.project),
           proof_pack: result.proofPack,
           summary: result.summary,
+          readiness: result.summary ? result.summary.readiness : null,
+          missing_proof_categories: result.summary ? result.summary.missing_proof_categories : [],
           json_path: result.jsonPath,
           markdown_path: result.markdownPath
         });

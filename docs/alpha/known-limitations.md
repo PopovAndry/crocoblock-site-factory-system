@@ -19,6 +19,7 @@ This alpha is intentionally narrow. These limitations are real and should be pre
 - `State Apply rollback v1` restores safe personalization fields only. It is not a full database, media, or full-site snapshot restore.
 - Full drift detection is not implemented yet.
 - Rollback-aware reporting is fixed, but this is still a Launcher-managed state layer rather than a full Terraform state engine.
+- A fresh generated-only runtime can be healthy while still lacking the historical live AI safe-apply and rollback proof chain. The proof-pack now reports that as partial evaluator readiness, not as a broken generated site.
 
 ## Dependency / Install Limits
 

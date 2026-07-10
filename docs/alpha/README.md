@@ -30,6 +30,12 @@ This alpha does **not** prove:
 - AI-driven WordPress mutation outside the state plan/apply pipeline
 - bundled premium dependency distribution
 
+Readiness is now reported in separate dimensions so evaluators can distinguish:
+
+- a healthy generated site
+- a runtime with full live AI safe-apply and rollback history
+- the overall alpha evaluator verdict
+
 Use honest names when presenting this alpha:
 
 - `Terraform-like alpha`

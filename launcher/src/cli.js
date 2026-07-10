@@ -736,6 +736,13 @@ async function runProofPack(flags) {
   console.log("  Slug: " + result.project.slug);
   console.log("  WordPress URL: " + result.project.wp_url);
   console.log("  Readiness: " + String(result.proofPack.readiness_status));
+  if (result.proofPack.readiness) {
+    console.log("  Overall readiness: " + String(result.proofPack.readiness.alpha_evaluator_ready && result.proofPack.readiness.alpha_evaluator_ready.status || "unknown"));
+    console.log("  Generated site readiness: " + String(result.proofPack.readiness.generated_site_ready && result.proofPack.readiness.generated_site_ready.status || "unknown"));
+    console.log("  AI safe-apply history readiness: " + String(result.proofPack.readiness.ai_safe_apply_history_ready && result.proofPack.readiness.ai_safe_apply_history_ready.status || "unknown"));
+    console.log("  Secrets readiness: " + String(result.proofPack.readiness.secrets_ready && result.proofPack.readiness.secrets_ready.status || "unknown"));
+    console.log("  Missing proof categories: " + ((result.proofPack.missing_proof_categories || []).length ? result.proofPack.missing_proof_categories.join(", ") : "None"));
+  }
   console.log("  Latest effective mutation: " + String(
     result.proofPack.current_state_summary
     && result.proofPack.current_state_summary.summary

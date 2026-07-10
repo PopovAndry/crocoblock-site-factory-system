@@ -144,6 +144,207 @@ function summarizeProofEntry(label, purpose, entry) {
   };
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function getProofChainMap(proofChain) {
+  const map = {};
+  for (const entry of asArray(proofChain)) {
+    if (entry && entry.label) {
+      map[entry.label] = entry;
+    }
+  }
+  return map;
+}
+
+function readCount(currentStateSummary, siteSummary, stateKey, siteKey) {
+  const stateSummary = currentStateSummary && currentStateSummary.summary && typeof currentStateSummary.summary === "object"
+    ? currentStateSummary.summary
+    : {};
+  const siteCounts = siteSummary && siteSummary.counts_summary && siteSummary.counts_summary.after
+    && typeof siteSummary.counts_summary.after === "object"
+      ? siteSummary.counts_summary.after
+      : {};
+  const stateValue = Number(stateSummary[stateKey]);
+  if (Number.isFinite(stateValue) && stateValue > 0) {
+    return stateValue;
+  }
+  const siteValue = Number(siteCounts[siteKey]);
+  if (Number.isFinite(siteValue) && siteValue > 0) {
+    return siteValue;
+  }
+  return 0;
+}
+
+function hasRenderedHomeEvidence(currentStateSummary) {
+  const stateSummary = currentStateSummary && currentStateSummary.summary && typeof currentStateSummary.summary === "object"
+    ? currentStateSummary.summary
+    : {};
+  const effectiveFields = Array.isArray(stateSummary.effective_safe_fields)
+    ? stateSummary.effective_safe_fields
+    : [];
+  return effectiveFields.length > 0 && effectiveFields.every((field) => asString(field.rendered_check) === "present");
+}
+
+function buildReadiness(currentStateSummary, siteSummary, proofChain, secretsAiEnvPresent) {
+  const stateSummary = currentStateSummary && currentStateSummary.summary && typeof currentStateSummary.summary === "object"
+    ? currentStateSummary.summary
+    : {};
+  const proofMap = getProofChainMap(proofChain);
+  const generationStatusValue = asString(siteSummary && (siteSummary.controlled_generate_status || siteSummary.generation_status)).toLowerCase();
+  const pages = readCount(currentStateSummary, siteSummary, "pages", "pages");
+  const properties = readCount(currentStateSummary, siteSummary, "property_count", "properties");
+  const attachments = readCount(currentStateSummary, siteSummary, "attachment_count", "attachments");
+  const homeStatus = Number(siteSummary && siteSummary.url_status && siteSummary.url_status.home || 0);
+  const propertiesStatus = Number(siteSummary && siteSummary.url_status && siteSummary.url_status.properties || 0);
+  const contactStatus = Number(siteSummary && siteSummary.url_status && siteSummary.url_status.contact || 0);
+  const homeRenderPresent = hasRenderedHomeEvidence(currentStateSummary);
+
+  const generatedChecks = {
+    generation_status_ok: (
+      generationStatusValue === "ok"
+      || generationStatusValue === "generated"
+      || generationStatusValue === "complete"
+      || generationStatusValue === "completed"
+      || (
+        siteSummary
+        && siteSummary.generated_site_present === true
+        && asString(siteSummary.latest_generate_proof_id)
+      )
+    ),
+    pages_ok: pages >= 6,
+    properties_ok: properties >= 30,
+    attachments_ok: attachments >= 22,
+    home_200: homeStatus === 200,
+    home_render_present: homeRenderPresent,
+    properties_200: propertiesStatus === 200,
+    contact_200: contactStatus === 200
+  };
+  const generatedWarnings = [];
+  const generatedBlockers = [];
+  if (!generatedChecks.generation_status_ok) {
+    generatedBlockers.push("Controlled generate proof is missing or generation status is not healthy.");
+  }
+  if (!generatedChecks.pages_ok) {
+    generatedBlockers.push("Generated page count is below the expected alpha baseline.");
+  }
+  if (!generatedChecks.properties_ok) {
+    generatedBlockers.push("Property count is below the expected alpha baseline.");
+  }
+  if (!generatedChecks.attachments_ok) {
+    generatedBlockers.push("Attachment count is below the expected alpha baseline.");
+  }
+  if (!generatedChecks.properties_200 || !generatedChecks.contact_200) {
+    generatedBlockers.push("One or more generated site URLs did not return HTTP 200.");
+  }
+  if (!generatedChecks.home_200 && !generatedChecks.home_render_present) {
+    generatedBlockers.push("The generated Home URL did not return HTTP 200 and state refresh does not show rendered home evidence.");
+  } else if (!generatedChecks.home_200 && generatedChecks.home_render_present) {
+    generatedWarnings.push("Home URL check did not return HTTP 200 during this read-only probe, but state refresh still shows rendered home evidence.");
+  }
+
+  const aiHistoryChecks = {
+    live_ai_candidate_proof_present: Boolean(proofMap["Live AI Candidate"] && proofMap["Live AI Candidate"].found),
+    safe_apply_proof_present: Boolean(proofMap["Field-only Safe Apply"] && proofMap["Field-only Safe Apply"].found),
+    rollback_proof_present: Boolean(proofMap["Rollback Proof"] && proofMap["Rollback Proof"].found),
+    rollback_reporting_ready: Boolean(proofMap["Rollback Reporting Fix"] && proofMap["Rollback Reporting Fix"].found)
+  };
+  const missingProofCategories = [];
+  if (!aiHistoryChecks.live_ai_candidate_proof_present) {
+    missingProofCategories.push("live_ai_candidate");
+  }
+  if (!aiHistoryChecks.safe_apply_proof_present) {
+    missingProofCategories.push("field_only_safe_apply");
+  }
+  if (!aiHistoryChecks.rollback_proof_present) {
+    missingProofCategories.push("state_rollback");
+  }
+  if (!aiHistoryChecks.rollback_reporting_ready) {
+    missingProofCategories.push("rollback_reporting_fix");
+  }
+
+  const secretsChecks = {
+    secrets_ai_env_absent: !secretsAiEnvPresent
+  };
+  const secretsBlockers = secretsChecks.secrets_ai_env_absent
+    ? []
+    : ["AI env disk secret file is present and should be absent for env-only key handling."];
+
+  const generatedSiteReadyStatus = generatedBlockers.length ? "not_ready" : "ready";
+  const aiHistoryReadyStatus = missingProofCategories.length ? "not_ready" : "ready";
+  const secretsReadyStatus = secretsBlockers.length ? "not_ready" : "ready";
+
+  let overallStatus = "not_ready";
+  let overallReason = "Generated site or secret posture checks are not yet passing.";
+  if (generatedSiteReadyStatus === "ready" && secretsReadyStatus === "ready" && aiHistoryReadyStatus === "ready") {
+    overallStatus = "ready";
+    overallReason = "Generated site health, AI safe-apply history, and secret posture all meet the alpha evaluator bar.";
+  } else if (generatedSiteReadyStatus === "ready" && secretsReadyStatus === "ready") {
+    overallStatus = "partial";
+    overallReason = "Generated site health is ready, but this project does not yet include the full live AI safe-apply and rollback proof history.";
+  }
+
+  const warnings = [];
+  if (overallStatus === "partial") {
+    warnings.push("This project is healthy for generated-site evaluation, but live AI safe-apply and rollback history has not been proven on this runtime.");
+  }
+  if (
+    overallStatus !== "not_ready"
+    && asString(stateSummary.latest_effective_mutation_method)
+    && aiHistoryReadyStatus !== "ready"
+  ) {
+    warnings.push("Readiness is split intentionally: missing AI history does not mean the generated site is unhealthy.");
+  }
+
+  let readinessStatus = "proofs_incomplete";
+  if (overallStatus === "ready") {
+    readinessStatus = "ready_for_alpha_evaluation";
+  } else if (overallStatus === "partial") {
+    readinessStatus = "partial_alpha_evaluation";
+  } else if (generatedSiteReadyStatus === "ready") {
+    readinessStatus = "generated_site_ready";
+  }
+
+  return {
+    readiness_status: readinessStatus,
+    pass: overallStatus === "ready",
+    readiness: {
+      generated_site_ready: {
+        status: generatedSiteReadyStatus,
+        required: true,
+        checks: generatedChecks,
+        blockers: generatedBlockers,
+        warnings: generatedWarnings
+      },
+      ai_safe_apply_history_ready: {
+        status: aiHistoryReadyStatus,
+        required_for_generated_site: false,
+        required_for_full_alpha_evaluator: true,
+        checks: aiHistoryChecks,
+        missing_proof_categories: missingProofCategories,
+        warnings: aiHistoryReadyStatus === "ready"
+          ? []
+          : ["AI safe-apply and rollback history has not been fully proven on this project."]
+      },
+      secrets_ready: {
+        status: secretsReadyStatus,
+        checks: secretsChecks,
+        blockers: secretsBlockers,
+        warnings: []
+      },
+      alpha_evaluator_ready: {
+        status: overallStatus,
+        reason: overallReason,
+        blockers: generatedBlockers.concat(secretsBlockers),
+        warnings: warnings.concat(generatedWarnings)
+      }
+    },
+    missing_proof_categories: missingProofCategories,
+    warnings: warnings.concat(generatedWarnings)
+  };
+}
+
 function buildMarkdown(pack) {
   const lines = [];
   const effectiveFieldEntries = Array.isArray(pack.current_state_summary.effective_safe_fields)
@@ -151,12 +352,38 @@ function buildMarkdown(pack) {
     : Object.entries(pack.current_state_summary.effective_safe_fields || {}).map(([fieldKey, entry]) => Object.assign({
       field_key: fieldKey
     }, entry || {}));
+  const readiness = pack.readiness && typeof pack.readiness === "object" ? pack.readiness : {};
+  const generatedReadiness = readiness.generated_site_ready || {};
+  const aiHistoryReadiness = readiness.ai_safe_apply_history_ready || {};
+  const secretsReadiness = readiness.secrets_ready || {};
+  const evaluatorReadiness = readiness.alpha_evaluator_ready || {};
   lines.push("# Alpha Proof Pack");
   lines.push("");
   lines.push("- Generated at: `" + pack.generated_at + "`");
   lines.push("- Project: `" + pack.slug + "`");
   lines.push("- WordPress URL: " + pack.wp_url);
   lines.push("- Readiness: `" + pack.readiness_status + "`");
+  lines.push("");
+  lines.push("## Readiness");
+  lines.push("- Overall alpha evaluator readiness: `" + asString(evaluatorReadiness.status || "unknown") + "`");
+  if (evaluatorReadiness.reason) {
+    lines.push("  - " + evaluatorReadiness.reason);
+  }
+  lines.push("- Generated site readiness: `" + asString(generatedReadiness.status || "unknown") + "`");
+  lines.push("  - checks: generation=" + String(generatedReadiness.checks && generatedReadiness.checks.generation_status_ok === true)
+    + ", pages=" + String(generatedReadiness.checks && generatedReadiness.checks.pages_ok === true)
+    + ", properties=" + String(generatedReadiness.checks && generatedReadiness.checks.properties_ok === true)
+    + ", attachments=" + String(generatedReadiness.checks && generatedReadiness.checks.attachments_ok === true)
+    + ", home_200=" + String(generatedReadiness.checks && generatedReadiness.checks.home_200 === true)
+    + ", properties_200=" + String(generatedReadiness.checks && generatedReadiness.checks.properties_200 === true)
+    + ", contact_200=" + String(generatedReadiness.checks && generatedReadiness.checks.contact_200 === true));
+  lines.push("- AI safe-apply history readiness: `" + asString(aiHistoryReadiness.status || "unknown") + "`");
+  if (Array.isArray(aiHistoryReadiness.missing_proof_categories) && aiHistoryReadiness.missing_proof_categories.length) {
+    lines.push("  - missing proof categories: `" + aiHistoryReadiness.missing_proof_categories.join(", ") + "`");
+    lines.push("  - This is not a generation failure. It means this runtime has not yet gone through the live AI safe-apply and rollback history.");
+  }
+  lines.push("- Secrets readiness: `" + asString(secretsReadiness.status || "unknown") + "`");
+  lines.push("  - `secrets/ai.env` absent: `" + String(secretsReadiness.checks && secretsReadiness.checks.secrets_ai_env_absent === true) + "`");
   lines.push("");
   lines.push("## What This Proves");
   for (const item of pack.what_was_proven) {
@@ -266,6 +493,8 @@ function buildProofPackSummary(proofPack, filePaths) {
     wp_url: asString(summary.wp_url) || null,
     generated_at: asString(summary.generated_at) || null,
     readiness_status: asString(summary.readiness_status) || "unknown",
+    readiness: summary.readiness && typeof summary.readiness === "object" ? summary.readiness : null,
+    missing_proof_categories: Array.isArray(summary.missing_proof_categories) ? summary.missing_proof_categories : [],
     pass: summary.pass === true,
     json_path: filePaths && filePaths.jsonPath ? filePaths.jsonPath : null,
     markdown_path: filePaths && filePaths.markdownPath ? filePaths.markdownPath : null,
@@ -406,6 +635,7 @@ async function generateProofPack(options) {
     warnings: stateStatus.warnings
   };
   const siteSummary = siteStatusResult.site;
+  const secretsAiEnvPresent = fs.existsSync(path.join(safeRuntimePath, "secrets", "ai.env"));
 
   const safetyClaims = {
     launcher_first_flow: true,
@@ -417,10 +647,11 @@ async function generateProofPack(options) {
     no_dashboard_or_embedded_console_polish: true,
     no_dependency_install_during_proof_pack: true,
     key_source_env_only: asString(projectState.project.ai && projectState.project.ai.key_source) === "env",
-    secrets_ai_env_absent: !fs.existsSync(path.join(safeRuntimePath, "secrets", "ai.env")),
+    secrets_ai_env_absent: !secretsAiEnvPresent,
     raw_key_not_stored_in_proofs_logs_state: true,
     live_ai_requires_explicit_estimate_enable_confirm: true
   };
+  const readinessResult = buildReadiness(currentStateSummary, siteSummary, proofChain, secretsAiEnvPresent);
 
   const proofPack = {
     schema: PROOF_PACK_SCHEMA,
@@ -482,11 +713,13 @@ async function generateProofPack(options) {
       "Dependency install still requires user-provided local ZIPs and is outside this proof-pack command.",
       "This command summarizes existing proofs; it is not a substitute for the original mutation proofs."
     ],
-    readiness_status: proofChain.every((entry) => entry.found) ? "ready_for_alpha_evaluation" : "proofs_incomplete",
-    pass: proofChain.every((entry) => entry.found),
+    readiness_status: readinessResult.readiness_status,
+    readiness: readinessResult.readiness,
+    missing_proof_categories: readinessResult.missing_proof_categories,
+    pass: readinessResult.pass,
     applies_changes: false,
     mutation_scope: "launcher_project_metadata_only",
-    warnings: []
+    warnings: readinessResult.warnings
   };
 
   const jsonPath = path.join(proofsPath, "alpha-proof-pack-" + timestampCompact() + ".json");

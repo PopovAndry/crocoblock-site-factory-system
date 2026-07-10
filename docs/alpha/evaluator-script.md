@@ -30,6 +30,12 @@ Expected reference values:
 - Latest effective mutation: `state_apply_rollback_v1`
 - Protected field: `hero_title`
 
+Readiness should be interpreted in layers:
+
+- `generated_site_ready` should be `ready` when the generated runtime is healthy.
+- `ai_safe_apply_history_ready` should be `ready` only on a runtime that has the live AI safe-apply and rollback proof chain.
+- `alpha_evaluator_ready` is the overall release-style verdict.
+
 Important:
 
 - this is a read-only demo path
@@ -127,6 +133,9 @@ Expected proof output:
 Review for:
 
 - readiness = `ready_for_alpha_evaluation`
+- overall readiness = `ready`
+- generated site readiness = `ready`
+- AI safe-apply history readiness = `ready`
 - latest effective mutation = `state_apply_rollback_v1`
 - protected field = `hero_title`
 - counts = `6 / 30 / 22`
@@ -162,7 +171,7 @@ Mark alpha ready if all of these are true:
 Mark alpha blocked if any of these happen:
 
 - proof-pack panel missing
-- readiness is not green
+- generated site readiness is not green on the evaluator runtime
 - effective state is stale or contradictory
 - site endpoints fail
 - `secrets/ai.env` exists

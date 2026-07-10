@@ -57,6 +57,14 @@ The current evaluator-ready runtime should show:
 | Contact status | `200` |
 | `secrets/ai.env` | absent |
 
+Readiness is now split intentionally:
+
+- `generated_site_ready` answers whether the generated runtime itself is healthy.
+- `ai_safe_apply_history_ready` answers whether this runtime also carries live AI safe-apply and rollback proof history.
+- `alpha_evaluator_ready` is `ready` only when both of those are satisfied along with secrets hygiene.
+
+For a fresh generated-only project, `generated_site_ready` may be green while `ai_safe_apply_history_ready` remains false. That is not a site failure.
+
 ## D. UI Checklist
 
 Open [http://127.0.0.1:3847](http://127.0.0.1:3847) and verify:
