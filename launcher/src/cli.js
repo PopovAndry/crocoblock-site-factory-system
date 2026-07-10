@@ -534,6 +534,15 @@ function printStateStatus(result) {
   console.log("  Protected fields: " + (summary.protected_fields.length ? summary.protected_fields.join(", ") : "None"));
   console.log("  Last apply method: " + String(summary.latest_apply_method || "None"));
   console.log("  Last applied fields: " + (summary.last_applied_fields.length ? summary.last_applied_fields.join(", ") : "None"));
+  console.log("  Latest effective mutation: " + String(summary.latest_effective_mutation_method || "None"));
+  console.log("  Latest effective mutation fields: " + (summary.last_effective_mutation_fields.length ? summary.last_effective_mutation_fields.join(", ") : "None"));
+  if (summary.latest_rollback_id) {
+    console.log("  Latest rollback id: " + String(summary.latest_rollback_id));
+    console.log("  Latest rollback fields: " + (summary.last_rollback_fields.length ? summary.last_rollback_fields.join(", ") : "None"));
+    if (summary.latest_rollback_proof_path) {
+      console.log("  Latest rollback proof: " + String(summary.latest_rollback_proof_path));
+    }
+  }
   console.log("  Effective safe fields:");
   if (summary.effective_safe_fields.length) {
     for (const field of summary.effective_safe_fields) {

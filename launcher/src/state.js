@@ -654,12 +654,41 @@ function collectStateApplyProofEntries(runtimePath, warnings) {
   return entries.sort((left, right) => left.mtimeMs - right.mtimeMs);
 }
 
+function collectStateRollbackProofEntries(runtimePath, warnings) {
+  const proofsPath = path.join(runtimePath, "proofs");
+  if (!fs.existsSync(proofsPath)) {
+    return [];
+  }
+
+  const entries = [];
+  for (const entry of fs.readdirSync(proofsPath, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith("state-rollback-") || !entry.name.endsWith(".json")) {
+      continue;
+    }
+
+    const proofPath = path.join(proofsPath, entry.name);
+    try {
+      entries.push({
+        proofPath,
+        proof: safeJsonRead(proofPath),
+        mtimeMs: fs.statSync(proofPath).mtimeMs
+      });
+    } catch (error) {
+      warnings.push("Could not parse state rollback proof " + entry.name + ".");
+    }
+  }
+
+  return entries.sort((left, right) => left.mtimeMs - right.mtimeMs);
+}
+
 function normalizeEffectiveFieldSource(source) {
   const normalized = asString(source);
   switch (normalized) {
     case "frontend_safe_edit":
     case "confirmed_overwrite":
     case "safe_field_apply":
+    case "state_apply_rollback_v1":
+    case "rollback_restored":
     case "personalization":
       return normalized;
     default:
@@ -694,62 +723,132 @@ function buildLatestPersonalizationFieldMap(personalizationProofEntries) {
 }
 
 function buildLatestFieldOnlyApplyFieldMap(runtimePath, warnings) {
-  const entries = collectStateApplyProofEntries(runtimePath, warnings);
+  const entries = collectStateApplyProofEntries(runtimePath, warnings)
+    .map((entry) => Object.assign({ mutationType: "apply" }, entry))
+    .concat(
+      collectStateRollbackProofEntries(runtimePath, warnings)
+        .map((entry) => Object.assign({ mutationType: "rollback" }, entry))
+    )
+    .sort((left, right) => left.mtimeMs - right.mtimeMs);
   const fieldMap = {};
   let latestApply = null;
+  let latestRollback = null;
+  let latestMutation = null;
 
   for (const entry of entries) {
     const proof = entry.proof && typeof entry.proof === "object" ? entry.proof : {};
-    if (asString(proof.status) !== "ok" || asString(proof.apply_method) !== "field_only_safe_apply") {
-      continue;
-    }
-
-    const appliedFields = Array.isArray(proof.applied_fields) ? proof.applied_fields : [];
-    const afterValues = proof.after_values && typeof proof.after_values === "object" ? proof.after_values : {};
-    const safeRenderContext = proof.safe_render_context && typeof proof.safe_render_context === "object" ? proof.safe_render_context : {};
-    const effectiveAfter = proof.effective_safe_fields_after
-      && proof.effective_safe_fields_after.fields
-      && typeof proof.effective_safe_fields_after.fields === "object"
-        ? proof.effective_safe_fields_after.fields
-        : {};
-
-    latestApply = {
-      apply_id: asString(proof.apply_id) || null,
-      apply_method: "field_only_safe_apply",
-      proof_path: entry.proofPath,
-      applied_fields: appliedFields.slice()
-    };
-
-    for (const fieldKey of appliedFields) {
-      if (!STATE_APPLY_ALLOWLIST.includes(fieldKey)) {
+    if (entry.mutationType === "apply") {
+      if (asString(proof.status) !== "ok" || asString(proof.apply_method) !== "field_only_safe_apply") {
         continue;
       }
 
-      const effectiveEntry = effectiveAfter[fieldKey] && typeof effectiveAfter[fieldKey] === "object"
-        ? effectiveAfter[fieldKey]
-        : null;
-      const value = asString(afterValues[fieldKey])
-        || asString(effectiveEntry && effectiveEntry.value)
-        || asString(safeRenderContext[fieldKey])
-        || asString(proof.personalization && proof.personalization.fields && proof.personalization.fields[fieldKey]);
+      const appliedFields = Array.isArray(proof.applied_fields) ? proof.applied_fields : [];
+      const afterValues = proof.after_values && typeof proof.after_values === "object" ? proof.after_values : {};
+      const safeRenderContext = proof.safe_render_context && typeof proof.safe_render_context === "object" ? proof.safe_render_context : {};
+      const effectiveAfter = proof.effective_safe_fields_after
+        && proof.effective_safe_fields_after.fields
+        && typeof proof.effective_safe_fields_after.fields === "object"
+          ? proof.effective_safe_fields_after.fields
+          : {};
 
+      latestApply = {
+        apply_id: asString(proof.apply_id) || null,
+        apply_method: "field_only_safe_apply",
+        proof_path: entry.proofPath,
+        applied_fields: appliedFields.slice()
+      };
+      latestMutation = {
+        mutation_id: asString(proof.apply_id) || null,
+        mutation_method: "field_only_safe_apply",
+        proof_path: entry.proofPath,
+        applied_fields: appliedFields.slice()
+      };
+
+      for (const fieldKey of appliedFields) {
+        if (!STATE_APPLY_ALLOWLIST.includes(fieldKey)) {
+          continue;
+        }
+
+        const effectiveEntry = effectiveAfter[fieldKey] && typeof effectiveAfter[fieldKey] === "object"
+          ? effectiveAfter[fieldKey]
+          : null;
+        const value = asString(afterValues[fieldKey])
+          || asString(effectiveEntry && effectiveEntry.value)
+          || asString(safeRenderContext[fieldKey])
+          || asString(proof.personalization && proof.personalization.fields && proof.personalization.fields[fieldKey]);
+
+        if (!value) {
+          continue;
+        }
+
+        fieldMap[fieldKey] = {
+          value,
+          source: "safe_field_apply",
+          protected: false,
+          last_apply_id: asString(proof.apply_id) || null,
+          last_proof_path: entry.proofPath,
+          last_mutation_id: asString(proof.apply_id) || null,
+          last_mutation_method: "field_only_safe_apply",
+          last_mutation_proof_path: entry.proofPath,
+          last_rollback_id: null,
+          last_rollback_proof_path: null
+        };
+      }
+      continue;
+    }
+
+    if (asString(proof.status) !== "ok" || asString(proof.code) !== "state_rollback_applied") {
+      continue;
+    }
+
+    const rollbackFields = proof.rollback_fields && typeof proof.rollback_fields === "object"
+      ? proof.rollback_fields
+      : {};
+    const rollbackAppliedFields = Array.isArray(proof.applied_fields)
+      ? proof.applied_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+      : Object.keys(rollbackFields).filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey));
+
+    latestRollback = {
+      rollback_id: asString(proof.rollback_id) || null,
+      rollback_method: "state_apply_rollback_v1",
+      proof_path: entry.proofPath,
+      rollback_fields: rollbackAppliedFields.slice(),
+      source_apply_id: asString(proof.source_apply_id) || null,
+      source_apply_path: asString(proof.source_apply_path) || null
+    };
+    latestMutation = {
+      mutation_id: asString(proof.rollback_id) || null,
+      mutation_method: "state_apply_rollback_v1",
+      proof_path: entry.proofPath,
+      applied_fields: rollbackAppliedFields.slice()
+    };
+
+    for (const fieldKey of rollbackAppliedFields) {
+      const value = asString(rollbackFields[fieldKey]);
       if (!value) {
         continue;
       }
 
       fieldMap[fieldKey] = {
         value,
-        source: "safe_field_apply",
+        source: "state_apply_rollback_v1",
         protected: false,
-        last_apply_id: asString(proof.apply_id) || null,
-        last_proof_path: entry.proofPath
+        last_apply_id: null,
+        last_proof_path: entry.proofPath,
+        last_mutation_id: asString(proof.rollback_id) || null,
+        last_mutation_method: "state_apply_rollback_v1",
+        last_mutation_proof_path: entry.proofPath,
+        last_rollback_id: asString(proof.rollback_id) || null,
+        last_rollback_proof_path: entry.proofPath
       };
     }
   }
 
   return {
     fieldMap,
-    latestApply
+    latestApply,
+    latestRollback,
+    latestMutation
   };
 }
 
@@ -796,7 +895,7 @@ function buildEffectiveSafeFields(previousState, personalization, userOverrides,
         : (asString(override.manifest) || (applyMeta && applyMeta.last_proof_path) || asString(previousEntry.last_proof_path) || null);
     } else if (applyMeta && asString(applyMeta.value)) {
       value = asString(applyMeta.value);
-      source = "safe_field_apply";
+      source = normalizeEffectiveFieldSource(applyMeta.source);
       protectedField = false;
       lastApplyId = applyMeta.last_apply_id || null;
       lastProofPath = applyMeta.last_proof_path || null;
@@ -819,7 +918,10 @@ function buildEffectiveSafeFields(previousState, personalization, userOverrides,
       protected: protectedField,
       rendered_check: renderedCheck,
       last_apply_id: lastApplyId,
-      last_proof_path: lastProofPath
+      last_proof_path: lastProofPath,
+      last_mutation_id: applyMeta && applyMeta.last_mutation_id ? applyMeta.last_mutation_id : null,
+      last_mutation_method: applyMeta && applyMeta.last_mutation_method ? applyMeta.last_mutation_method : null,
+      last_mutation_proof_path: applyMeta && applyMeta.last_mutation_proof_path ? applyMeta.last_mutation_proof_path : null
     };
 
     if (overwritePolicy) {
@@ -864,6 +966,30 @@ function buildEffectiveSafeFields(previousState, personalization, userOverrides,
     latest_apply_proof_path: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestApply
       ? fieldOnlyApplyMeta.latestApply.proof_path
       : null,
+    latest_rollback_id: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestRollback
+      ? fieldOnlyApplyMeta.latestRollback.rollback_id
+      : null,
+    latest_rollback_method: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestRollback
+      ? fieldOnlyApplyMeta.latestRollback.rollback_method
+      : null,
+    latest_rollback_proof_path: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestRollback
+      ? fieldOnlyApplyMeta.latestRollback.proof_path
+      : null,
+    last_rollback_fields: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestRollback && Array.isArray(fieldOnlyApplyMeta.latestRollback.rollback_fields)
+      ? fieldOnlyApplyMeta.latestRollback.rollback_fields
+      : [],
+    latest_effective_mutation_method: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestMutation
+      ? fieldOnlyApplyMeta.latestMutation.mutation_method
+      : null,
+    latest_effective_mutation_id: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestMutation
+      ? fieldOnlyApplyMeta.latestMutation.mutation_id
+      : null,
+    latest_effective_mutation_proof_path: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestMutation
+      ? fieldOnlyApplyMeta.latestMutation.proof_path
+      : null,
+    last_effective_mutation_fields: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestMutation && Array.isArray(fieldOnlyApplyMeta.latestMutation.applied_fields)
+      ? fieldOnlyApplyMeta.latestMutation.applied_fields
+      : [],
     last_applied_fields: fieldOnlyApplyMeta && fieldOnlyApplyMeta.latestApply && Array.isArray(fieldOnlyApplyMeta.latestApply.applied_fields)
       ? fieldOnlyApplyMeta.latestApply.applied_fields
       : [],
@@ -890,7 +1016,10 @@ function summarizeEffectiveSafeFields(effectiveSafeFields) {
         protected: entry.protected === true,
         rendered_check: asString(entry.rendered_check) || "not_checked",
         last_apply_id: asString(entry.last_apply_id) || null,
-        last_proof_path: asString(entry.last_proof_path) || null
+        last_proof_path: asString(entry.last_proof_path) || null,
+        last_mutation_id: asString(entry.last_mutation_id) || null,
+        last_mutation_method: asString(entry.last_mutation_method) || null,
+        last_mutation_proof_path: asString(entry.last_mutation_proof_path) || null
       };
     })
     .filter(Boolean);
@@ -1107,6 +1236,14 @@ function buildStateSummary(state, statePath) {
     latest_apply_method: asString(effectiveSafeFields.latest_apply_method) || null,
     latest_apply_id: asString(effectiveSafeFields.latest_apply_id) || null,
     last_applied_fields: Array.isArray(effectiveSafeFields.last_applied_fields) ? effectiveSafeFields.last_applied_fields : [],
+    latest_rollback_method: asString(effectiveSafeFields.latest_rollback_method) || null,
+    latest_rollback_id: asString(effectiveSafeFields.latest_rollback_id) || null,
+    latest_rollback_proof_path: asString(effectiveSafeFields.latest_rollback_proof_path) || null,
+    last_rollback_fields: Array.isArray(effectiveSafeFields.last_rollback_fields) ? effectiveSafeFields.last_rollback_fields : [],
+    latest_effective_mutation_method: asString(effectiveSafeFields.latest_effective_mutation_method) || null,
+    latest_effective_mutation_id: asString(effectiveSafeFields.latest_effective_mutation_id) || null,
+    latest_effective_mutation_proof_path: asString(effectiveSafeFields.latest_effective_mutation_proof_path) || null,
+    last_effective_mutation_fields: Array.isArray(effectiveSafeFields.last_effective_mutation_fields) ? effectiveSafeFields.last_effective_mutation_fields : [],
     drift_status: state.drift && state.drift.status || "unknown",
     state_path: statePath
   };
