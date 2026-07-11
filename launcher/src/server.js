@@ -8,20 +8,31 @@ const {
   DEFAULT_PROJECTS_ROOT,
   createProjectScaffold,
   listProjects,
-  resolveProjectsRoot
+  readProjectBySlug,
+  resolveProjectsRoot,
+  validateExplicitSlug
 } = require("./project-store");
 const { provisionProject } = require("./provision");
 const { installAgent } = require("./install-agent");
 const { installDependency } = require("./install-dependency");
 const { listApprovedDependencySources, resolveApprovedDependencySource } = require("./dependency-sources");
 const { getSetupStatus } = require("./setup");
-const { withSetupMutationLock } = require("./setup-lock");
+const { getSetupMutationLock, withSetupMutationLock } = require("./setup-lock");
 const { planProject } = require("./plan");
 const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
-const { generateProject } = require("./generate");
+const { assertPlanningRunReady, generateProject, readRunFile } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
 const { readStateStatus, refreshState, planState, applyStatePlan, rollbackStateApply } = require("./state");
 const { generateProofPack, getProofPackStatus } = require("./proof-pack");
+const { getGenerationMutationLock, withGenerationMutationLock } = require("./generation-lock");
+const {
+  createGenerationOperation,
+  findSuccessfulOperationByPlanId,
+  getLatestGenerationOperation,
+  interruptOperationIfStale,
+  normalizePlanId,
+  updateGenerationOperation
+} = require("./generation-operation");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -188,16 +199,29 @@ function renderHomePage(config) {
     "    <section class=\"panel-grid\">",
     "      <section class=\"panel\">",
     "        <div class=\"panel-header\">",
-    "          <h2>Controlled generate</h2>",
-    "          <p>Runs the paired Agent controlled-generate contract only after launcher-side and server-side checks pass.</p>",
+    "          <h2>Generate Site</h2>",
+    "          <p>Preview a read-only local-interpreter plan, review the estimate and mutation warning, then explicitly confirm controlled generate for ready projects only.</p>",
     "        </div>",
     "        <form id=\"generate-project-form\" class=\"project-form\">",
     "          <label>",
     "            <span>Project</span>",
     "            <select name=\"slug\" id=\"generate-project-slug\"></select>",
     "          </label>",
-    "          <button type=\"submit\" class=\"button\">Run controlled generate</button>",
+    "          <label>",
+    "            <span>Prompt</span>",
+    "            <textarea name=\"prompt\" id=\"generate-prompt\" rows=\"6\" required placeholder=\"Create a family-focused real estate website for Mykolaiv named Harbor Family Realty, focused on apartments near parks, schools, and quiet neighborhoods.\"></textarea>",
+    "          </label>",
+    "          <div class=\"generate-action-row\">",
+    "            <button type=\"button\" class=\"button\" id=\"generate-preview-button\">Preview Plan</button>",
+    "            <button type=\"submit\" class=\"button\" id=\"generate-submit-button\" disabled>Generate Site</button>",
+    "          </div>",
+    "          <label class=\"checkbox-row\">",
+    "            <input type=\"checkbox\" id=\"generate-confirm-checkbox\">",
+    "            <span>I understand that Generate will modify this WordPress project.</span>",
+    "          </label>",
     "        </form>",
+    "        <div id=\"generation-status\" class=\"project-list\"></div>",
+    "        <div id=\"generate-preview-result\" class=\"result-box\" hidden></div>",
     "        <div id=\"generate-result\" class=\"result-box\" hidden></div>",
     "      </section>",
     "      <section class=\"panel\">",
@@ -268,6 +292,222 @@ function summarizeProjectForSite(project) {
     wp_port: project.wp_port,
     generation: project.generation || null,
     generated_site: project.generated_site || null
+  };
+}
+
+function createStructuredError(message, code, statusCode, extras) {
+  const error = new Error(message);
+  error.code = code || null;
+  error.statusCode = statusCode || 400;
+  if (extras && typeof extras === "object") {
+    Object.assign(error, extras);
+  }
+  return error;
+}
+
+function normalizeProjectSlugForRoute(rawSlug) {
+  try {
+    return validateExplicitSlug(rawSlug);
+  } catch (error) {
+    throw createStructuredError(
+      "Project slug is invalid.",
+      "invalid_project_slug",
+      400
+    );
+  }
+}
+
+function assertProjectExistsForRoute(slug, projectsRoot) {
+  try {
+    return readProjectBySlug(slug, projectsRoot);
+  } catch (error) {
+    throw createStructuredError(
+      "Project not found.",
+      "project_not_found",
+      404
+    );
+  }
+}
+
+function validateGenerationPrompt(promptInput) {
+  if (typeof promptInput !== "string") {
+    throw createStructuredError(
+      "Generate preview requires a string prompt.",
+      "generation_prompt_invalid_type",
+      400
+    );
+  }
+
+  const prompt = promptInput.trim();
+  if (!prompt) {
+    throw createStructuredError(
+      "Generate preview requires a non-empty prompt.",
+      "generation_prompt_required",
+      400
+    );
+  }
+
+  if (prompt.length < 10) {
+    throw createStructuredError(
+      "Generate preview prompt must be at least 10 characters.",
+      "generation_prompt_too_short",
+      400
+    );
+  }
+
+  if (prompt.length > 2000) {
+    throw createStructuredError(
+      "Generate preview prompt must be 2000 characters or fewer.",
+      "generation_prompt_too_long",
+      400
+    );
+  }
+
+  return prompt;
+}
+
+function planProofPathForRun(projectState, runId) {
+  return path.join(projectState.runtimePath, "proofs", "plan-" + runId + ".json");
+}
+
+function buildGenerationPlanSummary(projectState, runState) {
+  if (!runState || !runState.run) {
+    return null;
+  }
+
+  const run = runState.run;
+  const personalization = run.prompt_personalization && typeof run.prompt_personalization === "object"
+    ? run.prompt_personalization
+    : { source: "local_interpreter", fields: {}, warnings: [] };
+  const stageWarnings = Array.isArray(run.warnings) ? run.warnings : [];
+
+  return {
+    plan_id: run.run_id,
+    prompt_hash: run.prompt_hash || null,
+    prompt_length: typeof run.prompt === "string" ? run.prompt.length : 0,
+    status: run.status || "unknown",
+    created_at: run.created_at || null,
+    provider_called: false,
+    personalization_source: personalization.source || "local_interpreter",
+    interpreted_fields: personalization.fields || {},
+    warnings: stageWarnings,
+    estimated_input_tokens: Number(run.estimated_input_tokens || 0),
+    estimated_output_tokens: Number(run.estimated_output_tokens || 0),
+    estimated_total_tokens: Number(run.estimated_total_tokens || 0),
+    plan_path: runState.runPath,
+    proof_path: planProofPathForRun(projectState, run.run_id)
+  };
+}
+
+function readGenerationPlanState(projectState, planId) {
+  const safePlanId = normalizePlanId(planId);
+  let runState;
+  try {
+    runState = readRunFile(projectState, safePlanId);
+  } catch (error) {
+    throw createStructuredError(
+      "Generation plan was not found for this project.",
+      "generation_plan_not_found",
+      404
+    );
+  }
+
+  try {
+    assertPlanningRunReady(runState.run);
+  } catch (error) {
+    throw createStructuredError(
+      error.message,
+      "generation_plan_invalid",
+      409
+    );
+  }
+
+  if (String(runState.run.slug || "") !== String(projectState.project.slug || "")) {
+    throw createStructuredError(
+      "Generation plan does not belong to the selected project.",
+      "generation_plan_project_mismatch",
+      409
+    );
+  }
+
+  return runState;
+}
+
+async function ensureProjectReadyToGenerate(slug, projectsRoot) {
+  const setupResult = await getSetupStatus({
+    slug,
+    projectsRoot
+  });
+
+  if (!setupResult.setup || setupResult.setup.ready_to_generate !== true) {
+    throw createStructuredError(
+      "Project is not ready to generate yet.",
+      "project_not_ready_to_generate",
+      409,
+      {
+        blockers: setupResult.setup && setupResult.setup.dependencies
+          ? setupResult.setup.dependencies.blockers || []
+          : []
+      }
+    );
+  }
+
+  return setupResult;
+}
+
+async function buildGenerationStatusPayload(slug, projectsRoot) {
+  const projectState = readProjectBySlug(slug, projectsRoot);
+  const setupResult = await getSetupStatus({
+    slug,
+    projectsRoot
+  });
+  const latestOperationEntry = interruptOperationIfStale({
+    slug,
+    projectsRoot,
+    hasActiveLock: Boolean(getGenerationMutationLock(slug))
+  }) || getLatestGenerationOperation({
+    slug,
+    projectsRoot
+  });
+  let latestPlan = null;
+
+  if (projectState.project.current_run_id) {
+    try {
+      latestPlan = buildGenerationPlanSummary(
+        projectState,
+        readGenerationPlanState(projectState, projectState.project.current_run_id)
+      );
+    } catch (error) {
+      latestPlan = {
+        plan_id: String(projectState.project.current_run_id || ""),
+        status: "invalid",
+        error: error.message
+      };
+    }
+  }
+
+  const siteResult = await getSiteStatus({
+    slug,
+    projectsRoot,
+    persistProject: false,
+    checkUrls: true
+  });
+  const activeLock = getGenerationMutationLock(slug);
+  const latestOperation = latestOperationEntry ? latestOperationEntry.operation : null;
+
+  return {
+    project: summarizeProjectForSite(projectState.project),
+    setup: setupResult.setup,
+    latest_plan: latestPlan,
+    current_operation: latestOperation && (latestOperation.status === "requested" || latestOperation.status === "running")
+      ? latestOperation
+      : null,
+    latest_operation: latestOperation,
+    operation_lock: activeLock ? {
+      current_operation: activeLock.operation,
+      acquired_at: activeLock.acquired_at
+    } : null,
+    site: siteResult.site
   };
 }
 
@@ -478,13 +718,207 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const prompt = validateGenerationPrompt(payload.prompt);
+        const setupResult = await ensureProjectReadyToGenerate(slug, projectsRoot);
+        const planResult = await planProject({
+          slug,
+          prompt,
+          projectsRoot
+        });
+        const estimateResult = estimateAi({
+          slug,
+          projectsRoot,
+          prompt
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(planResult.project),
+          plan_id: planResult.run.run_id,
+          prompt_hash: planResult.proof.prompt_hash,
+          personalization_source: planResult.proof.prompt_personalization
+            ? planResult.proof.prompt_personalization.source || "local_interpreter"
+            : "local_interpreter",
+          provider_called: false,
+          interpreted_fields: planResult.proof.prompt_personalization
+            ? planResult.proof.prompt_personalization.fields || {}
+            : {},
+          warnings: Array.isArray(planResult.run.warnings) ? planResult.run.warnings : [],
+          estimated_input_tokens: estimateResult.estimate.estimated_input_tokens,
+          estimated_output_tokens: estimateResult.estimate.estimated_output_tokens,
+          estimated_total_tokens: estimateResult.estimate.estimated_total_tokens,
+          estimated_cost: estimateResult.estimate.estimated_cost,
+          estimate_uncertainty: estimateResult.estimate.uncertainty,
+          can_generate: setupResult.setup.dependencies.can_generate === true,
+          dependency_blockers: setupResult.setup.dependencies.blockers || [],
+          plan_path: planResult.runPath,
+          plan_proof_path: planResult.proofPath,
+          estimate_proof_path: estimateResult.proofPath,
+          setup_ready: setupResult.setup.ready_to_generate === true,
+          latest_plan: buildGenerationPlanSummary(
+            readProjectBySlug(slug, projectsRoot),
+            {
+              runPath: planResult.runPath,
+              run: planResult.run
+            }
+          )
+        });
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/generation$/.test(requestUrl.pathname)) {
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const result = await buildGenerationStatusPayload(slug, projectsRoot);
+
+        sendJson(response, 200, {
+          ok: true,
+          project: result.project,
+          setup: result.setup,
+          latest_plan: result.latest_plan,
+          current_operation: result.current_operation,
+          latest_operation: result.latest_operation,
+          operation_lock: result.operation_lock,
+          site: result.site
+        });
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname)) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
-        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const result = await generateProject({
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const setupLock = getSetupMutationLock(slug);
+        if (setupLock) {
+          throw createStructuredError(
+            "A setup operation is already in progress for this project.",
+            "setup_operation_in_progress",
+            409,
+            {
+              current_operation: setupLock.operation
+            }
+          );
+        }
+
+        if (payload.confirm_generate !== true) {
+          throw createStructuredError(
+            "Generate requires confirm_generate=true.",
+            "generation_confirmation_required",
+            400
+          );
+        }
+
+        const planId = normalizePlanId(payload.plan_id);
+        const setupResult = await ensureProjectReadyToGenerate(slug, projectsRoot);
+        const projectState = readProjectBySlug(slug, projectsRoot);
+        const planState = readGenerationPlanState(projectState, planId);
+        const priorSuccess = findSuccessfulOperationByPlanId({
           slug,
-          projectsRoot: payload.projectsRoot || projectsRoot
+          projectsRoot,
+          planId
+        });
+
+        if (priorSuccess) {
+          throw createStructuredError(
+            "This plan was already consumed by a successful controlled generate.",
+            "generation_plan_already_consumed",
+            409,
+            {
+              proof_path: priorSuccess.operation.proof_path || null
+            }
+          );
+        }
+
+        let operationSeed = null;
+        let result = null;
+        try {
+          result = await withGenerationMutationLock(slug, "controlled-generate:" + planId, async () => {
+            operationSeed = createGenerationOperation({
+              slug,
+              projectsRoot,
+              planId,
+              promptHash: planState.run.prompt_hash || null,
+              statusDetail: "preparing"
+            });
+            await updateGenerationOperation({
+              slug,
+              projectsRoot,
+              operationId: operationSeed.operation.operation_id,
+              patch: {
+                status: "running",
+                status_detail: "validating",
+                started_at: new Date().toISOString()
+              }
+            });
+
+            return generateProject({
+              slug,
+              projectsRoot,
+              planId,
+              operationId: operationSeed.operation.operation_id,
+              onProgress: async (statusDetail) => {
+                await updateGenerationOperation({
+                  slug,
+                  projectsRoot,
+                  operationId: operationSeed.operation.operation_id,
+                  patch: {
+                    status: "running",
+                    status_detail: statusDetail
+                  }
+                });
+              }
+            });
+          });
+        } catch (error) {
+          const failureProofPath = error.proofPath || null;
+          if (operationSeed) {
+            await updateGenerationOperation({
+              slug,
+              projectsRoot,
+              operationId: operationSeed.operation.operation_id,
+              patch: {
+                status: "failed",
+                status_detail: "failed",
+                completed_at: new Date().toISOString(),
+                proof_path: failureProofPath,
+                error: {
+                  code: error.code || "controlled_generate_failed",
+                  message: error.message
+                }
+              }
+            });
+          }
+          throw error;
+        }
+
+        const finalOperation = updateGenerationOperation({
+          slug,
+          projectsRoot,
+          operationId: operationSeed.operation.operation_id,
+          patch: {
+            status: "succeeded",
+            status_detail: "succeeded",
+            completed_at: new Date().toISOString(),
+            proof_path: result.proofPath,
+            result_summary: {
+              status: result.executeData.status || "ok",
+              code: result.executeData.code || "controlled_generate_completed",
+              provider_called: false,
+              personalization_source: result.proof && result.proof.personalization
+                ? result.proof.personalization.source || "local_interpreter"
+                : "local_interpreter",
+              counts_before: result.beforeCounts || null,
+              counts_after: result.afterCounts || null,
+              generated_urls: result.generatedUrls || {},
+              url_status: result.urlStatus || {}
+            }
+          }
         });
 
         sendJson(response, 200, {
@@ -493,9 +927,12 @@ function createLauncherServer(options) {
           code: result.executeData.code,
           proof: result.proof,
           proof_path: result.proofPath,
-          project: result.project,
+          project: summarizeProjectForSite(result.project),
           generated_urls: result.generatedUrls,
-          url_status: result.urlStatus
+          url_status: result.urlStatus,
+          operation: finalOperation.operation,
+          operation_path: finalOperation.operationPath,
+          setup_ready: setupResult.setup.ready_to_generate === true
         });
         return;
       }
@@ -807,6 +1244,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/proof-pack\/generate$/.test(requestUrl.pathname) ||
@@ -823,7 +1261,8 @@ function createLauncherServer(options) {
         error: error.message,
         code: error.code || null,
         current_operation: error.current_operation || null,
-        proof_path: error.proofPath || null
+        proof_path: error.proofPath || null,
+        blockers: error.blockers || []
       });
     }
   });

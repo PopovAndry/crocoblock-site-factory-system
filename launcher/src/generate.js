@@ -255,6 +255,14 @@ function assertPlanningRunReady(run) {
   }
 }
 
+async function reportGenerateProgress(options, statusDetail, detail) {
+  if (!options || typeof options.onProgress !== "function") {
+    return;
+  }
+
+  await options.onProgress(String(statusDetail || "running"), detail && typeof detail === "object" ? detail : {});
+}
+
 async function runDockerCompose(runtimePath, proofStem, args, options) {
   return runCommand("docker", ["compose"].concat(args), {
     cwd: runtimePath,
@@ -511,7 +519,7 @@ async function rerunPlanningChain(projectState, prompt, promptPersonalization, p
   };
 }
 
-async function validateGeneratePreconditions(projectState, proofId, warnings) {
+async function validateGeneratePreconditions(projectState, proofId, warnings, requestedRunId) {
   const project = projectState.project;
 
   if ((project.runtime && project.runtime.status) !== "provisioned") {
@@ -534,11 +542,12 @@ async function validateGeneratePreconditions(projectState, proofId, warnings) {
     throw new Error("Dependency state is not generate-ready.");
   }
 
-  if (!project.current_run_id) {
+  const targetRunId = String(requestedRunId || project.current_run_id || "").trim();
+  if (!targetRunId) {
     throw new Error("Latest planning run is missing.");
   }
 
-  const runState = readRunFile(projectState, project.current_run_id);
+  const runState = readRunFile(projectState, targetRunId);
   assertPlanningRunReady(runState.run);
 
   await waitForUrl(project.wp_url);
@@ -610,9 +619,14 @@ async function generateProject(options) {
   let dependencyStateBefore = projectState.project.dependency_state || null;
   let promptPersonalization = null;
   let previousGenerateProof = null;
+  let targetRunId = "";
 
   try {
-    preconditions = await validateGeneratePreconditions(projectState, proofId, warnings);
+    targetRunId = String(options.planId || options.runId || projectState.project.current_run_id || "").trim();
+    await reportGenerateProgress(options, "validating", {
+      plan_id: targetRunId || null
+    });
+    preconditions = await validateGeneratePreconditions(projectState, proofId, warnings, targetRunId);
     prompt = String(preconditions.runState.run.prompt || "").trim();
 
     if (!prompt) {
@@ -685,10 +699,17 @@ async function generateProject(options) {
     });
 
     enteredMutationBoundary = true;
+    await reportGenerateProgress(options, "generating", {
+      plan_id: preconditions.runState.run.run_id,
+      prompt_hash: preconditions.runState.run.prompt_hash || null
+    });
     const executeResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", executePayload, proofId, warnings);
     executeData = executeResponse.json || {};
 
     try {
+      await reportGenerateProgress(options, "verifying", {
+        plan_id: preconditions.runState.run.run_id
+      });
       afterCounts = await readRuntimeCounts(projectState, proofId + "-after", warnings);
       const pages = await readPublishedPages(projectState, proofId + "-pages", warnings);
       const propertyUrl = await readSinglePropertyUrl(projectState, proofId + "-property", warnings);
@@ -756,7 +777,9 @@ async function generateProject(options) {
       status: String(executeData.status || "error"),
       last_generate_run_id: preconditions.runState.run.run_id,
       last_proof_id: proofId,
-      generated_at: createdAt
+      generated_at: createdAt,
+      last_operation_id: options.operationId || null,
+      last_plan_id: preconditions.runState.run.run_id
     });
     projectState.project.generated_site = Object.assign({}, defaultGeneratedSiteMetadata(), projectState.project.generated_site || {}, {
       present: toBooleanTrue(executeData.generated),
@@ -764,6 +787,13 @@ async function generateProject(options) {
       personalization_last_applied: proof.personalization
     });
     saveProjectRecord(projectState, projectState.project);
+
+    await reportGenerateProgress(options, "succeeded", {
+      proof_path: proofPath,
+      generated_urls: generatedUrls,
+      before_counts: beforeCounts,
+      after_counts: afterCounts
+    });
 
     return {
       project: projectState.project,
@@ -832,10 +862,18 @@ async function generateProject(options) {
         status: "error",
         last_generate_run_id: preconditions && preconditions.runState ? preconditions.runState.run.run_id : null,
         last_proof_id: proofId,
-        generated_at: createdAt
+        generated_at: createdAt,
+        last_operation_id: options.operationId || null,
+        last_plan_id: preconditions && preconditions.runState ? preconditions.runState.run.run_id : (targetRunId || null)
       });
       saveProjectRecord(projectState, projectState.project);
     }
+
+    await reportGenerateProgress(options, "failed", {
+      proof_path: proofPath,
+      error_message: error.message,
+      entered_mutation_boundary: enteredMutationBoundary
+    });
 
     const enrichedError = new Error(error.message + " (proof: " + proofPath + ")");
     enrichedError.proofPath = proofPath;
@@ -844,5 +882,7 @@ async function generateProject(options) {
 }
 
 module.exports = {
-  generateProject
+  assertPlanningRunReady,
+  generateProject,
+  readRunFile
 };

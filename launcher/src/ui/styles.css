@@ -335,6 +335,34 @@ body {
   margin-top: 14px;
 }
 
+.generate-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.checkbox-row {
+  display: flex;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.checkbox-row input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.checkbox-row span {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 .result-box {
   margin-top: 16px;
   padding: 14px 16px;

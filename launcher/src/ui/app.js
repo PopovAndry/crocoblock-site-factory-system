@@ -15,6 +15,12 @@
   const latestRun = document.getElementById("latest-run");
   const generateForm = document.getElementById("generate-project-form");
   const generateProjectSlug = document.getElementById("generate-project-slug");
+  const generatePrompt = document.getElementById("generate-prompt");
+  const generatePreviewButton = document.getElementById("generate-preview-button");
+  const generateSubmitButton = document.getElementById("generate-submit-button");
+  const generateConfirmCheckbox = document.getElementById("generate-confirm-checkbox");
+  const generationStatus = document.getElementById("generation-status");
+  const generatePreviewResult = document.getElementById("generate-preview-result");
   const generateResult = document.getElementById("generate-result");
   const siteStatus = document.getElementById("site-status");
   const managedState = document.getElementById("managed-state");
@@ -50,6 +56,21 @@
   let preferredSelectedSlug = "";
   let loadProjectsRequestId = 0;
   let loadSetupStatusRequestId = 0;
+  let generatePreviewState = null;
+  let generationActionInFlight = false;
+  let generationStatusPollTimer = null;
+  let generationSelectionRequestId = 0;
+  let generationSelectionSettleTimer = null;
+  let generationStatusLoading = false;
+  let generationViewAbortController = null;
+  let generationView = {
+    slug: "",
+    requestId: 0,
+    loading: false,
+    statusPayload: null,
+    sitePayload: null,
+    error: null
+  };
 
   function slugifyProjectName(value) {
     return String(value || "")
@@ -62,6 +83,10 @@
 
   function setSiteStatusEmpty(message) {
     siteStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
+  function setGenerationStatusEmpty(message) {
+    generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
   }
 
   function setSetupEmpty(message) {
@@ -89,6 +114,7 @@
       generateProjectSlug.disabled = true;
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
       setSetupEmpty("Create a project, then provision WordPress and install dependencies here.");
+      setGenerationStatusEmpty("Finish project setup, then preview a generate plan here.");
       setSiteStatusEmpty("No generated site result yet.");
       setManagedStateEmpty("Refresh state after generate or frontend edits.");
       setProofPackEmpty("Generate a proof pack after state and site data are available.");
@@ -99,6 +125,7 @@
       aiModel.textContent = "balanced";
       aiKeyStatus.textContent = "not_required";
       aiLastEstimate.textContent = "Not recorded";
+      updateGenerateActionState();
       return;
     }
 
@@ -180,6 +207,7 @@
 
     if (!latestProject) {
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
+      updateGenerateActionState();
       return;
     }
 
@@ -198,6 +226,8 @@
       "  </dl>",
       "</article>"
     ].join("\n");
+
+    updateGenerateActionState();
 
   }
 
@@ -352,18 +382,361 @@
   function renderGenerateResult(result) {
     const urls = result.generated_urls || {};
     const personalization = result.proof && result.proof.personalization ? result.proof.personalization : null;
+    const beforeCounts = result.proof && result.proof.before_counts ? result.proof.before_counts : {};
+    const afterCounts = result.proof && result.proof.after_counts ? result.proof.after_counts : {};
     generateResult.hidden = false;
     generateResult.className = "result-box result-box-success";
     generateResult.innerHTML = [
       "<strong>Controlled generate completed.</strong>",
+      result.operation_path ? "<p><span>Operation record:</span> " + escapeHtml(result.operation_path) + "</p>" : "",
+      result.operation && result.operation.operation_id ? "<p><span>Operation ID:</span> " + escapeHtml(result.operation.operation_id) + "</p>" : "",
       "<p><span>Status:</span> " + escapeHtml(result.status || "unknown") + "</p>",
       "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
       "<p><span>Proof file:</span> " + escapeHtml(result.proof_path) + "</p>",
+      "<p><span>Pages:</span> " + escapeHtml(formatCountChange(beforeCounts.pages, afterCounts.pages)) + "</p>",
+      "<p><span>Properties:</span> " + escapeHtml(formatCountChange(beforeCounts.properties, afterCounts.properties)) + "</p>",
+      "<p><span>Attachments:</span> " + escapeHtml(formatCountChange(beforeCounts.attachments, afterCounts.attachments)) + "</p>",
       personalization ? "<p><span>Personalization:</span> " + escapeHtml(personalization.source || "local_interpreter") + " -> " + escapeHtml((personalization.applied_fields || []).join(", ")) + "</p>" : "",
       "<p><span>Home:</span> " + escapeHtml(urls.home || urls.root || result.project.wp_url) + "</p>",
       "<p><span>Properties:</span> " + escapeHtml(urls.properties || "Unavailable") + "</p>",
       "<p><span>Contact:</span> " + escapeHtml(urls.contact || "Unavailable") + "</p>"
     ].join("");
+  }
+
+  function getSelectedGenerateProject() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    return projectsCache.find((project) => project.slug === slug) || null;
+  }
+
+  function getNormalizedGeneratePrompt() {
+    return String(generatePrompt && generatePrompt.value || "").trim();
+  }
+
+  function getGeneratePromptValidation(prompt) {
+    if (!prompt) {
+      return {
+        valid: false,
+        message: "Enter a prompt to preview the generate plan."
+      };
+    }
+
+    if (prompt.length < 10) {
+      return {
+        valid: false,
+        message: "Prompt must be at least 10 characters."
+      };
+    }
+
+    if (prompt.length > 2000) {
+      return {
+        valid: false,
+        message: "Prompt must be 2000 characters or fewer."
+      };
+    }
+
+    return {
+      valid: true,
+      message: ""
+    };
+  }
+
+  function resetGeneratePreview(message) {
+    generatePreviewState = null;
+    generateConfirmCheckbox.checked = false;
+    if (message) {
+      generatePreviewResult.hidden = false;
+      generatePreviewResult.className = "result-box result-box-error";
+      generatePreviewResult.innerHTML = "<strong>Preview required.</strong><p>" + escapeHtml(message) + "</p>";
+    } else {
+      generatePreviewResult.hidden = true;
+      generatePreviewResult.innerHTML = "";
+    }
+    updateGenerateActionState();
+  }
+
+  function clearGenerateResult() {
+    generateResult.hidden = true;
+    generateResult.className = "result-box";
+    generateResult.innerHTML = "";
+  }
+
+  function clearGenerationPoll() {
+    if (generationStatusPollTimer) {
+      window.clearTimeout(generationStatusPollTimer);
+      generationStatusPollTimer = null;
+    }
+  }
+
+  function clearGenerationSelectionSettleTimer() {
+    if (generationSelectionSettleTimer) {
+      window.clearTimeout(generationSelectionSettleTimer);
+      generationSelectionSettleTimer = null;
+    }
+  }
+
+  function resetGenerationViewAbortController() {
+    if (generationViewAbortController) {
+      generationViewAbortController.abort();
+    }
+    generationViewAbortController = new AbortController();
+    return generationViewAbortController;
+  }
+
+  function isActiveGenerationSelection(slug, requestId) {
+    return requestId === generationView.requestId
+      && String(generationView.slug || "") === String(slug || "").trim();
+  }
+
+  function getActiveGenerationRequest(slug, options) {
+    return {
+      slug: String(slug || "").trim(),
+      requestId: options && options.requestId != null ? options.requestId : generationView.requestId,
+      signal: options && options.signal ? options.signal : (generationViewAbortController ? generationViewAbortController.signal : null)
+    };
+  }
+
+  function beginGenerationSelectionLoad(slug) {
+    const selectedSlug = String(slug || "").trim();
+    generationSelectionRequestId += 1;
+    generationStatusLoading = Boolean(selectedSlug);
+    generationView = {
+      slug: selectedSlug,
+      requestId: generationSelectionRequestId,
+      loading: Boolean(selectedSlug),
+      statusPayload: null,
+      sitePayload: null,
+      error: null
+    };
+    clearGenerationPoll();
+    clearGenerationSelectionSettleTimer();
+    resetGenerationViewAbortController();
+    generatePreviewState = null;
+    generateConfirmCheckbox.checked = false;
+    generatePreviewResult.hidden = true;
+    generatePreviewResult.innerHTML = "";
+    clearGenerateResult();
+    renderGenerationSurface();
+    updateGenerateActionState();
+    return generationSelectionRequestId;
+  }
+
+  function updateGenerateActionState() {
+    const project = getSelectedGenerateProject();
+    const prompt = getNormalizedGeneratePrompt();
+    const promptValidation = getGeneratePromptValidation(prompt);
+    const readyToGenerate = Boolean(project && project.dependency_state && project.dependency_state.can_generate);
+    const previewMatchesPrompt = Boolean(
+      generatePreviewState
+      && generatePreviewState.plan_id
+      && generatePreviewState.prompt === prompt
+      && generatePreviewState.stale !== true
+    );
+
+    generatePreviewButton.disabled = generationActionInFlight || generationStatusLoading || !project || !readyToGenerate || !promptValidation.valid;
+    generateSubmitButton.disabled = !(
+      !generationActionInFlight
+      && !generationStatusLoading
+      && project
+      && readyToGenerate
+      && previewMatchesPrompt
+      && generateConfirmCheckbox.checked === true
+    );
+  }
+
+  function buildGeneratePreviewHtml(result, options) {
+    const safeResult = result && typeof result === "object" ? result : {};
+    const interpretedFields = safeResult.interpreted_fields && typeof safeResult.interpreted_fields === "object"
+      ? safeResult.interpreted_fields
+      : {};
+    const fieldEntries = Object.entries(interpretedFields);
+    const warnings = Array.isArray(safeResult.warnings) ? safeResult.warnings : [];
+    const stale = Boolean(options && options.stale);
+
+    return {
+      className: stale ? "result-box result-box-error" : "result-box result-box-success",
+      html: [
+      "<strong>" + escapeHtml(stale ? "Preview is stale." : "Generate preview ready.") + "</strong>",
+      stale ? "<p>The prompt changed after preview. Preview Plan again before Generate.</p>" : "",
+      "<p><span>Plan ID:</span> " + escapeHtml(safeResult.plan_id || "Unavailable") + "</p>",
+      "<p><span>Prompt hash:</span> " + escapeHtml(safeResult.prompt_hash || "Unavailable") + "</p>",
+      "<p><span>Personalization source:</span> " + escapeHtml(safeResult.personalization_source || "local_interpreter") + "</p>",
+      "<p><span>Provider called:</span> " + escapeHtml(String(safeResult.provider_called === true)) + "</p>",
+      "<p><span>Can generate:</span> " + escapeHtml(String(safeResult.can_generate === true)) + "</p>",
+      "<p><span>Dependency blockers:</span> " + escapeHtml((safeResult.dependency_blockers || []).length ? safeResult.dependency_blockers.join(", ") : "None") + "</p>",
+      "<p><span>Estimated input tokens:</span> " + escapeHtml(String(safeResult.estimated_input_tokens != null ? safeResult.estimated_input_tokens : "Not available")) + "</p>",
+      "<p><span>Estimated output tokens:</span> " + escapeHtml(String(safeResult.estimated_output_tokens != null ? safeResult.estimated_output_tokens : "Not available")) + "</p>",
+      "<p><span>Estimated total tokens:</span> " + escapeHtml(String(safeResult.estimated_total_tokens != null ? safeResult.estimated_total_tokens : "Not available")) + "</p>",
+      "<p><span>Estimated cost:</span> " + escapeHtml(String(safeResult.estimated_cost == null ? "Not available" : safeResult.estimated_cost)) + "</p>",
+      "<p><span>Plan proof:</span> " + escapeHtml(safeResult.plan_proof_path || "Unavailable") + "</p>",
+      "<p><span>Estimate proof:</span> " + escapeHtml(safeResult.estimate_proof_path || "Unavailable") + "</p>",
+      fieldEntries.length
+        ? "<p><span>Interpreted fields:</span></p><ul>" + fieldEntries.map(([key, value]) => "<li><strong>" + escapeHtml(key) + ":</strong> " + escapeHtml(value) + "</li>").join("") + "</ul>"
+        : "<p><span>Interpreted fields:</span> None</p>",
+      "<ul class=\"warning-list\">"
+        + "<li>Generate will modify this WordPress project.</li>"
+        + "<li>Local interpreter source only for this phase.</li>"
+        + "<li>Full-site rollback is not available in this version.</li>"
+        + "<li>Safe-field rollback is not the same as full-site rollback.</li>"
+        + "</ul>",
+      warnings.length ? "<ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : ""
+      ].join("")
+    };
+  }
+
+  function renderGeneratePreview(result, options) {
+    const view = buildGeneratePreviewHtml(result, options);
+    generatePreviewResult.hidden = false;
+    generatePreviewResult.className = view.className;
+    generatePreviewResult.innerHTML = view.html;
+  }
+
+  function buildGenerationStatusHtml(payload) {
+    if (!payload || !payload.project) {
+      return "<p class=\"empty-state\">Select a project to review generate readiness.</p>";
+    }
+
+    const setup = payload.setup || {};
+    const latestPlan = payload.latest_plan || null;
+    const latestOperation = payload.current_operation || payload.latest_operation || null;
+    const site = payload.site || {};
+    const blockers = setup.dependencies && Array.isArray(setup.dependencies.blockers)
+      ? setup.dependencies.blockers
+      : [];
+    const generatedUrls = site.generated_urls || {};
+    const siteLinks = [
+      generatedUrls.home || generatedUrls.root ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.home || generatedUrls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Home</a>" : "",
+      generatedUrls.properties ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.properties) + "\" target=\"_blank\" rel=\"noreferrer\">Open Properties</a>" : "",
+      generatedUrls.contact ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.contact) + "\" target=\"_blank\" rel=\"noreferrer\">Open Contact</a>" : ""
+    ].filter(Boolean).join("");
+
+    return [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(setup.ready_to_generate ? "Ready to Generate" : "Blocked") + "</span>",
+      "  </div>",
+      "  <dl>",
+      "    <div><dt>Project</dt><dd>" + escapeHtml(payload.project.slug) + "</dd></div>",
+      "    <div><dt>WordPress</dt><dd>" + escapeHtml(payload.project.wp_url || "Unavailable") + "</dd></div>",
+      "    <div><dt>Dependencies</dt><dd>" + escapeHtml(setup.dependencies && setup.dependencies.status || "unknown") + "</dd></div>",
+      "    <div><dt>Ready to Generate</dt><dd>" + escapeHtml(String(setup.ready_to_generate === true)) + "</dd></div>",
+      "    <div><dt>Latest plan</dt><dd>" + escapeHtml(latestPlan && latestPlan.plan_id || "None") + "</dd></div>",
+      "    <div><dt>Interpreter</dt><dd>" + escapeHtml(latestPlan && latestPlan.personalization_source || "local_interpreter") + "</dd></div>",
+      "    <div><dt>Latest operation</dt><dd>" + escapeHtml(latestOperation && latestOperation.status || "none") + "</dd></div>",
+      "    <div><dt>Operation step</dt><dd>" + escapeHtml(latestOperation && latestOperation.status_detail || "n/a") + "</dd></div>",
+      "    <div><dt>Generate proof</dt><dd>" + escapeHtml(site.latest_generate_proof_path || "Unavailable") + "</dd></div>",
+      "  </dl>",
+      blockers.length ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>" : "  <p class=\"project-note\">Preview Plan and Generate are available after a valid prompt and explicit confirmation.</p>",
+      latestOperation && latestOperation.operation_path ? "  <p class=\"project-note\">Operation record: " + escapeHtml(latestOperation.operation_path) + "</p>" : "",
+      siteLinks ? "  <div class=\"site-links\">" + siteLinks + "</div>" : "",
+      "</article>"
+    ].join("\n");
+  }
+
+  function buildGenerationStatusFromProjectCache(project) {
+    if (!project) {
+      return "<p class=\"empty-state\">Select a project to review generate readiness.</p>";
+    }
+
+    const dependencyState = project.dependency_state || {};
+    const blockers = Array.isArray(dependencyState.blockers) ? dependencyState.blockers : [];
+    const readyToGenerate = dependencyState.can_generate === true;
+    const generation = project.generation || {};
+
+    return [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(project.site_name || project.slug || "Project") + "</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(readyToGenerate ? "Ready to Generate" : "Blocked") + "</span>",
+      "  </div>",
+      "  <dl>",
+      "    <div><dt>Project</dt><dd>" + escapeHtml(project.slug || "Unavailable") + "</dd></div>",
+      "    <div><dt>WordPress</dt><dd>" + escapeHtml(project.wp_url || "Unavailable") + "</dd></div>",
+      "    <div><dt>Dependencies</dt><dd>" + escapeHtml(dependencyState.status || "unknown") + "</dd></div>",
+      "    <div><dt>Ready to Generate</dt><dd>" + escapeHtml(String(readyToGenerate)) + "</dd></div>",
+      "    <div><dt>Latest plan</dt><dd>" + escapeHtml(project.current_run_id || "None") + "</dd></div>",
+      "    <div><dt>Interpreter</dt><dd>local_interpreter</dd></div>",
+      "    <div><dt>Latest operation</dt><dd>" + escapeHtml(generation.status || "none") + "</dd></div>",
+      "    <div><dt>Operation step</dt><dd>n/a</dd></div>",
+      "    <div><dt>Generate proof</dt><dd>Unavailable</dd></div>",
+      "  </dl>",
+      blockers.length
+        ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>"
+        : "  <p class=\"project-note\">Preview Plan and Generate are available after a valid prompt and explicit confirmation.</p>",
+      "</article>"
+    ].join("\n");
+  }
+
+  function updateGenerationPolling(payload) {
+    clearGenerationPoll();
+
+    const operation = payload && (payload.current_operation || payload.latest_operation);
+    if (!operation || operation.status !== "running") {
+      return;
+    }
+
+    generationStatusPollTimer = window.setTimeout(() => {
+      loadGenerationStatus(generationView.slug, { requestId: generationView.requestId }).catch((error) => {
+        if (isActiveGenerationSelection(generationView.slug, generationView.requestId)) {
+          generationView.error = error.message;
+          renderGenerationSurface();
+        }
+      });
+    }, 2000);
+  }
+
+  function startGenerationWatch(slug, planId) {
+    clearGenerationPoll();
+    generationView.loading = true;
+    generationView.error = null;
+    generationView.statusPayload = {
+      project: {
+        site_name: String(slug || ""),
+        slug: String(slug || ""),
+        wp_url: ""
+      },
+      setup: {
+        ready_to_generate: true,
+        dependencies: {
+          status: "running",
+          blockers: []
+        }
+      },
+      latest_plan: {
+        plan_id: String(planId || ""),
+        personalization_source: "local_interpreter"
+      },
+      current_operation: {
+        status: "running",
+        status_detail: "preparing"
+      },
+      latest_operation: {
+        status: "running",
+        status_detail: "preparing"
+      },
+      site: {
+        latest_generate_proof_path: null,
+        generated_urls: {}
+      }
+    };
+    renderGenerationSurface();
+
+    const poll = async () => {
+      if (!generationActionInFlight) {
+        return;
+      }
+      try {
+        await loadGenerationStatus(slug, { requestId: generationView.requestId });
+      } catch (error) {
+        // Keep the optimistic running card if polling is temporarily unavailable.
+      } finally {
+        if (generationActionInFlight) {
+          generationStatusPollTimer = window.setTimeout(poll, 2000);
+        }
+      }
+    };
+
+    generationStatusPollTimer = window.setTimeout(poll, 400);
   }
 
   function formatCountChange(beforeValue, afterValue) {
@@ -382,7 +755,7 @@
     return String(beforeValue) + " -> " + String(afterValue);
   }
 
-  function renderSiteStatus(payload) {
+  function buildSiteStatusHtml(payload) {
     const site = payload.site || {};
     const urls = site.generated_urls || {};
     const counts = site.counts_summary || {};
@@ -392,8 +765,7 @@
     const warnings = Array.isArray(site.warnings) ? site.warnings : [];
 
     if (!site.latest_generate_proof_id && !site.generated_site_present) {
-      setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
-      return;
+      return null;
     }
 
     const links = [
@@ -404,7 +776,7 @@
       site.frontend_edit_available && site.frontend_edit_login_url ? "<a class=\"site-link\" href=\"" + escapeHtml(site.frontend_edit_login_url) + "\" target=\"_blank\" rel=\"noreferrer\">Login to Edit</a>" : ""
     ].filter(Boolean).join("");
 
-    siteStatus.innerHTML = [
+    return [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
       "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
@@ -429,6 +801,62 @@
       warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       "</article>"
     ].join("\n");
+  }
+
+  function renderGenerationSurface() {
+    const selectedSlug = String(generationView.slug || "");
+    generationStatus.dataset.projectSlug = selectedSlug;
+    generationStatus.dataset.requestId = String(generationView.requestId || 0);
+    siteStatus.dataset.projectSlug = selectedSlug;
+    siteStatus.dataset.requestId = String(generationView.requestId || 0);
+
+    if (!selectedSlug) {
+      setGenerationStatusEmpty("Select a project to review generate readiness.");
+      setSiteStatusEmpty("Select a project to view generated site proof.");
+      updateGenerateActionState();
+      return;
+    }
+
+    if (generationView.loading && !generationView.statusPayload) {
+      setGenerationStatusEmpty("Loading generate readiness for " + selectedSlug + "...");
+    } else if (
+      generationView.statusPayload
+      && generationView.statusPayload.project
+      && String(generationView.statusPayload.project.slug || "") === selectedSlug
+    ) {
+      generationStatus.innerHTML = buildGenerationStatusHtml(generationView.statusPayload);
+    } else if (generationView.error) {
+      generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(generationView.error) + "</p>";
+    } else {
+      const cachedProject = projectsCache.find((entry) => entry.slug === selectedSlug);
+      generationStatus.innerHTML = buildGenerationStatusFromProjectCache(cachedProject);
+    }
+
+    if (generationView.loading && !generationView.sitePayload) {
+      setSiteStatusEmpty("Loading generated site status for " + selectedSlug + "...");
+    } else if (
+      generationView.sitePayload
+      && generationView.sitePayload.project
+      && String(generationView.sitePayload.project.slug || "") === selectedSlug
+    ) {
+      const siteMarkup = buildSiteStatusHtml(generationView.sitePayload);
+      if (siteMarkup) {
+        siteStatus.innerHTML = siteMarkup;
+      } else {
+        setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
+      }
+    } else if (generationView.error) {
+      setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
+    } else {
+      const cachedProject = projectsCache.find((entry) => entry.slug === selectedSlug);
+      if (cachedProject && cachedProject.generation && cachedProject.generation.last_proof_id) {
+        setSiteStatusEmpty("Loading generated site status for " + selectedSlug + "...");
+      } else {
+        setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
+      }
+    }
+
+    updateGenerateActionState();
   }
 
   function renderManagedState(payload) {
@@ -839,26 +1267,129 @@
     }
   }
 
-  async function loadSiteStatus(slug) {
-    const selectedSlug = String(slug || "").trim();
+  async function loadSiteStatus(slug, options) {
+    const activeRequest = getActiveGenerationRequest(slug, options);
+    const selectedSlug = activeRequest.slug;
+    const requestId = activeRequest.requestId;
+    const requestSignal = activeRequest.signal;
     if (!selectedSlug) {
-      setSiteStatusEmpty("Select a project to view generated site proof.");
+      generationView.sitePayload = null;
+      generationView.error = null;
+      renderGenerationSurface();
+      return;
+    }
+
+    if (!isActiveGenerationSelection(selectedSlug, requestId)) {
       return;
     }
 
     const project = projectsCache.find((entry) => entry.slug === selectedSlug);
     if (!project || !(project.generation && project.generation.last_proof_id)) {
-      setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
+      if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+        return;
+      }
+      generationView.sitePayload = null;
+      generationView.error = null;
+      renderGenerationSurface();
       return;
     }
 
-    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/site");
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/site", {
+      signal: requestSignal || undefined
+    });
     const payload = await response.json();
+    if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+      return;
+    }
     if (!response.ok) {
       throw new Error(payload.error || "Unable to load generated site status.");
     }
 
-    renderSiteStatus(payload);
+    generationView.sitePayload = payload;
+    generationView.error = null;
+    renderGenerationSurface();
+  }
+
+  async function loadGenerationStatus(slug, options) {
+    const activeRequest = getActiveGenerationRequest(slug, options);
+    const selectedSlug = activeRequest.slug;
+    const requestId = activeRequest.requestId;
+    const requestSignal = activeRequest.signal;
+    if (!selectedSlug) {
+      generationView.statusPayload = null;
+      generationView.error = null;
+      renderGenerationSurface();
+      updateGenerateActionState();
+      return;
+    }
+
+    if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+      return;
+    }
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/generation", {
+      signal: requestSignal || undefined
+    });
+    const payload = await response.json();
+    if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(payload.error || "Unable to load generation status.");
+    }
+
+    generationView.statusPayload = payload;
+    generationView.error = null;
+    renderGenerationSurface();
+    updateGenerationPolling(payload);
+  }
+
+  async function loadGenerationViewForSelection(slug) {
+    const selectedSlug = String(slug || "").trim();
+    if (selectedSlug && String(generateProjectSlug.value || "").trim() !== selectedSlug) {
+      return;
+    }
+    const requestId = beginGenerationSelectionLoad(selectedSlug);
+
+    if (!selectedSlug) {
+      generationStatusLoading = false;
+      updateGenerateActionState();
+      return;
+    }
+
+    try {
+      await Promise.all([
+        loadGenerationStatus(selectedSlug, { requestId }),
+        loadSiteStatus(selectedSlug, { requestId })
+      ]);
+
+      generationSelectionSettleTimer = window.setTimeout(async () => {
+        if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+          return;
+        }
+        try {
+          await loadGenerationStatus(selectedSlug, { requestId });
+          await loadSiteStatus(selectedSlug, { requestId });
+        } catch (error) {
+          if (isActiveGenerationSelection(selectedSlug, requestId)) {
+            generationView.error = error.message;
+            renderGenerationSurface();
+          }
+        }
+      }, 1200);
+    } catch (error) {
+      if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+        return;
+      }
+      generationView.error = error.message;
+      renderGenerationSurface();
+    } finally {
+      if (isActiveGenerationSelection(selectedSlug, requestId)) {
+        generationStatusLoading = false;
+        generationView.loading = false;
+        updateGenerateActionState();
+      }
+    }
   }
 
   async function loadManagedState(slug) {
@@ -893,7 +1424,8 @@
     renderProofPackStatus(payload);
   }
 
-  async function loadProjects() {
+  async function loadProjects(options) {
+    const preserveGeneratePreview = Boolean(options && options.preserveGeneratePreview);
     const requestId = ++loadProjectsRequestId;
     const response = await fetch("/api/projects");
     const payload = await response.json();
@@ -904,19 +1436,51 @@
     if (requestId !== loadProjectsRequestId) {
       return;
     }
-    await loadSetupStatus(setupProjectSlug.value);
-    await loadSiteStatus(generateProjectSlug.value);
-    await loadManagedState(generateProjectSlug.value);
-    await loadProofPack(generateProjectSlug.value);
+    const setupSlugSnapshot = String(setupProjectSlug.value || "").trim();
+    const generateSlugSnapshot = String(generateProjectSlug.value || "").trim();
+    await loadSetupStatus(setupSlugSnapshot);
+    if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
+      return;
+    }
+      if (preserveGeneratePreview) {
+        const activeGenerationRequestId = generationView.requestId;
+        generationStatusLoading = true;
+        generationView.loading = true;
+        renderGenerationSurface();
+        updateGenerateActionState();
+        try {
+          await loadGenerationStatus(generateSlugSnapshot, { requestId: activeGenerationRequestId });
+          await loadSiteStatus(generateSlugSnapshot, { requestId: activeGenerationRequestId });
+        } finally {
+          if (isActiveGenerationSelection(generateSlugSnapshot, activeGenerationRequestId)) {
+            generationStatusLoading = false;
+            generationView.loading = false;
+            renderGenerationSurface();
+            updateGenerateActionState();
+          }
+        }
+      } else {
+        await loadGenerationViewForSelection(generateSlugSnapshot);
+    }
+    if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
+      return;
+    }
+    await loadManagedState(generateSlugSnapshot);
+    if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
+      return;
+    }
+    await loadProofPack(generateSlugSnapshot);
   }
 
   setupProjectSlug.addEventListener("change", () => {
+    loadProjectsRequestId += 1;
+    loadSetupStatusRequestId += 1;
     preferredSelectedSlug = setupProjectSlug.value;
     planProjectSlug.value = setupProjectSlug.value;
     generateProjectSlug.value = setupProjectSlug.value;
     Promise.all([
       loadSetupStatus(setupProjectSlug.value),
-      loadSiteStatus(setupProjectSlug.value),
+      loadGenerationViewForSelection(setupProjectSlug.value),
       loadManagedState(setupProjectSlug.value),
       loadProofPack(setupProjectSlug.value)
     ]).catch((error) => {
@@ -925,25 +1489,46 @@
   });
 
   planProjectSlug.addEventListener("change", () => {
+    loadProjectsRequestId += 1;
+    loadSetupStatusRequestId += 1;
     preferredSelectedSlug = planProjectSlug.value;
     setupProjectSlug.value = planProjectSlug.value;
     generateProjectSlug.value = planProjectSlug.value;
-    loadProjects().catch((error) => {
+    Promise.all([
+      loadSetupStatus(planProjectSlug.value),
+      loadGenerationViewForSelection(planProjectSlug.value),
+      loadManagedState(planProjectSlug.value),
+      loadProofPack(planProjectSlug.value)
+    ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
   });
   generateProjectSlug.addEventListener("change", () => {
+    loadProjectsRequestId += 1;
+    loadSetupStatusRequestId += 1;
     preferredSelectedSlug = generateProjectSlug.value;
     setupProjectSlug.value = generateProjectSlug.value;
     planProjectSlug.value = generateProjectSlug.value;
     Promise.all([
       loadSetupStatus(generateProjectSlug.value),
-      loadSiteStatus(generateProjectSlug.value),
+      loadGenerationViewForSelection(generateProjectSlug.value),
       loadManagedState(generateProjectSlug.value),
       loadProofPack(generateProjectSlug.value)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
+  });
+
+  generatePrompt.addEventListener("input", () => {
+    if (generatePreviewState && generatePreviewState.prompt !== getNormalizedGeneratePrompt()) {
+      generatePreviewState.stale = true;
+      renderGeneratePreview(generatePreviewState.result, { stale: true });
+    }
+    updateGenerateActionState();
+  });
+
+  generateConfirmCheckbox.addEventListener("change", () => {
+    updateGenerateActionState();
   });
 
   createForm.addEventListener("submit", async (event) => {
@@ -985,6 +1570,7 @@
         planProjectSlug.value = result.project.slug;
         generateProjectSlug.value = result.project.slug;
         await loadSetupStatus(result.project.slug);
+        await loadGenerationViewForSelection(result.project.slug);
       }
     } finally {
       submitButton.disabled = false;
@@ -1019,30 +1605,113 @@
     await loadProjects();
   });
 
-  generateForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  generatePreviewButton.addEventListener("click", async () => {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const selectionRequestId = generationSelectionRequestId;
+    const prompt = getNormalizedGeneratePrompt();
+    const promptValidation = getGeneratePromptValidation(prompt);
 
-    const formData = new FormData(generateForm);
-    const slug = String(formData.get("slug") || "").trim();
-
-    const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        projectsRoot: config.projectsRoot
-      })
-    });
-
-    const result = await response.json();
-    if (!response.ok) {
-      showResult(generateResult, result, true);
+    if (!promptValidation.valid) {
+      resetGeneratePreview(promptValidation.message);
       return;
     }
 
-    renderGenerateResult(result);
-    await loadProjects();
+    generationActionInFlight = true;
+    updateGenerateActionState();
+    generateResult.hidden = true;
+
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/generation/plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ prompt })
+      });
+      const result = await response.json();
+      if (!isActiveGenerationSelection(slug, selectionRequestId)) {
+        return;
+      }
+      if (!response.ok) {
+        showResult(generatePreviewResult, result, true);
+        return;
+      }
+
+      generatePreviewState = {
+        plan_id: result.plan_id,
+        prompt,
+        result,
+        stale: false
+      };
+      generateConfirmCheckbox.checked = false;
+      renderGeneratePreview(result);
+      await loadProjects({ preserveGeneratePreview: true });
+    } catch (error) {
+      if (isActiveGenerationSelection(slug, selectionRequestId)) {
+        showResult(generatePreviewResult, { error: error.message }, true);
+      }
+    } finally {
+      generationActionInFlight = false;
+      updateGenerateActionState();
+    }
+  });
+
+  generateForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const slug = String(generateProjectSlug.value || "").trim();
+    const selectionRequestId = generationSelectionRequestId;
+    const prompt = getNormalizedGeneratePrompt();
+    const promptValidation = getGeneratePromptValidation(prompt);
+    if (!promptValidation.valid) {
+      resetGeneratePreview(promptValidation.message);
+      return;
+    }
+
+    if (!generatePreviewState || generatePreviewState.stale || generatePreviewState.prompt !== prompt) {
+      resetGeneratePreview("Preview Plan again before Generate.");
+      return;
+    }
+
+    generationActionInFlight = true;
+    updateGenerateActionState();
+    startGenerationWatch(slug, generatePreviewState.plan_id);
+
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          plan_id: generatePreviewState.plan_id,
+          confirm_generate: true
+        })
+      });
+
+      const result = await response.json();
+      if (!isActiveGenerationSelection(slug, selectionRequestId)) {
+        return;
+      }
+      if (!response.ok) {
+        showResult(generateResult, result, true);
+        await loadGenerationStatus(slug, { requestId: selectionRequestId });
+        return;
+      }
+
+      renderGenerateResult(result);
+      generatePreviewState = null;
+      generateConfirmCheckbox.checked = false;
+      await loadProjects();
+      await loadGenerationStatus(slug, { requestId: selectionRequestId });
+    } catch (error) {
+      if (isActiveGenerationSelection(slug, selectionRequestId)) {
+        showResult(generateResult, { error: error.message }, true);
+      }
+    } finally {
+      generationActionInFlight = false;
+      updateGenerateActionState();
+    }
   });
 
   refreshStateButton.addEventListener("click", async () => {

@@ -117,7 +117,9 @@ function defaultGenerationMetadata() {
     status: "not_generated",
     last_generate_run_id: null,
     last_proof_id: null,
-    generated_at: null
+    generated_at: null,
+    last_operation_id: null,
+    last_plan_id: null
   };
 }
 

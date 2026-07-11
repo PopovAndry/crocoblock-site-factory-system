@@ -320,6 +320,7 @@ async function planProject(options) {
     project_id: projectState.project.project_id,
     slug: projectState.project.slug,
     prompt,
+    prompt_hash: hashPrompt(prompt),
     prompt_personalization: promptPersonalization,
     generate_would_apply_personalization: appliedFieldKeys.length > 0,
     ai_mode: aiState.mode,
