@@ -68,6 +68,7 @@ Primary proof artifacts live under:
 
 Start with:
 
+- [start-here.md](start-here.md)
 - [release-checklist.md](release-checklist.md)
 - [evaluator-script.md](evaluator-script.md)
 - [alpha-v0.1-release-notes.md](alpha-v0.1-release-notes.md)
@@ -81,12 +82,13 @@ Start with:
 ## How To Read This Folder
 
 1. Read [release-checklist.md](release-checklist.md) for the release gate and pass/fail checklist.
-2. Read [evaluator-script.md](evaluator-script.md) for the final read-only evaluator walkthrough.
-3. Read [alpha-v0.1-release-notes.md](alpha-v0.1-release-notes.md) for the alpha release summary and scope.
-4. Read [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md) for the current proof chain and reviewer notes.
-5. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
-6. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
-7. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
+2. Read [start-here.md](start-here.md) for the quickest local preflight + Launcher start path.
+3. Read [evaluator-script.md](evaluator-script.md) for the final read-only evaluator walkthrough.
+4. Read [alpha-v0.1-release-notes.md](alpha-v0.1-release-notes.md) for the alpha release summary and scope.
+5. Read [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md) for the current proof chain and reviewer notes.
+6. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
+7. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
+8. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
 
 ## One-command Read-only Smoke
 
@@ -105,3 +107,15 @@ Requirement modes:
   pass only when the project also has the live AI safe-apply and rollback proof chain
 
 This means a fresh generated-only project can pass `generated-site` smoke while still remaining partial for `full-alpha`.
+
+## Convenience Scripts
+
+These wrappers keep the evaluator path easy to remember:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\factory-preflight.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-launcher.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\alpha-smoke.ps1 -Slug alpha-v01-fresh-smoke-1
+```
+
+They are packaging helpers only. They do not run live AI, apply, rollback, generate, or dependency install.
