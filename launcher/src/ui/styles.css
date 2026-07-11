@@ -290,6 +290,51 @@ body {
   color: var(--muted);
 }
 
+.setup-step-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.setup-step-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.setup-step-card h4 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.setup-step-card__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.setup-step-card dl {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.setup-step-card dl div {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: 12px;
+}
+
+.setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .result-box {
   margin-top: 16px;
   padding: 14px 16px;

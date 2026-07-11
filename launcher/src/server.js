@@ -10,6 +10,12 @@ const {
   listProjects,
   resolveProjectsRoot
 } = require("./project-store");
+const { provisionProject } = require("./provision");
+const { installAgent } = require("./install-agent");
+const { installDependency } = require("./install-dependency");
+const { listApprovedDependencySources, resolveApprovedDependencySource } = require("./dependency-sources");
+const { getSetupStatus } = require("./setup");
+const { withSetupMutationLock } = require("./setup-lock");
 const { planProject } = require("./plan");
 const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
 const { generateProject } = require("./generate");
@@ -95,21 +101,22 @@ function renderHomePage(config) {
     "      <section class=\"panel\">",
     "        <div class=\"panel-header\">",
     "          <h2>Create project</h2>",
-    "          <p>Write a local project scaffold without starting Docker or touching WordPress.</p>",
+    "          <p>Write a local real estate project scaffold without starting Docker or touching WordPress.</p>",
     "        </div>",
     "        <form id=\"create-project-form\" class=\"project-form\">",
-    "          <label>",
+      "          <label>",
     "            <span>Site name</span>",
     "            <input name=\"name\" type=\"text\" required placeholder=\"Kyiv Realty\">",
+    "          </label>",
+    "          <label>",
+    "            <span>Project slug</span>",
+    "            <input name=\"slug\" type=\"text\" required placeholder=\"kyiv-realty\" pattern=\"[a-z0-9]+(?:-[a-z0-9]+)*\">",
     "          </label>",
     "          <label>",
     "            <span>WordPress port</span>",
     "            <input name=\"port\" type=\"number\" min=\"1024\" max=\"65535\" value=\"8120\" required>",
     "          </label>",
-    "          <label>",
-    "            <span>Projects root</span>",
-    "            <input name=\"projectsRoot\" type=\"text\" value=\"" + escapeHtml(config.projectsRoot) + "\">",
-    "          </label>",
+    "          <p class=\"project-note\">Vertical: Real Estate. Projects root: " + escapeHtml(config.projectsRoot) + "</p>",
     "          <button type=\"submit\" class=\"button\">Create project scaffold</button>",
     "        </form>",
     "        <div id=\"create-result\" class=\"result-box\" hidden></div>",
@@ -121,6 +128,20 @@ function renderHomePage(config) {
     "        </div>",
     "        <div id=\"project-list\" class=\"project-list\"></div>",
     "      </section>",
+    "    </section>",
+    "    <section class=\"panel single-panel\">",
+    "      <div class=\"panel-header\">",
+    "        <h2>Project Setup</h2>",
+    "        <p>Create a project, provision WordPress, install the Site Factory Agent, and onboard the required approved dependencies until the runtime is ready to generate.</p>",
+    "      </div>",
+    "      <form id=\"setup-project-form\" class=\"project-form compact-form\">",
+    "        <label>",
+    "          <span>Project</span>",
+    "          <select name=\"slug\" id=\"setup-project-slug\"></select>",
+    "        </label>",
+    "      </form>",
+    "      <div id=\"setup-status\" class=\"project-list\"></div>",
+    "      <div id=\"setup-result\" class=\"result-box\" hidden></div>",
     "    </section>",
     "    <section class=\"panel-grid\">",
     "      <section class=\"panel\">",
@@ -294,13 +315,22 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/dependency-sources") {
+        sendJson(response, 200, {
+          ok: true,
+          sources: listApprovedDependencySources()
+        });
+        return;
+      }
+
       if (request.method === "POST" && requestUrl.pathname === "/api/projects") {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
         const result = createProjectScaffold({
           name: payload.name,
           port: payload.port,
-          projectsRoot: payload.projectsRoot || projectsRoot
+          slug: payload.slug,
+          projectsRoot
         });
 
         sendJson(response, 201, {
@@ -310,6 +340,118 @@ function createLauncherServer(options) {
           project: result.project,
           files_written: result.files_written,
           directories_written: result.directories_written
+        });
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/setup$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await getSetupStatus({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          approved_sources: result.approved_sources,
+          setup: result.setup,
+          warnings: result.warnings
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/provision$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await withSetupMutationLock(slug, "provision", () => {
+          return provisionProject({
+            slug,
+            projectsRoot
+          });
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          status: "ready",
+          wp_url: result.project.wp_url,
+          root_http_status: result.rootHttpStatus,
+          wp_json_status: result.wpJsonStatus,
+          proof: result.proof,
+          proof_path: result.proofPath
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await withSetupMutationLock(slug, "install-agent", () => {
+          return installAgent({
+            slug,
+            projectsRoot
+          });
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          status: "ready",
+          rest_base: result.restBase,
+          health: result.health,
+          capabilities: result.capabilities,
+          proof: result.proof,
+          proof_path: result.proofPath
+        });
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/dependencies$/.test(requestUrl.pathname)) {
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const result = await getSetupStatus({
+          slug,
+          projectsRoot
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          approved_sources: result.approved_sources,
+          dependencies: result.setup.dependencies.rows,
+          blockers: result.setup.dependencies.blockers,
+          can_generate: result.setup.dependencies.can_generate,
+          proof_path: result.setup.dependencies.proof_path,
+          warnings: result.warnings
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname)) {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const approvedSource = resolveApprovedDependencySource(payload.dependency);
+
+        if (!approvedSource.exists) {
+          const missingError = new Error("Approved dependency ZIP is missing for " + approvedSource.key + ": " + approvedSource.absolutePath);
+          missingError.code = "approved_dependency_zip_missing";
+          throw missingError;
+        }
+
+        const result = await withSetupMutationLock(slug, "install-dependency:" + approvedSource.key, () => {
+          return installDependency({
+            slug,
+            dependency: payload.dependency,
+            zip: approvedSource.absolutePath,
+            projectsRoot
+          });
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          dependency: result.dependency.slug,
+          proof: result.proof,
+          proof_path: result.proofPath
         });
         return;
       }
@@ -659,8 +801,11 @@ function createLauncherServer(options) {
 
       sendText(response, 404, "Not found");
     } catch (error) {
-      const statusCode = request.method === "POST" && (
+      const statusCode = error.statusCode || (request.method === "POST" && (
         requestUrl.pathname === "/api/projects" ||
+        /^\/api\/projects\/[^/]+\/provision$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
@@ -672,11 +817,12 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/enable-live$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
-      ) ? 400 : 500;
+      ) ? 400 : 500);
       sendJson(response, statusCode, {
         ok: false,
         error: error.message,
         code: error.code || null,
+        current_operation: error.current_operation || null,
         proof_path: error.proofPath || null
       });
     }

@@ -5,6 +5,10 @@
   const projectList = document.getElementById("project-list");
   const createForm = document.getElementById("create-project-form");
   const createResult = document.getElementById("create-result");
+  const setupProjectForm = document.getElementById("setup-project-form");
+  const setupProjectSlug = document.getElementById("setup-project-slug");
+  const setupStatus = document.getElementById("setup-status");
+  const setupResult = document.getElementById("setup-result");
   const planForm = document.getElementById("plan-project-form");
   const planProjectSlug = document.getElementById("plan-project-slug");
   const planResult = document.getElementById("plan-result");
@@ -41,9 +45,27 @@
   }
 
   let projectsCache = [];
+  let lastSetupPayload = null;
+  let setupActionInFlight = false;
+  let preferredSelectedSlug = "";
+  let loadProjectsRequestId = 0;
+  let loadSetupStatusRequestId = 0;
+
+  function slugifyProjectName(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .replace(/-{2,}/g, "-");
+  }
 
   function setSiteStatusEmpty(message) {
     siteStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
+  function setSetupEmpty(message) {
+    setupStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
   }
 
   function setManagedStateEmpty(message) {
@@ -59,11 +81,14 @@
 
     if (!projects.length) {
       projectList.innerHTML = "<p class=\"empty-state\">No projects yet. Create the first scaffold to prepare a runtime folder.</p>";
+      setupProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
+      setupProjectSlug.disabled = true;
       planProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
       planProjectSlug.disabled = true;
       generateProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
       generateProjectSlug.disabled = true;
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
+      setSetupEmpty("Create a project, then provision WordPress and install dependencies here.");
       setSiteStatusEmpty("No generated site result yet.");
       setManagedStateEmpty("Refresh state after generate or frontend edits.");
       setProofPackEmpty("Generate a proof pack after state and site data are available.");
@@ -77,18 +102,30 @@
       return;
     }
 
+    const previousSetupSlug = setupProjectSlug.value;
     const previousPlanSlug = planProjectSlug.value;
     const previousGenerateSlug = generateProjectSlug.value;
+    setupProjectSlug.disabled = false;
     planProjectSlug.disabled = false;
     generateProjectSlug.disabled = false;
     const projectOptions = projects.map((project) => {
       return "<option value=\"" + escapeHtml(project.slug) + "\">" + escapeHtml(project.site_name + " (" + project.slug + ")") + "</option>";
     }).join("");
+    setupProjectSlug.innerHTML = projectOptions;
     planProjectSlug.innerHTML = projectOptions;
     generateProjectSlug.innerHTML = projectOptions;
 
-    planProjectSlug.value = projects.some((project) => project.slug === previousPlanSlug) ? previousPlanSlug : projects[0].slug;
-    generateProjectSlug.value = projects.some((project) => project.slug === previousGenerateSlug) ? previousGenerateSlug : planProjectSlug.value;
+    const selectedSlug = preferredSelectedSlug && projects.some((project) => project.slug === preferredSelectedSlug)
+      ? preferredSelectedSlug
+      : (projects.some((project) => project.slug === previousSetupSlug)
+      ? previousSetupSlug
+      : (projects.some((project) => project.slug === previousGenerateSlug)
+        ? previousGenerateSlug
+        : (projects.some((project) => project.slug === previousPlanSlug) ? previousPlanSlug : projects[0].slug)));
+    preferredSelectedSlug = "";
+    setupProjectSlug.value = selectedSlug;
+    planProjectSlug.value = selectedSlug;
+    generateProjectSlug.value = selectedSlug;
 
     totalTokens.textContent = String(projects.reduce((sum, project) => {
       const usage = project.usage && Number(project.usage.total_tokens || 0);
@@ -162,6 +199,114 @@
       "</article>"
     ].join("\n");
 
+  }
+
+  function setupActionButton(label, action, disabled, extraAttributes) {
+    return "<button type=\"button\" class=\"button\" data-setup-action=\"" + escapeHtml(action) + "\"" +
+      (disabled ? " disabled" : "") +
+      (extraAttributes || "") +
+      ">" + escapeHtml(label) + "</button>";
+  }
+
+  function renderSetupStatus(payload) {
+    lastSetupPayload = payload;
+
+    if (!payload || !payload.project || !payload.setup) {
+      setSetupEmpty("Select a project to view guided setup.");
+      return;
+    }
+
+    const setup = payload.setup;
+    const dependencyRows = Array.isArray(setup.dependencies && setup.dependencies.rows)
+      ? setup.dependencies.rows
+      : [];
+    const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+    const readyToGenerate = setup.ready_to_generate === true;
+    const missingSourceKeys = dependencyRows
+      .filter((row) => !row.source_available)
+      .map((row) => row.key);
+    const installableRows = dependencyRows.filter((row) => row.source_available && !row.active);
+    const dependencyRowsMarkup = dependencyRows.map((row) => {
+      const disabled = setupActionInFlight || !setup.agent || setup.agent.status !== "ready" || !row.source_available || row.active;
+      const installAttributes = " data-dependency=\"" + escapeHtml(row.key) + "\"";
+      return [
+        "<article class=\"setup-step-card\">",
+        "  <div class=\"setup-step-card__header\">",
+        "    <h4>" + escapeHtml(row.label) + "</h4>",
+        "    <span class=\"status-pill\">" + escapeHtml(row.active ? "active" : (row.installed ? "installed" : "missing")) + "</span>",
+        "  </div>",
+        "  <dl>",
+        "    <div><dt>Required</dt><dd>Yes</dd></div>",
+        "    <div><dt>ZIP source</dt><dd>" + escapeHtml(row.source_available ? (row.source_filename || "available") : "missing") + "</dd></div>",
+        "    <div><dt>Installed</dt><dd>" + escapeHtml(String(row.installed)) + "</dd></div>",
+        "    <div><dt>Active</dt><dd>" + escapeHtml(String(row.active)) + "</dd></div>",
+        "  </dl>",
+        row.notes ? "  <p class=\"project-note\">" + escapeHtml(row.notes) + "</p>" : "",
+        "  <div class=\"setup-actions\">" + setupActionButton(row.active ? "Installed" : "Install", "install-dependency", disabled, installAttributes) + "</div>",
+        "</article>"
+      ].join("\n");
+    }).join("\n");
+
+    setupStatus.innerHTML = [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(readyToGenerate ? "Ready to Generate" : "Setup in progress") + "</span>",
+      "  </div>",
+      "  <dl>",
+      "    <div><dt>Slug</dt><dd>" + escapeHtml(payload.project.slug) + "</dd></div>",
+      "    <div><dt>Project root</dt><dd>" + escapeHtml(payload.setup.project.runtime_path || payload.project.runtime_path) + "</dd></div>",
+      "    <div><dt>WordPress</dt><dd>" + escapeHtml(setup.wordpress.status) + "</dd></div>",
+      "    <div><dt>Agent</dt><dd>" + escapeHtml(setup.agent.status) + "</dd></div>",
+      "    <div><dt>Dependencies</dt><dd>" + escapeHtml(setup.dependencies.status) + "</dd></div>",
+      "    <div><dt>Ready to Generate</dt><dd>" + escapeHtml(String(readyToGenerate)) + "</dd></div>",
+      "  </dl>",
+      "  <div class=\"setup-step-list\">",
+      "    <article class=\"setup-step-card\">",
+      "      <div class=\"setup-step-card__header\"><h4>1. Project</h4><span class=\"status-pill\">created</span></div>",
+      "      <p class=\"project-note\">Scaffolded local real estate runtime at " + escapeHtml(payload.setup.project.runtime_path || payload.project.runtime_path) + ".</p>",
+      "    </article>",
+      "    <article class=\"setup-step-card\">",
+      "      <div class=\"setup-step-card__header\"><h4>2. WordPress</h4><span class=\"status-pill\">" + escapeHtml(setup.wordpress.status) + "</span></div>",
+      "      <p class=\"project-note\">Creates Docker runtime and local WordPress files for this project only.</p>",
+      "      <dl><div><dt>URL</dt><dd>" + escapeHtml(setup.wordpress.wp_url || payload.project.wp_url) + "</dd></div><div><dt>/wp-json/</dt><dd>" + escapeHtml(String(setup.wordpress.wp_json_ok)) + "</dd></div><div><dt>Proof</dt><dd>" + escapeHtml(setup.wordpress.proof_path || "Unavailable") + "</dd></div></dl>",
+      "      <div class=\"setup-actions\">" + setupActionButton("Provision WordPress", "provision", setupActionInFlight || setup.wordpress.status === "ready") + (setup.wordpress.wp_url ? " <a class=\"site-link\" href=\"" + escapeHtml(setup.wordpress.wp_url) + "\" target=\"_blank\" rel=\"noreferrer\">Open WordPress</a>" : "") + "</div>",
+      "    </article>",
+      "    <article class=\"setup-step-card\">",
+      "      <div class=\"setup-step-card__header\"><h4>3. Agent</h4><span class=\"status-pill\">" + escapeHtml(setup.agent.status) + "</span></div>",
+      "      <p class=\"project-note\">Installs the local Site Factory Agent plugin already shipped in this repository.</p>",
+      "      <dl><div><dt>Health</dt><dd>" + escapeHtml(setup.agent.health_status || "Unavailable") + "</dd></div><div><dt>Capabilities</dt><dd>" + escapeHtml(setup.agent.capabilities_status || "Unavailable") + "</dd></div><div><dt>Proof</dt><dd>" + escapeHtml(setup.agent.proof_path || "Unavailable") + "</dd></div></dl>",
+      "      <div class=\"setup-actions\">" + setupActionButton("Install Agent", "install-agent", setupActionInFlight || setup.wordpress.status !== "ready" || setup.agent.status === "ready") + "</div>",
+      "    </article>",
+      "    <article class=\"setup-step-card\">",
+      "      <div class=\"setup-step-card__header\"><h4>4. Dependencies</h4><span class=\"status-pill\">" + escapeHtml(setup.dependencies.status) + "</span></div>",
+      "      <p class=\"project-note\">Approved local ZIP sources are resolved server-side. The browser sends only dependency keys.</p>",
+      "      <dl><div><dt>Can generate</dt><dd>" + escapeHtml(String(setup.dependencies.can_generate)) + "</dd></div><div><dt>Blockers</dt><dd>" + escapeHtml(setup.dependencies.blockers.length ? setup.dependencies.blockers.join(" | ") : "None") + "</dd></div><div><dt>Proof</dt><dd>" + escapeHtml(setup.dependencies.proof_path || "Unavailable") + "</dd></div></dl>",
+      missingSourceKeys.length ? "      <p class=\"project-note\">Missing approved ZIPs: " + escapeHtml(missingSourceKeys.join(", ")) + "</p>" : "",
+      installableRows.length ? "      <div class=\"setup-actions\">" + setupActionButton("Install Required Dependencies", "install-required", setupActionInFlight || setup.agent.status !== "ready") + "</div>" : "",
+      dependencyRowsMarkup,
+      "    </article>",
+      "    <article class=\"setup-step-card\">",
+      "      <div class=\"setup-step-card__header\"><h4>5. Ready to Generate</h4><span class=\"status-pill\">" + escapeHtml(readyToGenerate ? "ready" : "blocked") + "</span></div>",
+      "      <p class=\"project-note\">" + escapeHtml(readyToGenerate ? "Required dependencies are active. Generate stays intentionally disabled in this phase." : (setup.dependencies.next_action || "Finish the setup blockers above.")) + "</p>",
+      "    </article>",
+      "  </div>",
+      "  <div class=\"setup-actions\">" + setupActionButton("Refresh Setup Status", "refresh", setupActionInFlight) + "</div>",
+      warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
+      "</article>"
+    ].join("\n");
+  }
+
+  function renderSetupResult(payload, title) {
+    setupResult.hidden = false;
+    setupResult.className = "result-box result-box-success";
+    setupResult.innerHTML = [
+      "<strong>" + escapeHtml(title) + "</strong>",
+      payload.proof_path ? "<p><span>Proof file:</span> " + escapeHtml(payload.proof_path) + "</p>" : "",
+      payload.project && payload.project.runtime_path ? "<p><span>Project root:</span> " + escapeHtml(payload.project.runtime_path) + "</p>" : "",
+      payload.wp_url ? "<p><span>WordPress URL:</span> " + escapeHtml(payload.wp_url) + "</p>" : "",
+      payload.rest_base ? "<p><span>REST base:</span> " + escapeHtml(payload.rest_base) + "</p>" : ""
+    ].join("");
   }
 
   function showResult(target, payload, isError) {
@@ -594,6 +739,106 @@
     ].join("");
   }
 
+  async function loadSetupStatus(slug) {
+    const selectedSlug = String(slug || "").trim();
+    if (!selectedSlug) {
+      setSetupEmpty("Select a project to view guided setup.");
+      return;
+    }
+
+    const requestId = ++loadSetupStatusRequestId;
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/setup");
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Unable to load setup status.");
+    }
+
+    if (requestId !== loadSetupStatusRequestId) {
+      return;
+    }
+
+    renderSetupStatus(payload);
+  }
+
+  async function runSetupAction(action, dependencyKey) {
+    const slug = String(setupProjectSlug.value || "").trim();
+    if (!slug || setupActionInFlight) {
+      return;
+    }
+
+    setupActionInFlight = true;
+    try {
+      if (action === "refresh") {
+        await loadSetupStatus(slug);
+        return;
+      }
+
+      if (action === "install-required") {
+        const rows = lastSetupPayload && lastSetupPayload.setup && lastSetupPayload.setup.dependencies
+          ? lastSetupPayload.setup.dependencies.rows || []
+          : [];
+        for (const row of rows) {
+          if (row.source_available && !row.active) {
+            const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/install-dependency", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({ dependency: row.key })
+            });
+            const result = await response.json();
+            if (!response.ok) {
+              showResult(setupResult, result, true);
+              return;
+            }
+            renderSetupResult(result, "Approved dependency installed.");
+          }
+        }
+        await loadProjects();
+        return;
+      }
+
+      let endpoint = null;
+      let payload = {};
+      let successTitle = "Completed.";
+
+      if (action === "provision") {
+        endpoint = "/api/projects/" + encodeURIComponent(slug) + "/provision";
+        successTitle = "WordPress provisioned.";
+      } else if (action === "install-agent") {
+        endpoint = "/api/projects/" + encodeURIComponent(slug) + "/install-agent";
+        successTitle = "Site Factory Agent installed.";
+      } else if (action === "install-dependency") {
+        endpoint = "/api/projects/" + encodeURIComponent(slug) + "/install-dependency";
+        payload = { dependency: dependencyKey };
+        successTitle = "Approved dependency installed.";
+      } else {
+        throw new Error("Unsupported setup action: " + action);
+      }
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        showResult(setupResult, result, true);
+        return;
+      }
+
+      renderSetupResult(result, successTitle);
+      await loadProjects();
+    } catch (error) {
+      showResult(setupResult, { error: error.message }, true);
+    } finally {
+      setupActionInFlight = false;
+      await loadSetupStatus(setupProjectSlug.value).catch(() => {});
+    }
+  }
+
   async function loadSiteStatus(slug) {
     const selectedSlug = String(slug || "").trim();
     if (!selectedSlug) {
@@ -649,21 +894,50 @@
   }
 
   async function loadProjects() {
+    const requestId = ++loadProjectsRequestId;
     const response = await fetch("/api/projects");
     const payload = await response.json();
+    if (requestId !== loadProjectsRequestId) {
+      return;
+    }
     renderProjects(payload.projects || []);
+    if (requestId !== loadProjectsRequestId) {
+      return;
+    }
+    await loadSetupStatus(setupProjectSlug.value);
     await loadSiteStatus(generateProjectSlug.value);
     await loadManagedState(generateProjectSlug.value);
     await loadProofPack(generateProjectSlug.value);
   }
 
+  setupProjectSlug.addEventListener("change", () => {
+    preferredSelectedSlug = setupProjectSlug.value;
+    planProjectSlug.value = setupProjectSlug.value;
+    generateProjectSlug.value = setupProjectSlug.value;
+    Promise.all([
+      loadSetupStatus(setupProjectSlug.value),
+      loadSiteStatus(setupProjectSlug.value),
+      loadManagedState(setupProjectSlug.value),
+      loadProofPack(setupProjectSlug.value)
+    ]).catch((error) => {
+      showResult(createResult, { error: error.message }, true);
+    });
+  });
+
   planProjectSlug.addEventListener("change", () => {
+    preferredSelectedSlug = planProjectSlug.value;
+    setupProjectSlug.value = planProjectSlug.value;
+    generateProjectSlug.value = planProjectSlug.value;
     loadProjects().catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
   });
   generateProjectSlug.addEventListener("change", () => {
+    preferredSelectedSlug = generateProjectSlug.value;
+    setupProjectSlug.value = generateProjectSlug.value;
+    planProjectSlug.value = generateProjectSlug.value;
     Promise.all([
+      loadSetupStatus(generateProjectSlug.value),
       loadSiteStatus(generateProjectSlug.value),
       loadManagedState(generateProjectSlug.value),
       loadProofPack(generateProjectSlug.value)
@@ -676,31 +950,45 @@
     event.preventDefault();
 
     const formData = new FormData(createForm);
+    const submitButton = createForm.querySelector("button[type=\"submit\"]");
     const payload = {
       name: formData.get("name"),
-      port: Number(formData.get("port")),
-      projectsRoot: formData.get("projectsRoot") || config.projectsRoot
+      slug: formData.get("slug"),
+      port: Number(formData.get("port"))
     };
 
-    const response = await fetch("/api/projects", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
+    submitButton.disabled = true;
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
 
-    const result = await response.json();
-    if (!response.ok) {
-      showResult(createResult, result, true);
-      return;
+      const result = await response.json();
+      if (!response.ok) {
+        showResult(createResult, result, true);
+        return;
+      }
+
+      showResult(createResult, Object.assign({ title: "Project scaffold created." }, result), false);
+      createForm.reset();
+      createForm.elements.port.value = "8120";
+      preferredSelectedSlug = result.project && result.project.slug ? result.project.slug : "";
+      loadProjectsRequestId += 1;
+      loadSetupStatusRequestId += 1;
+      await loadProjects();
+      if (result.project && result.project.slug) {
+        setupProjectSlug.value = result.project.slug;
+        planProjectSlug.value = result.project.slug;
+        generateProjectSlug.value = result.project.slug;
+        await loadSetupStatus(result.project.slug);
+      }
+    } finally {
+      submitButton.disabled = false;
     }
-
-    showResult(createResult, Object.assign({ title: "Project scaffold created." }, result), false);
-    createForm.reset();
-    createForm.elements.projectsRoot.value = config.projectsRoot || "";
-    createForm.elements.port.value = "8120";
-    await loadProjects();
   });
 
   planForm.addEventListener("submit", async (event) => {
@@ -865,6 +1153,35 @@
       proofPackGenerateButton.disabled = false;
     }
   });
+
+  setupStatus.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-setup-action]");
+    if (!button) {
+      return;
+    }
+
+    runSetupAction(button.getAttribute("data-setup-action"), button.getAttribute("data-dependency")).catch((error) => {
+      showResult(setupResult, { error: error.message }, true);
+    });
+  });
+
+  if (setupProjectForm) {
+    setupProjectForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+    });
+  }
+
+  if (createForm && createForm.elements.name && createForm.elements.slug) {
+    let slugTouched = false;
+    createForm.elements.slug.addEventListener("input", () => {
+      slugTouched = String(createForm.elements.slug.value || "").trim().length > 0;
+    });
+    createForm.elements.name.addEventListener("input", () => {
+      if (!slugTouched) {
+        createForm.elements.slug.value = slugifyProjectName(createForm.elements.name.value);
+      }
+    });
+  }
 
   loadProjects().catch((error) => {
     showResult(createResult, { error: error.message }, true);

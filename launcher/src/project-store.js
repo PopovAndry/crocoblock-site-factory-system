@@ -37,6 +37,19 @@ function slugifyProjectName(name) {
     .replace(/-{2,}/g, "-");
 }
 
+function validateExplicitSlug(slug) {
+  const trimmed = String(slug || "").trim().toLowerCase();
+  if (!trimmed) {
+    throw new Error("Project slug is required.");
+  }
+
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(trimmed)) {
+    throw new Error("Project slug must use lowercase letters, numbers, and single hyphens only.");
+  }
+
+  return trimmed;
+}
+
 function ensureSafeProjectsRoot(projectsRoot) {
   const resolved = resolveProjectsRoot(projectsRoot);
 
@@ -289,12 +302,22 @@ function createProjectScaffold(options) {
     throw new Error("Port must be an integer between 1024 and 65535.");
   }
 
-  const slug = slugifyProjectName(siteName);
+  const slug = options.slug
+    ? validateExplicitSlug(options.slug)
+    : slugifyProjectName(siteName);
   if (!slug) {
     throw new Error("Project name did not produce a valid slug.");
   }
 
   ensureDirectory(projectsRoot);
+
+  const existingProjects = listProjects(projectsRoot);
+  const conflictingPortProject = existingProjects.find((project) => Number(project.wp_port) === requestedPort);
+  if (conflictingPortProject) {
+    throw new Error(
+      "WordPress port " + String(requestedPort) + " is already assigned to project " + conflictingPortProject.slug + "."
+    );
+  }
 
   const runtimePath = path.join(projectsRoot, slug);
   if (fs.existsSync(runtimePath)) {
@@ -427,6 +450,7 @@ module.exports = {
   readProjectBySlug,
   resolveProjectsRoot,
   saveProjectRecord,
+  validateExplicitSlug,
   slugifyProjectName,
   defaultAiMetadata,
   defaultGeneratedSiteMetadata,
