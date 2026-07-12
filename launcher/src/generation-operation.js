@@ -10,6 +10,10 @@ const {
   resolveProjectsRoot,
   validateExplicitSlug
 } = require("./project-store");
+const {
+  findSuccessfulControlledGenerateByPlanId,
+  listOperations
+} = require("./project-operation-store");
 
 const OPERATION_SCHEMA = "factory_generation_operation";
 const OPERATION_VERSION = 1;
@@ -211,23 +215,40 @@ function updateGenerationOperation(options) {
 }
 
 function getLatestGenerationOperation(options) {
-  const { projectState } = normalizeProjectState(options);
-  const entries = listOperationEntries(projectState.runtimePath);
-  if (!entries.length) {
+  const operations = listOperations({
+    slug: options.slug,
+    projectsRoot: options.projectsRoot
+  });
+  if (!operations.length) {
     return null;
   }
 
-  const latest = entries[0];
   return {
-    operationPath: latest.filePath,
-    operation: sanitizeOperation(safeJsonRead(latest.filePath), latest.filePath)
+    operationPath: operations[0]._filePath || null,
+    operation: operations[0]
   };
 }
 
 function findSuccessfulOperationByPlanId(options) {
-  const { projectState } = normalizeProjectState(options);
   const planId = normalizePlanId(options.planId);
+  const canonical = findSuccessfulControlledGenerateByPlanId({
+    slug: options.slug,
+    projectsRoot: options.projectsRoot,
+    planId
+  });
 
+  if (canonical) {
+    return {
+      operationPath: canonical._filePath || null,
+      operation: Object.assign({}, canonical, {
+        proof_path: canonical.proof_ref || null,
+        plan_id: canonical.metadata && canonical.metadata.plan_id || null,
+        prompt_hash: canonical.metadata && canonical.metadata.prompt_hash || null
+      })
+    };
+  }
+
+  const { projectState } = normalizeProjectState(options);
   for (const entry of listOperationEntries(projectState.runtimePath)) {
     const operation = sanitizeOperation(safeJsonRead(entry.filePath), entry.filePath);
     if (operation.plan_id === planId && operation.status === "succeeded") {
