@@ -78,6 +78,7 @@ Start with:
 - [proof-pack.md](proof-pack.md)
 - [known-limitations.md](known-limitations.md)
 - [next-steps.md](next-steps.md)
+- [../architecture/project-operation-coordinator.md](../architecture/project-operation-coordinator.md)
 
 ## How To Read This Folder
 
@@ -89,6 +90,7 @@ Start with:
 6. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
 7. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
 8. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
+9. Read [project-operation-coordinator.md](../architecture/project-operation-coordinator.md) for the project-wide mutation lock and idempotency model.
 
 ## One-command Read-only Smoke
 

@@ -1,63 +1,51 @@
 "use strict";
 
+const {
+  getProjectOperationsStatus,
+  runProjectOperation
+} = require("./project-operation-coordinator");
 const { validateExplicitSlug } = require("./project-store");
-
-const generationLocks = new Map();
 
 function normalizeGenerationLockSlug(slug) {
   return validateExplicitSlug(slug);
 }
 
-function acquireGenerationMutationLock(slug, operation) {
-  const lockKey = normalizeGenerationLockSlug(slug);
-  const existing = generationLocks.get(lockKey);
-
-  if (existing) {
-    const error = new Error(
-      "A generation operation is already in progress for project " + lockKey + "."
-    );
-    error.code = "generation_operation_in_progress";
-    error.statusCode = 409;
-    error.current_operation = existing.operation;
-    error.project_slug = lockKey;
-    throw error;
-  }
-
-  const lockRecord = {
-    operation: String(operation || "controlled_generate"),
-    acquired_at: new Date().toISOString()
-  };
-  generationLocks.set(lockKey, lockRecord);
-
-  let released = false;
-  return function releaseGenerationMutationLock() {
-    if (released) {
-      return;
-    }
-    released = true;
-    const current = generationLocks.get(lockKey);
-    if (current === lockRecord) {
-      generationLocks.delete(lockKey);
-    }
-  };
+function getGenerationMutationLock(slug, projectsRoot) {
+  const status = getProjectOperationsStatus({
+    slug,
+    projectsRoot,
+    limit: 1
+  });
+  return status.active_operation
+    ? { operation: status.active_operation.operation_type || status.active_operation.operation_id }
+    : null;
 }
 
-async function withGenerationMutationLock(slug, operation, handler) {
-  const release = acquireGenerationMutationLock(slug, operation);
-  try {
-    return await handler();
-  } finally {
-    release();
-  }
-}
-
-function getGenerationMutationLock(slug) {
-  const lockKey = normalizeGenerationLockSlug(slug);
-  return generationLocks.get(lockKey) || null;
+async function withGenerationMutationLock(slug, operation, handler, options) {
+  const result = await runProjectOperation({
+    slug,
+    projectsRoot: options && options.projectsRoot,
+    operationType: "controlled_generate",
+    idempotencyKey: options && options.idempotencyKey,
+    fingerprintInput: options && options.fingerprintInput || { operation: String(operation || "controlled_generate") },
+    metadata: options && options.metadata || {},
+    execute: async (context) => {
+      const businessResult = await handler(context);
+      return {
+        result: businessResult,
+        proofRef: businessResult && businessResult.proofPath || null,
+        resultSummary: {
+          status: businessResult && businessResult.executeData && businessResult.executeData.status || "ok",
+          code: businessResult && businessResult.executeData && businessResult.executeData.code || "controlled_generate_completed",
+          proof_ref: businessResult && businessResult.proofPath || null
+        }
+      };
+    }
+  });
+  return result.result;
 }
 
 module.exports = {
-  acquireGenerationMutationLock,
   getGenerationMutationLock,
   normalizeGenerationLockSlug,
   withGenerationMutationLock

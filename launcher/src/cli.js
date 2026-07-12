@@ -5,6 +5,7 @@ const {
   DEFAULT_PROJECTS_ROOT,
   createProjectScaffold,
   listProjects,
+  readProjectBySlug,
   resolveProjectsRoot
 } = require("./project-store");
 const { provisionProject } = require("./provision");
@@ -18,6 +19,7 @@ const { getSiteStatus } = require("./site");
 const { refreshState, readStateStatus, planState, applyStatePlan, rollbackStateApply } = require("./state");
 const { generateProofPack } = require("./proof-pack");
 const { runAlphaSmoke } = require("./alpha-smoke");
+const { runProjectOperation } = require("./project-operation-coordinator");
 
 function parseArguments(argv) {
   const [, , command, ...rest] = argv;
@@ -50,6 +52,28 @@ function parseArguments(argv) {
   return { command, flags, positionals };
 }
 
+async function runCoordinatedCliOperation(flags, operationType, fingerprintInput, metadata, safety, execute) {
+  return runProjectOperation({
+    slug: flags.slug,
+    projectsRoot: flags["projects-root"],
+    operationType,
+    idempotencyKey: flags["idempotency-key"],
+    fingerprintInput,
+    metadata: metadata || {},
+    safety: safety || {},
+    execute
+  });
+}
+
+function printOperationSummary(result) {
+  if (!result || !result.operation) {
+    return;
+  }
+  console.log("  Operation ID: " + String(result.operation.operation_id || "Unavailable"));
+  console.log("  Operation status: " + String(result.operation.status || "unknown"));
+  console.log("  Idempotent replay: " + String(result.idempotentReplay === true));
+}
+
 function printUsage() {
   console.log([
     "Factory Launcher",
@@ -58,24 +82,24 @@ function printUsage() {
     "  node launcher/src/cli.js start [--port 3847] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js create --name \"Kyiv Realty\" --port 8120 [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js list [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js provision --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js install-agent --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js provision --slug kyiv-realty [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js install-agent --slug kyiv-realty [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js plan --slug kyiv-realty --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js dependencies --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js install-dependency --slug kyiv-realty --dependency jet-engine --zip \"C:\\sf-vendor\\jet-engine.zip\" [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js install-dependency --slug kyiv-realty --dependency jet-engine --zip \"C:\\sf-vendor\\jet-engine.zip\" [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --mode mock --model-profile balanced [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --provider openai --model-profile balanced --key-env FACTORY_OPENAI_API_KEY [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty enable-live [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty estimate --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js generate --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js generate --slug kyiv-realty [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target home [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty refresh [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js state --slug kyiv-realty plan --prompt \"Create a premium real estate site for Odesa\" [--overwrite-field hero_title] [--ai live --confirm-live --estimate latest] [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--confirm-overwrite hero_title] [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js state --slug kyiv-realty rollback --apply latest [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty apply --plan latest [--confirm-overwrite hero_title] [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js state --slug kyiv-realty rollback --apply latest [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js site --slug kyiv-realty open --target frontend-edit-login [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js proof-pack --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js alpha-smoke --slug kyiv-realty [--require generated-site|full-alpha] [--json] [--projects-root \"C:\\sf-factory-projects\"]"
@@ -140,10 +164,35 @@ async function runProvision(flags) {
     throw new Error("Provision requires --slug <slug>.");
   }
 
-  const result = await provisionProject({
-    slug: flags.slug,
-    projectsRoot: flags["projects-root"]
-  });
+  const operationResult = await runCoordinatedCliOperation(
+    flags,
+    "provision",
+    { project_slug: flags.slug, operation_type: "provision" },
+    {},
+    {},
+    async () => {
+      const result = await provisionProject({
+        slug: flags.slug,
+        projectsRoot: flags["projects-root"]
+      });
+      return {
+        result,
+        proofRef: result.proofPath,
+        resultSummary: {
+          status: "ready",
+          wp_url: result.project.wp_url,
+          root_http_status: result.rootHttpStatus,
+          wp_json_status: result.wpJsonStatus
+        }
+      };
+    }
+  );
+  if (operationResult.idempotentReplay) {
+    console.log("Provision request replayed from operation history:");
+    printOperationSummary(operationResult);
+    return;
+  }
+  const result = operationResult.result;
 
   console.log("Provisioned WordPress runtime:");
   console.log("  Site name: " + result.project.site_name);
@@ -154,6 +203,7 @@ async function runProvision(flags) {
   console.log("  /wp-json/ status: " + String(result.wpJsonStatus));
   console.log("  Docker services started: " + result.proof.docker_services_started.join(", "));
   console.log("  Proof file: " + result.proofPath);
+  printOperationSummary(operationResult);
 }
 
 async function runInstallAgent(flags) {
@@ -161,10 +211,35 @@ async function runInstallAgent(flags) {
     throw new Error("install-agent requires --slug <slug>.");
   }
 
-  const result = await installAgent({
-    slug: flags.slug,
-    projectsRoot: flags["projects-root"]
-  });
+  const operationResult = await runCoordinatedCliOperation(
+    flags,
+    "install_agent",
+    { project_slug: flags.slug, operation_type: "install_agent" },
+    {},
+    {},
+    async () => {
+      const result = await installAgent({
+        slug: flags.slug,
+        projectsRoot: flags["projects-root"]
+      });
+      return {
+        result,
+        proofRef: result.proofPath,
+        resultSummary: {
+          status: "ready",
+          rest_base: result.restBase,
+          health_status: result.health && result.health.status || null,
+          capabilities_status: result.capabilities && result.capabilities.status || null
+        }
+      };
+    }
+  );
+  if (operationResult.idempotentReplay) {
+    console.log("Install Agent request replayed from operation history:");
+    printOperationSummary(operationResult);
+    return;
+  }
+  const result = operationResult.result;
 
   console.log("Installed Site Factory Agent:");
   console.log("  Site name: " + result.project.site_name);
@@ -175,6 +250,7 @@ async function runInstallAgent(flags) {
   console.log("  Health status: " + String(result.health.status));
   console.log("  Capabilities status: " + String(result.capabilities.status));
   console.log("  Proof file: " + result.proofPath);
+  printOperationSummary(operationResult);
 }
 
 async function runPlan(flags) {
@@ -239,12 +315,44 @@ async function runInstallDependency(flags) {
     throw new Error("install-dependency requires --zip \"<absolute-zip-path>\".");
   }
 
-  const result = await installDependency({
-    slug: flags.slug,
-    dependency: flags.dependency,
-    zip: flags.zip,
-    projectsRoot: flags["projects-root"]
-  });
+  const operationResult = await runCoordinatedCliOperation(
+    flags,
+    "install_dependency",
+    {
+      project_slug: flags.slug,
+      operation_type: "install_dependency",
+      dependency_key: flags.dependency
+    },
+    {
+      dependency_key: flags.dependency
+    },
+    {},
+    async () => {
+      const result = await installDependency({
+        slug: flags.slug,
+        dependency: flags.dependency,
+        zip: flags.zip,
+        projectsRoot: flags["projects-root"]
+      });
+      return {
+        result,
+        proofRef: result.proofPath,
+        resultSummary: {
+          status: "ok",
+          dependency_key: result.dependency && result.dependency.slug || flags.dependency,
+          installed: result.proof && result.proof.installed === true,
+          active: result.proof && result.proof.active === true,
+          can_generate_after: result.proof && result.proof.can_generate_after === true
+        }
+      };
+    }
+  );
+  if (operationResult.idempotentReplay) {
+    console.log("Dependency install request replayed from operation history:");
+    printOperationSummary(operationResult);
+    return;
+  }
+  const result = operationResult.result;
 
   console.log("Installed dependency from local ZIP:");
   console.log("  Site name: " + result.project.site_name);
@@ -257,6 +365,7 @@ async function runInstallDependency(flags) {
   console.log("  Can generate after: " + String(result.proof.can_generate_after));
   console.log("  Blockers after: " + (result.proof.blockers_after.length ? result.proof.blockers_after.join(" | ") : "None"));
   console.log("  Proof file: " + result.proofPath);
+  printOperationSummary(operationResult);
 }
 
 function printAiStatus(result) {
@@ -383,10 +492,53 @@ async function runGenerate(flags) {
     throw new Error("generate requires --slug <slug>.");
   }
 
-  const result = await generateProject({
-    slug: flags.slug,
-    projectsRoot: flags["projects-root"]
-  });
+  const projectState = readProjectBySlug(flags.slug, flags["projects-root"]);
+  const planId = String(projectState.project.current_run_id || "");
+  const operationResult = await runCoordinatedCliOperation(
+    flags,
+    "controlled_generate",
+    {
+      project_slug: flags.slug,
+      operation_type: "controlled_generate",
+      plan_id: planId
+    },
+    {
+      plan_id: planId
+    },
+    {
+      live_ai_used: false,
+      apply_used: false,
+      rollback_used: false
+    },
+    async (context) => {
+      const result = await generateProject({
+        slug: flags.slug,
+        projectsRoot: flags["projects-root"],
+        operationId: context.operationId,
+        onProgress: async (statusDetail) => {
+          await context.setStage(statusDetail || "executing");
+        }
+      });
+      return {
+        result,
+        proofRef: result.proofPath,
+        resultSummary: {
+          status: result.executeData.status || "ok",
+          code: result.executeData.code || "controlled_generate_completed",
+          provider_called: false,
+          counts_before: result.beforeCounts || null,
+          counts_after: result.afterCounts || null,
+          generated_urls: result.generatedUrls || {}
+        }
+      };
+    }
+  );
+  if (operationResult.idempotentReplay) {
+    console.log("Controlled generate request replayed from operation history:");
+    printOperationSummary(operationResult);
+    return;
+  }
+  const result = operationResult.result;
 
   console.log("Completed controlled generate:");
   console.log("  Site name: " + result.project.site_name);
@@ -402,6 +554,7 @@ async function runGenerate(flags) {
   console.log("  Home: " + String(result.generatedUrls.home || result.generatedUrls.root || result.project.wp_url));
   console.log("  Properties: " + String(result.generatedUrls.properties || "Unavailable"));
   console.log("  Contact: " + String(result.generatedUrls.contact || "Unavailable"));
+  printOperationSummary(operationResult);
 }
 
 function formatCountChange(beforeValue, afterValue) {
@@ -659,12 +812,47 @@ async function runState(parsed) {
   }
 
   if (subcommand === "apply") {
-    const result = await applyStatePlan({
-      slug: parsed.flags.slug,
-      projectsRoot: parsed.flags["projects-root"],
-      planPath: parsed.flags.plan,
-      confirmOverwriteFields: parsed.flags["confirm-overwrite"]
-    });
+    const operationResult = await runCoordinatedCliOperation(
+      parsed.flags,
+      "state_apply",
+      {
+        project_slug: parsed.flags.slug,
+        operation_type: "state_apply",
+        plan_path: parsed.flags.plan || "latest",
+        confirm_overwrite_fields: parsed.flags["confirm-overwrite"] || []
+      },
+      {
+        plan_ref: parsed.flags.plan || "latest"
+      },
+      {
+        live_ai_used: false,
+        apply_used: true,
+        rollback_used: false
+      },
+      async () => {
+        const result = await applyStatePlan({
+          slug: parsed.flags.slug,
+          projectsRoot: parsed.flags["projects-root"],
+          planPath: parsed.flags.plan,
+          confirmOverwriteFields: parsed.flags["confirm-overwrite"]
+        });
+        return {
+          result,
+          proofRef: result.proofPath || null,
+          resultSummary: {
+            status: result.status,
+            code: result.code,
+            apply_method: result.apply ? result.apply.apply_method : (result.proof ? result.proof.apply_method : null)
+          }
+        };
+      }
+    );
+    if (operationResult.idempotentReplay) {
+      console.log("Managed state apply replayed from operation history:");
+      printOperationSummary(operationResult);
+      return;
+    }
+    const result = operationResult.result;
 
     console.log("Managed state apply:");
     console.log("  Site name: " + result.project.site_name);
@@ -688,15 +876,50 @@ async function runState(parsed) {
     console.log("  Overwritten protected fields: " + ((result.apply.confirmation && result.apply.confirmation.overwritten_protected_fields || []).length ? result.apply.confirmation.overwritten_protected_fields.join(", ") : "None"));
     console.log("  Proof path: " + result.proofPath);
     console.log("  State path: " + result.statePath);
+    printOperationSummary(operationResult);
     return;
   }
 
   if (subcommand === "rollback") {
-    const result = await rollbackStateApply({
-      slug: parsed.flags.slug,
-      projectsRoot: parsed.flags["projects-root"],
-      applyPath: parsed.flags.apply
-    });
+    const operationResult = await runCoordinatedCliOperation(
+      parsed.flags,
+      "state_rollback",
+      {
+        project_slug: parsed.flags.slug,
+        operation_type: "state_rollback",
+        apply_path: parsed.flags.apply || "latest"
+      },
+      {
+        apply_ref: parsed.flags.apply || "latest"
+      },
+      {
+        live_ai_used: false,
+        apply_used: false,
+        rollback_used: true
+      },
+      async () => {
+        const result = await rollbackStateApply({
+          slug: parsed.flags.slug,
+          projectsRoot: parsed.flags["projects-root"],
+          applyPath: parsed.flags.apply
+        });
+        return {
+          result,
+          proofRef: result.proofPath || null,
+          resultSummary: {
+            status: result.status,
+            code: result.code,
+            rollback_fields: result.rollback ? Object.keys(result.rollback.rollback_fields || {}) : []
+          }
+        };
+      }
+    );
+    if (operationResult.idempotentReplay) {
+      console.log("Managed state rollback replayed from operation history:");
+      printOperationSummary(operationResult);
+      return;
+    }
+    const result = operationResult.result;
 
     console.log("Managed state rollback:");
     console.log("  Site name: " + result.project.site_name);
@@ -717,6 +940,7 @@ async function runState(parsed) {
     console.log("  Applied fields: " + ((result.rollback.applied_fields || []).length ? result.rollback.applied_fields.join(", ") : "None"));
     console.log("  Proof path: " + result.proofPath);
     console.log("  State path: " + result.statePath);
+    printOperationSummary(operationResult);
     return;
   }
 

@@ -22,6 +22,7 @@
   const generationStatus = document.getElementById("generation-status");
   const generatePreviewResult = document.getElementById("generate-preview-result");
   const generateResult = document.getElementById("generate-result");
+  const projectOperations = document.getElementById("project-operations");
   const siteStatus = document.getElementById("site-status");
   const managedState = document.getElementById("managed-state");
   const proofPackStatus = document.getElementById("proof-pack-status");
@@ -68,6 +69,7 @@
     requestId: 0,
     loading: false,
     statusPayload: null,
+    operationsPayload: null,
     sitePayload: null,
     error: null
   };
@@ -87,6 +89,10 @@
 
   function setGenerationStatusEmpty(message) {
     generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
+  function setProjectOperationsEmpty(message) {
+    projectOperations.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
   }
 
   function setSetupEmpty(message) {
@@ -115,6 +121,7 @@
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
       setSetupEmpty("Create a project, then provision WordPress and install dependencies here.");
       setGenerationStatusEmpty("Finish project setup, then preview a generate plan here.");
+      setProjectOperationsEmpty("Select a project to view operation history.");
       setSiteStatusEmpty("No generated site result yet.");
       setManagedStateEmpty("Refresh state after generate or frontend edits.");
       setProofPackEmpty("Generate a proof pack after state and site data are available.");
@@ -238,6 +245,43 @@
       ">" + escapeHtml(label) + "</button>";
   }
 
+  function getActiveProjectOperation() {
+    if (
+      generationView.operationsPayload
+      && generationView.operationsPayload.active_operation
+      && String(generationView.operationsPayload.project && generationView.operationsPayload.project.slug || "") === String(generationView.slug || "")
+    ) {
+      return generationView.operationsPayload.active_operation;
+    }
+
+    if (
+      generationView.statusPayload
+      && generationView.statusPayload.current_operation
+      && String(generationView.statusPayload.project && generationView.statusPayload.project.slug || "") === String(generationView.slug || "")
+    ) {
+      return generationView.statusPayload.current_operation;
+    }
+
+    return null;
+  }
+
+  function isProjectOperationActiveForSlug(slug) {
+    const activeOperation = getActiveProjectOperation();
+    return Boolean(
+      activeOperation
+      && (activeOperation.status === "requested" || activeOperation.status === "running")
+      && String(generationView.slug || "") === String(slug || "").trim()
+    );
+  }
+
+  function createRequestIdempotencyKey(prefix) {
+    const safePrefix = String(prefix || "launcher").replace(/[^A-Za-z0-9._:-]+/g, "-").slice(0, 32) || "launcher";
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return safePrefix + ":" + window.crypto.randomUUID();
+    }
+    return safePrefix + ":" + Date.now().toString(36) + ":" + Math.random().toString(36).slice(2);
+  }
+
   function renderSetupStatus(payload) {
     lastSetupPayload = payload;
 
@@ -252,12 +296,13 @@
       : [];
     const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
     const readyToGenerate = setup.ready_to_generate === true;
+    const setupMutationBlocked = setupActionInFlight || isProjectOperationActiveForSlug(payload.project.slug);
     const missingSourceKeys = dependencyRows
       .filter((row) => !row.source_available)
       .map((row) => row.key);
     const installableRows = dependencyRows.filter((row) => row.source_available && !row.active);
     const dependencyRowsMarkup = dependencyRows.map((row) => {
-      const disabled = setupActionInFlight || !setup.agent || setup.agent.status !== "ready" || !row.source_available || row.active;
+      const disabled = setupMutationBlocked || !setup.agent || setup.agent.status !== "ready" || !row.source_available || row.active;
       const installAttributes = " data-dependency=\"" + escapeHtml(row.key) + "\"";
       return [
         "<article class=\"setup-step-card\">",
@@ -300,27 +345,28 @@
       "      <div class=\"setup-step-card__header\"><h4>2. WordPress</h4><span class=\"status-pill\">" + escapeHtml(setup.wordpress.status) + "</span></div>",
       "      <p class=\"project-note\">Creates Docker runtime and local WordPress files for this project only.</p>",
       "      <dl><div><dt>URL</dt><dd>" + escapeHtml(setup.wordpress.wp_url || payload.project.wp_url) + "</dd></div><div><dt>/wp-json/</dt><dd>" + escapeHtml(String(setup.wordpress.wp_json_ok)) + "</dd></div><div><dt>Proof</dt><dd>" + escapeHtml(setup.wordpress.proof_path || "Unavailable") + "</dd></div></dl>",
-      "      <div class=\"setup-actions\">" + setupActionButton("Provision WordPress", "provision", setupActionInFlight || setup.wordpress.status === "ready") + (setup.wordpress.wp_url ? " <a class=\"site-link\" href=\"" + escapeHtml(setup.wordpress.wp_url) + "\" target=\"_blank\" rel=\"noreferrer\">Open WordPress</a>" : "") + "</div>",
+      "      <div class=\"setup-actions\">" + setupActionButton("Provision WordPress", "provision", setupMutationBlocked || setup.wordpress.status === "ready") + (setup.wordpress.wp_url ? " <a class=\"site-link\" href=\"" + escapeHtml(setup.wordpress.wp_url) + "\" target=\"_blank\" rel=\"noreferrer\">Open WordPress</a>" : "") + "</div>",
       "    </article>",
       "    <article class=\"setup-step-card\">",
       "      <div class=\"setup-step-card__header\"><h4>3. Agent</h4><span class=\"status-pill\">" + escapeHtml(setup.agent.status) + "</span></div>",
       "      <p class=\"project-note\">Installs the local Site Factory Agent plugin already shipped in this repository.</p>",
       "      <dl><div><dt>Health</dt><dd>" + escapeHtml(setup.agent.health_status || "Unavailable") + "</dd></div><div><dt>Capabilities</dt><dd>" + escapeHtml(setup.agent.capabilities_status || "Unavailable") + "</dd></div><div><dt>Proof</dt><dd>" + escapeHtml(setup.agent.proof_path || "Unavailable") + "</dd></div></dl>",
-      "      <div class=\"setup-actions\">" + setupActionButton("Install Agent", "install-agent", setupActionInFlight || setup.wordpress.status !== "ready" || setup.agent.status === "ready") + "</div>",
+      "      <div class=\"setup-actions\">" + setupActionButton("Install Agent", "install-agent", setupMutationBlocked || setup.wordpress.status !== "ready" || setup.agent.status === "ready") + "</div>",
       "    </article>",
       "    <article class=\"setup-step-card\">",
       "      <div class=\"setup-step-card__header\"><h4>4. Dependencies</h4><span class=\"status-pill\">" + escapeHtml(setup.dependencies.status) + "</span></div>",
       "      <p class=\"project-note\">Approved local ZIP sources are resolved server-side. The browser sends only dependency keys.</p>",
       "      <dl><div><dt>Can generate</dt><dd>" + escapeHtml(String(setup.dependencies.can_generate)) + "</dd></div><div><dt>Blockers</dt><dd>" + escapeHtml(setup.dependencies.blockers.length ? setup.dependencies.blockers.join(" | ") : "None") + "</dd></div><div><dt>Proof</dt><dd>" + escapeHtml(setup.dependencies.proof_path || "Unavailable") + "</dd></div></dl>",
       missingSourceKeys.length ? "      <p class=\"project-note\">Missing approved ZIPs: " + escapeHtml(missingSourceKeys.join(", ")) + "</p>" : "",
-      installableRows.length ? "      <div class=\"setup-actions\">" + setupActionButton("Install Required Dependencies", "install-required", setupActionInFlight || setup.agent.status !== "ready") + "</div>" : "",
+      installableRows.length ? "      <div class=\"setup-actions\">" + setupActionButton("Install Required Dependencies", "install-required", setupMutationBlocked || setup.agent.status !== "ready") + "</div>" : "",
       dependencyRowsMarkup,
       "    </article>",
       "    <article class=\"setup-step-card\">",
       "      <div class=\"setup-step-card__header\"><h4>5. Ready to Generate</h4><span class=\"status-pill\">" + escapeHtml(readyToGenerate ? "ready" : "blocked") + "</span></div>",
-      "      <p class=\"project-note\">" + escapeHtml(readyToGenerate ? "Required dependencies are active. Generate stays intentionally disabled in this phase." : (setup.dependencies.next_action || "Finish the setup blockers above.")) + "</p>",
+      "      <p class=\"project-note\">" + escapeHtml(readyToGenerate ? "Required dependencies are active. Use Generate Site to preview and explicitly confirm controlled generate." : (setup.dependencies.next_action || "Finish the setup blockers above.")) + "</p>",
       "    </article>",
       "  </div>",
+      isProjectOperationActiveForSlug(payload.project.slug) ? "  <p class=\"project-note\">A project operation is in progress. Setup mutation buttons are temporarily disabled.</p>" : "",
       "  <div class=\"setup-actions\">" + setupActionButton("Refresh Setup Status", "refresh", setupActionInFlight) + "</div>",
       warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       "</article>"
@@ -337,6 +383,16 @@
       payload.wp_url ? "<p><span>WordPress URL:</span> " + escapeHtml(payload.wp_url) + "</p>" : "",
       payload.rest_base ? "<p><span>REST base:</span> " + escapeHtml(payload.rest_base) + "</p>" : ""
     ].join("");
+  }
+
+  function refreshSetupMutationAvailability() {
+    if (
+      lastSetupPayload
+      && lastSetupPayload.project
+      && String(lastSetupPayload.project.slug || "") === String(generationView.slug || "")
+    ) {
+      renderSetupStatus(lastSetupPayload);
+    }
   }
 
   function showResult(target, payload, isError) {
@@ -504,6 +560,7 @@
       requestId: generationSelectionRequestId,
       loading: Boolean(selectedSlug),
       statusPayload: null,
+      operationsPayload: null,
       sitePayload: null,
       error: null
     };
@@ -525,6 +582,7 @@
     const prompt = getNormalizedGeneratePrompt();
     const promptValidation = getGeneratePromptValidation(prompt);
     const readyToGenerate = Boolean(project && project.dependency_state && project.dependency_state.can_generate);
+    const operationActive = project ? isProjectOperationActiveForSlug(project.slug) : false;
     const previewMatchesPrompt = Boolean(
       generatePreviewState
       && generatePreviewState.plan_id
@@ -532,10 +590,11 @@
       && generatePreviewState.stale !== true
     );
 
-    generatePreviewButton.disabled = generationActionInFlight || generationStatusLoading || !project || !readyToGenerate || !promptValidation.valid;
+    generatePreviewButton.disabled = generationActionInFlight || generationStatusLoading || operationActive || !project || !readyToGenerate || !promptValidation.valid;
     generateSubmitButton.disabled = !(
       !generationActionInFlight
       && !generationStatusLoading
+      && !operationActive
       && project
       && readyToGenerate
       && previewMatchesPrompt
@@ -602,6 +661,9 @@
     const blockers = setup.dependencies && Array.isArray(setup.dependencies.blockers)
       ? setup.dependencies.blockers
       : [];
+    const readinessMessage = setup.ready_to_generate === true
+      ? "Preview Plan and Generate are available after a valid prompt and explicit confirmation."
+      : "Finish Project Setup before previewing or running Generate.";
     const generatedUrls = site.generated_urls || {};
     const siteLinks = [
       generatedUrls.home || generatedUrls.root ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.home || generatedUrls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Home</a>" : "",
@@ -623,13 +685,89 @@
       "    <div><dt>Latest plan</dt><dd>" + escapeHtml(latestPlan && latestPlan.plan_id || "None") + "</dd></div>",
       "    <div><dt>Interpreter</dt><dd>" + escapeHtml(latestPlan && latestPlan.personalization_source || "local_interpreter") + "</dd></div>",
       "    <div><dt>Latest operation</dt><dd>" + escapeHtml(latestOperation && latestOperation.status || "none") + "</dd></div>",
-      "    <div><dt>Operation step</dt><dd>" + escapeHtml(latestOperation && latestOperation.status_detail || "n/a") + "</dd></div>",
+      "    <div><dt>Operation step</dt><dd>" + escapeHtml(latestOperation && (latestOperation.stage || latestOperation.status_detail) || "n/a") + "</dd></div>",
       "    <div><dt>Generate proof</dt><dd>" + escapeHtml(site.latest_generate_proof_path || "Unavailable") + "</dd></div>",
       "  </dl>",
-      blockers.length ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>" : "  <p class=\"project-note\">Preview Plan and Generate are available after a valid prompt and explicit confirmation.</p>",
+      blockers.length ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>" : "  <p class=\"project-note\">" + escapeHtml(readinessMessage) + "</p>",
       latestOperation && latestOperation.operation_path ? "  <p class=\"project-note\">Operation record: " + escapeHtml(latestOperation.operation_path) + "</p>" : "",
       siteLinks ? "  <div class=\"site-links\">" + siteLinks + "</div>" : "",
       "</article>"
+    ].join("\n");
+  }
+
+  function formatOperationTime(value) {
+    return value ? String(value) : "Unavailable";
+  }
+
+  function formatOperationDuration(operation) {
+    const start = Date.parse(operation && (operation.started_at || operation.requested_at) || "");
+    const end = Date.parse(operation && operation.completed_at || "");
+    if (!Number.isFinite(start)) {
+      return "Unavailable";
+    }
+    const durationMs = (Number.isFinite(end) ? end : Date.now()) - start;
+    if (!Number.isFinite(durationMs) || durationMs < 0) {
+      return "Unavailable";
+    }
+    const seconds = Math.round(durationMs / 1000);
+    if (seconds < 60) {
+      return String(seconds) + "s";
+    }
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    return String(minutes) + "m " + String(remainder) + "s";
+  }
+
+  function buildProjectOperationsHtml(payload) {
+    if (!payload || !payload.project) {
+      return "<p class=\"empty-state\">Select a project to view operation history.</p>";
+    }
+
+    const activeOperation = payload.active_operation || null;
+    const operations = Array.isArray(payload.operations) ? payload.operations : [];
+    const operationRows = operations.map((operation) => {
+      const summary = operation.result_summary && typeof operation.result_summary === "object"
+        ? operation.result_summary
+        : {};
+      const error = operation.error && typeof operation.error === "object"
+        ? operation.error
+        : {};
+      const detailParts = [
+        operation.stage ? "stage=" + operation.stage : "",
+        operation.proof_ref ? "proof=" + operation.proof_ref : "",
+        summary.code ? "code=" + summary.code : "",
+        error.code ? "error=" + error.code : "",
+        operation.legacy ? "legacy=true" : ""
+      ].filter(Boolean);
+      return [
+        "<article class=\"project-card\">",
+        "  <div class=\"project-card__header\">",
+        "    <h3>" + escapeHtml(operation.operation_type || "operation") + "</h3>",
+        "    <span class=\"status-pill\">" + escapeHtml(operation.status || "unknown") + "</span>",
+        "  </div>",
+        "  <dl>",
+        "    <div><dt>ID</dt><dd>" + escapeHtml(operation.operation_id || "Unavailable") + "</dd></div>",
+        "    <div><dt>Requested</dt><dd>" + escapeHtml(formatOperationTime(operation.requested_at)) + "</dd></div>",
+        "    <div><dt>Started</dt><dd>" + escapeHtml(formatOperationTime(operation.started_at)) + "</dd></div>",
+        "    <div><dt>Completed</dt><dd>" + escapeHtml(formatOperationTime(operation.completed_at)) + "</dd></div>",
+        "    <div><dt>Duration</dt><dd>" + escapeHtml(formatOperationDuration(operation)) + "</dd></div>",
+        "  </dl>",
+        detailParts.length ? "  <p class=\"project-note\">" + escapeHtml(detailParts.join(" | ")) + "</p>" : "",
+        "</article>"
+      ].join("\n");
+    }).join("\n");
+
+    return [
+      "<article class=\"project-card\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>" + escapeHtml(payload.project.slug || "Project") + "</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(activeOperation ? "operation running" : "idle") + "</span>",
+      "  </div>",
+      activeOperation
+        ? "  <p class=\"project-note\">Active operation: " + escapeHtml(activeOperation.operation_type || "operation") + " (" + escapeHtml(activeOperation.status || "unknown") + ")</p>"
+        : "  <p class=\"project-note\">No active project mutation operation.</p>",
+      "</article>",
+      operationRows || "<p class=\"empty-state\">No project operations have been recorded yet.</p>"
     ].join("\n");
   }
 
@@ -642,6 +780,9 @@
     const blockers = Array.isArray(dependencyState.blockers) ? dependencyState.blockers : [];
     const readyToGenerate = dependencyState.can_generate === true;
     const generation = project.generation || {};
+    const readinessMessage = readyToGenerate
+      ? "Preview Plan and Generate are available after a valid prompt and explicit confirmation."
+      : "Finish Project Setup before previewing or running Generate.";
 
     return [
       "<article class=\"project-card\">",
@@ -662,7 +803,7 @@
       "  </dl>",
       blockers.length
         ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>"
-        : "  <p class=\"project-note\">Preview Plan and Generate are available after a valid prompt and explicit confirmation.</p>",
+        : "  <p class=\"project-note\">" + escapeHtml(readinessMessage) + "</p>",
       "</article>"
     ].join("\n");
   }
@@ -707,19 +848,32 @@
         personalization_source: "local_interpreter"
       },
       current_operation: {
+        operation_type: "controlled_generate",
         status: "running",
-        status_detail: "preparing"
+        stage: "preparing"
       },
       latest_operation: {
+        operation_type: "controlled_generate",
         status: "running",
-        status_detail: "preparing"
+        stage: "preparing"
       },
       site: {
         latest_generate_proof_path: null,
         generated_urls: {}
       }
     };
+    generationView.operationsPayload = {
+      ok: true,
+      project: generationView.statusPayload.project,
+      active_operation: {
+        operation_type: "controlled_generate",
+        status: "running",
+        stage: "preparing"
+      },
+      operations: []
+    };
     renderGenerationSurface();
+    refreshSetupMutationAvailability();
 
     const poll = async () => {
       if (!generationActionInFlight) {
@@ -807,14 +961,31 @@
     const selectedSlug = String(generationView.slug || "");
     generationStatus.dataset.projectSlug = selectedSlug;
     generationStatus.dataset.requestId = String(generationView.requestId || 0);
+    projectOperations.dataset.projectSlug = selectedSlug;
+    projectOperations.dataset.requestId = String(generationView.requestId || 0);
     siteStatus.dataset.projectSlug = selectedSlug;
     siteStatus.dataset.requestId = String(generationView.requestId || 0);
 
     if (!selectedSlug) {
       setGenerationStatusEmpty("Select a project to review generate readiness.");
+      setProjectOperationsEmpty("Select a project to view operation history.");
       setSiteStatusEmpty("Select a project to view generated site proof.");
       updateGenerateActionState();
       return;
+    }
+
+    if (generationView.loading && !generationView.operationsPayload) {
+      setProjectOperationsEmpty("Loading operation history for " + selectedSlug + "...");
+    } else if (
+      generationView.operationsPayload
+      && generationView.operationsPayload.project
+      && String(generationView.operationsPayload.project.slug || "") === selectedSlug
+    ) {
+      projectOperations.innerHTML = buildProjectOperationsHtml(generationView.operationsPayload);
+    } else if (generationView.error) {
+      setProjectOperationsEmpty("Operation history is temporarily unavailable.");
+    } else {
+      setProjectOperationsEmpty("Operation history has not been loaded yet.");
     }
 
     if (generationView.loading && !generationView.statusPayload) {
@@ -914,7 +1085,8 @@
           const response = await fetch("/api/projects/" + encodeURIComponent(String(generateProjectSlug.value || "").trim()) + "/state/rollback", {
             method: "POST",
             headers: {
-              "Content-Type": "application/json"
+              "Content-Type": "application/json",
+              "Idempotency-Key": createRequestIdempotencyKey("state-rollback")
             },
             body: JSON.stringify({
               apply_path: rollbackButton.getAttribute("data-apply-path") || "latest"
@@ -1091,7 +1263,8 @@
           const response = await fetch("/api/projects/" + encodeURIComponent(String(generateProjectSlug.value || "").trim()) + "/state/apply", {
             method: "POST",
             headers: {
-              "Content-Type": "application/json"
+              "Content-Type": "application/json",
+              "Idempotency-Key": createRequestIdempotencyKey("state-apply")
             },
             body: JSON.stringify({
               plan_path: applyButton.getAttribute("data-plan-path") || "latest"
@@ -1210,7 +1383,8 @@
             const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/install-dependency", {
               method: "POST",
               headers: {
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Idempotency-Key": createRequestIdempotencyKey("setup-install-required-" + row.key)
               },
               body: JSON.stringify({ dependency: row.key })
             });
@@ -1247,7 +1421,8 @@
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "Idempotency-Key": createRequestIdempotencyKey("setup-" + action)
         },
         body: JSON.stringify(payload)
       });
@@ -1259,6 +1434,7 @@
 
       renderSetupResult(result, successTitle);
       await loadProjects();
+      await loadProjectOperations(slug, { requestId: generationView.requestId }).catch(() => {});
     } catch (error) {
       showResult(setupResult, { error: error.message }, true);
     } finally {
@@ -1310,6 +1486,39 @@
     renderGenerationSurface();
   }
 
+  async function loadProjectOperations(slug, options) {
+    const activeRequest = getActiveGenerationRequest(slug, options);
+    const selectedSlug = activeRequest.slug;
+    const requestId = activeRequest.requestId;
+    const requestSignal = activeRequest.signal;
+    if (!selectedSlug) {
+      generationView.operationsPayload = null;
+      generationView.error = null;
+      renderGenerationSurface();
+      return;
+    }
+
+    if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+      return;
+    }
+
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/operations?limit=20", {
+      signal: requestSignal || undefined
+    });
+    const payload = await response.json();
+    if (!isActiveGenerationSelection(selectedSlug, requestId)) {
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(payload.error || "Unable to load project operations.");
+    }
+
+    generationView.operationsPayload = payload;
+    generationView.error = null;
+    renderGenerationSurface();
+    refreshSetupMutationAvailability();
+  }
+
   async function loadGenerationStatus(slug, options) {
     const activeRequest = getActiveGenerationRequest(slug, options);
     const selectedSlug = activeRequest.slug;
@@ -1339,8 +1548,15 @@
     }
 
     generationView.statusPayload = payload;
+    generationView.operationsPayload = {
+      ok: true,
+      project: payload.project,
+      active_operation: payload.current_operation || null,
+      operations: Array.isArray(payload.operations) ? payload.operations : []
+    };
     generationView.error = null;
     renderGenerationSurface();
+    refreshSetupMutationAvailability();
     updateGenerationPolling(payload);
   }
 
@@ -1360,6 +1576,7 @@
     try {
       await Promise.all([
         loadGenerationStatus(selectedSlug, { requestId }),
+        loadProjectOperations(selectedSlug, { requestId }),
         loadSiteStatus(selectedSlug, { requestId })
       ]);
 
@@ -1369,6 +1586,7 @@
         }
         try {
           await loadGenerationStatus(selectedSlug, { requestId });
+          await loadProjectOperations(selectedSlug, { requestId });
           await loadSiteStatus(selectedSlug, { requestId });
         } catch (error) {
           if (isActiveGenerationSelection(selectedSlug, requestId)) {
@@ -1450,6 +1668,7 @@
         updateGenerateActionState();
         try {
           await loadGenerationStatus(generateSlugSnapshot, { requestId: activeGenerationRequestId });
+          await loadProjectOperations(generateSlugSnapshot, { requestId: activeGenerationRequestId });
           await loadSiteStatus(generateSlugSnapshot, { requestId: activeGenerationRequestId });
         } finally {
           if (isActiveGenerationSelection(generateSlugSnapshot, activeGenerationRequestId)) {
@@ -1681,7 +1900,8 @@
       const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/generate", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "Idempotency-Key": createRequestIdempotencyKey("controlled-generate")
         },
         body: JSON.stringify({
           plan_id: generatePreviewState.plan_id,

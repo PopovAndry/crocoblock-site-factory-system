@@ -17,21 +17,22 @@ const { installAgent } = require("./install-agent");
 const { installDependency } = require("./install-dependency");
 const { listApprovedDependencySources, resolveApprovedDependencySource } = require("./dependency-sources");
 const { getSetupStatus } = require("./setup");
-const { getSetupMutationLock, withSetupMutationLock } = require("./setup-lock");
 const { planProject } = require("./plan");
 const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
 const { assertPlanningRunReady, generateProject, readRunFile } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
 const { readStateStatus, refreshState, planState, applyStatePlan, rollbackStateApply } = require("./state");
 const { generateProofPack, getProofPackStatus } = require("./proof-pack");
-const { getGenerationMutationLock, withGenerationMutationLock } = require("./generation-lock");
 const {
-  createGenerationOperation,
-  findSuccessfulOperationByPlanId,
-  getLatestGenerationOperation,
-  interruptOperationIfStale,
-  normalizePlanId,
-  updateGenerationOperation
+  computeRequestFingerprint,
+  getProjectOperationsStatus,
+  runProjectOperation
+} = require("./project-operation-coordinator");
+const {
+  findSuccessfulControlledGenerateByPlanId
+} = require("./project-operation-store");
+const {
+  normalizePlanId
 } = require("./generation-operation");
 
 const UI_DIR = path.join(__dirname, "ui");
@@ -223,6 +224,11 @@ function renderHomePage(config) {
     "        <div id=\"generation-status\" class=\"project-list\"></div>",
     "        <div id=\"generate-preview-result\" class=\"result-box\" hidden></div>",
     "        <div id=\"generate-result\" class=\"result-box\" hidden></div>",
+    "        <div class=\"panel-header\">",
+    "          <h2>Project Operations</h2>",
+    "          <p>Project-wide mutation history and active operation status.</p>",
+    "        </div>",
+    "        <div id=\"project-operations\" class=\"project-list\"></div>",
     "      </section>",
     "      <section class=\"panel\">",
     "        <div class=\"panel-header\">",
@@ -366,6 +372,22 @@ function validateGenerationPrompt(promptInput) {
   return prompt;
 }
 
+function getRequestIdempotencyKey(request) {
+  const raw = request.headers["idempotency-key"];
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
+function buildOperationResponse(result, payload) {
+  const safePayload = payload && typeof payload === "object" ? payload : {};
+  const operation = result.operation || null;
+  return Object.assign({}, safePayload, {
+    operation,
+    operation_result_summary: operation && operation.result_summary ? operation.result_summary : null,
+    proof_ref: operation && operation.proof_ref ? operation.proof_ref : null,
+    idempotent_replay: result.idempotentReplay === true
+  });
+}
+
 function planProofPathForRun(projectState, runId) {
   return path.join(projectState.runtimePath, "proofs", "plan-" + runId + ".json");
 }
@@ -461,13 +483,10 @@ async function buildGenerationStatusPayload(slug, projectsRoot) {
     slug,
     projectsRoot
   });
-  const latestOperationEntry = interruptOperationIfStale({
+  const operationsStatus = getProjectOperationsStatus({
     slug,
     projectsRoot,
-    hasActiveLock: Boolean(getGenerationMutationLock(slug))
-  }) || getLatestGenerationOperation({
-    slug,
-    projectsRoot
+    limit: 20
   });
   let latestPlan = null;
 
@@ -492,20 +511,17 @@ async function buildGenerationStatusPayload(slug, projectsRoot) {
     persistProject: false,
     checkUrls: true
   });
-  const activeLock = getGenerationMutationLock(slug);
-  const latestOperation = latestOperationEntry ? latestOperationEntry.operation : null;
+  const latestOperation = operationsStatus.operations.length ? operationsStatus.operations[0] : null;
 
   return {
     project: summarizeProjectForSite(projectState.project),
     setup: setupResult.setup,
     latest_plan: latestPlan,
-    current_operation: latestOperation && (latestOperation.status === "requested" || latestOperation.status === "running")
-      ? latestOperation
-      : null,
+    current_operation: operationsStatus.active_operation || null,
     latest_operation: latestOperation,
-    operation_lock: activeLock ? {
-      current_operation: activeLock.operation,
-      acquired_at: activeLock.acquired_at
+    operations: operationsStatus.operations,
+    operation_lock: operationsStatus.active_operation ? {
+      current_operation: operationsStatus.active_operation
     } : null,
     site: siteResult.site
   };
@@ -603,14 +619,40 @@ function createLauncherServer(options) {
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/provision$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const result = await withSetupMutationLock(slug, "provision", () => {
-          return provisionProject({
-            slug,
-            projectsRoot
-          });
+        const operationResult = await runProjectOperation({
+          slug,
+          projectsRoot,
+          operationType: "provision",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: { project_slug: slug, operation_type: "provision" },
+          metadata: {},
+          execute: async () => {
+            const result = await provisionProject({
+              slug,
+              projectsRoot
+            });
+            return {
+              result,
+              proofRef: result.proofPath,
+              resultSummary: {
+                status: "ready",
+                wp_url: result.project.wp_url,
+                root_http_status: result.rootHttpStatus,
+                wp_json_status: result.wpJsonStatus
+              }
+            };
+          }
         });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
 
-        sendJson(response, 200, {
+        sendJson(response, 200, buildOperationResponse(operationResult, {
           ok: true,
           project: summarizeProjectForSite(result.project),
           status: "ready",
@@ -619,20 +661,46 @@ function createLauncherServer(options) {
           wp_json_status: result.wpJsonStatus,
           proof: result.proof,
           proof_path: result.proofPath
-        });
+        }));
         return;
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const result = await withSetupMutationLock(slug, "install-agent", () => {
-          return installAgent({
-            slug,
-            projectsRoot
-          });
+        const operationResult = await runProjectOperation({
+          slug,
+          projectsRoot,
+          operationType: "install_agent",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: { project_slug: slug, operation_type: "install_agent" },
+          metadata: {},
+          execute: async () => {
+            const result = await installAgent({
+              slug,
+              projectsRoot
+            });
+            return {
+              result,
+              proofRef: result.proofPath,
+              resultSummary: {
+                status: "ready",
+                rest_base: result.restBase,
+                health_status: result.health && result.health.status || null,
+                capabilities_status: result.capabilities && result.capabilities.status || null
+              }
+            };
+          }
         });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
 
-        sendJson(response, 200, {
+        sendJson(response, 200, buildOperationResponse(operationResult, {
           ok: true,
           project: summarizeProjectForSite(result.project),
           status: "ready",
@@ -641,7 +709,7 @@ function createLauncherServer(options) {
           capabilities: result.capabilities,
           proof: result.proof,
           proof_path: result.proofPath
-        });
+        }));
         return;
       }
 
@@ -672,27 +740,60 @@ function createLauncherServer(options) {
         const approvedSource = resolveApprovedDependencySource(payload.dependency);
 
         if (!approvedSource.exists) {
-          const missingError = new Error("Approved dependency ZIP is missing for " + approvedSource.key + ": " + approvedSource.absolutePath);
+          const missingError = new Error("Approved dependency ZIP is missing for " + approvedSource.key + ".");
           missingError.code = "approved_dependency_zip_missing";
           throw missingError;
         }
 
-        const result = await withSetupMutationLock(slug, "install-dependency:" + approvedSource.key, () => {
-          return installDependency({
-            slug,
-            dependency: payload.dependency,
-            zip: approvedSource.absolutePath,
-            projectsRoot
-          });
+        const operationResult = await runProjectOperation({
+          slug,
+          projectsRoot,
+          operationType: "install_dependency",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: {
+            project_slug: slug,
+            operation_type: "install_dependency",
+            dependency_key: approvedSource.key
+          },
+          metadata: {
+            dependency_key: approvedSource.key
+          },
+          execute: async () => {
+            const result = await installDependency({
+              slug,
+              dependency: payload.dependency,
+              zip: approvedSource.absolutePath,
+              projectsRoot
+            });
+            return {
+              result,
+              proofRef: result.proofPath,
+              resultSummary: {
+                status: "ok",
+                dependency_key: result.dependency && result.dependency.slug || approvedSource.key,
+                installed: result.proof && result.proof.installed === true,
+                active: result.proof && result.proof.active === true,
+                can_generate_after: result.proof && result.proof.can_generate_after === true
+              }
+            };
+          }
         });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
 
-        sendJson(response, 200, {
+        sendJson(response, 200, buildOperationResponse(operationResult, {
           ok: true,
           project: summarizeProjectForSite(result.project),
           dependency: result.dependency.slug,
           proof: result.proof,
           proof_path: result.proofPath
-        });
+        }));
         return;
       }
 
@@ -789,23 +890,40 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/operations$/.test(requestUrl.pathname)) {
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const rawLimit = requestUrl.searchParams.get("limit");
+        const limit = rawLimit == null || rawLimit === ""
+          ? 20
+          : Number(rawLimit);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+          throw createStructuredError(
+            "Operation history limit must be an integer from 1 to 100.",
+            "invalid_operation_history_limit",
+            400
+          );
+        }
+        const operationsStatus = getProjectOperationsStatus({
+          slug,
+          projectsRoot,
+          limit
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          project: summarizeProjectForSite(operationsStatus.project),
+          active_operation: operationsStatus.active_operation,
+          operations: operationsStatus.operations
+        });
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname)) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
         const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
         assertProjectExistsForRoute(slug, projectsRoot);
-        const setupLock = getSetupMutationLock(slug);
-        if (setupLock) {
-          throw createStructuredError(
-            "A setup operation is already in progress for this project.",
-            "setup_operation_in_progress",
-            409,
-            {
-              current_operation: setupLock.operation
-            }
-          );
-        }
-
         if (payload.confirm_generate !== true) {
           throw createStructuredError(
             "Generate requires confirm_generate=true.",
@@ -818,7 +936,7 @@ function createLauncherServer(options) {
         const setupResult = await ensureProjectReadyToGenerate(slug, projectsRoot);
         const projectState = readProjectBySlug(slug, projectsRoot);
         const planState = readGenerationPlanState(projectState, planId);
-        const priorSuccess = findSuccessfulOperationByPlanId({
+        const priorSuccess = findSuccessfulControlledGenerateByPlanId({
           slug,
           projectsRoot,
           planId
@@ -835,93 +953,64 @@ function createLauncherServer(options) {
           );
         }
 
-        let operationSeed = null;
-        let result = null;
-        try {
-          result = await withGenerationMutationLock(slug, "controlled-generate:" + planId, async () => {
-            operationSeed = createGenerationOperation({
-              slug,
-              projectsRoot,
-              planId,
-              promptHash: planState.run.prompt_hash || null,
-              statusDetail: "preparing"
-            });
-            await updateGenerationOperation({
-              slug,
-              projectsRoot,
-              operationId: operationSeed.operation.operation_id,
-              patch: {
-                status: "running",
-                status_detail: "validating",
-                started_at: new Date().toISOString()
-              }
-            });
-
-            return generateProject({
-              slug,
-              projectsRoot,
-              planId,
-              operationId: operationSeed.operation.operation_id,
-              onProgress: async (statusDetail) => {
-                await updateGenerationOperation({
-                  slug,
-                  projectsRoot,
-                  operationId: operationSeed.operation.operation_id,
-                  patch: {
-                    status: "running",
-                    status_detail: statusDetail
-                  }
-                });
-              }
-            });
-          });
-        } catch (error) {
-          const failureProofPath = error.proofPath || null;
-          if (operationSeed) {
-            await updateGenerationOperation({
-              slug,
-              projectsRoot,
-              operationId: operationSeed.operation.operation_id,
-              patch: {
-                status: "failed",
-                status_detail: "failed",
-                completed_at: new Date().toISOString(),
-                proof_path: failureProofPath,
-                error: {
-                  code: error.code || "controlled_generate_failed",
-                  message: error.message
-                }
-              }
-            });
-          }
-          throw error;
-        }
-
-        const finalOperation = updateGenerationOperation({
+        const operationResult = await runProjectOperation({
           slug,
           projectsRoot,
-          operationId: operationSeed.operation.operation_id,
-          patch: {
-            status: "succeeded",
-            status_detail: "succeeded",
-            completed_at: new Date().toISOString(),
-            proof_path: result.proofPath,
-            result_summary: {
-              status: result.executeData.status || "ok",
-              code: result.executeData.code || "controlled_generate_completed",
-              provider_called: false,
-              personalization_source: result.proof && result.proof.personalization
-                ? result.proof.personalization.source || "local_interpreter"
-                : "local_interpreter",
-              counts_before: result.beforeCounts || null,
-              counts_after: result.afterCounts || null,
-              generated_urls: result.generatedUrls || {},
-              url_status: result.urlStatus || {}
+          operationType: "controlled_generate",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: {
+            project_slug: slug,
+            operation_type: "controlled_generate",
+            plan_id: planId,
+            prompt_hash: planState.run.prompt_hash || null
+          },
+          metadata: {
+            plan_id: planId,
+            prompt_hash: planState.run.prompt_hash || null
+          },
+          safety: {
+            live_ai_used: false,
+            apply_used: false,
+            rollback_used: false
+          },
+          execute: async (context) => {
+            const result = await generateProject({
+              slug,
+              projectsRoot,
+              planId,
+              operationId: context.operationId,
+              onProgress: async (statusDetail) => {
+                await context.setStage(statusDetail || "executing");
+              }
+            });
+            return {
+              result,
+              proofRef: result.proofPath,
+              resultSummary: {
+                status: result.executeData.status || "ok",
+                code: result.executeData.code || "controlled_generate_completed",
+                provider_called: false,
+                personalization_source: result.proof && result.proof.personalization
+                  ? result.proof.personalization.source || "local_interpreter"
+                  : "local_interpreter",
+                counts_before: result.beforeCounts || null,
+                counts_after: result.afterCounts || null,
+                generated_urls: result.generatedUrls || {},
+                url_status: result.urlStatus || {}
+              }
             }
           }
         });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
 
-        sendJson(response, 200, {
+        sendJson(response, 200, buildOperationResponse(operationResult, {
           ok: true,
           status: result.executeData.status,
           code: result.executeData.code,
@@ -930,10 +1019,8 @@ function createLauncherServer(options) {
           project: summarizeProjectForSite(result.project),
           generated_urls: result.generatedUrls,
           url_status: result.urlStatus,
-          operation: finalOperation.operation,
-          operation_path: finalOperation.operationPath,
           setup_ready: setupResult.setup.ready_to_generate === true
-        });
+        }));
         return;
       }
 
@@ -1112,14 +1199,55 @@ function createLauncherServer(options) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const result = await applyStatePlan({
+        const operationResult = await runProjectOperation({
           slug,
           projectsRoot,
-          planPath: payload.plan_path,
-          confirmOverwriteFields: payload.confirm_overwrite_fields
+          operationType: "state_apply",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: {
+            project_slug: slug,
+            operation_type: "state_apply",
+            plan_path: payload.plan_path || "latest",
+            confirm_overwrite_fields: Array.isArray(payload.confirm_overwrite_fields)
+              ? payload.confirm_overwrite_fields.slice().sort()
+              : payload.confirm_overwrite_fields || []
+          },
+          metadata: {
+            plan_ref: payload.plan_path || "latest"
+          },
+          safety: {
+            live_ai_used: false,
+            apply_used: true,
+            rollback_used: false
+          },
+          execute: async () => {
+            const result = await applyStatePlan({
+              slug,
+              projectsRoot,
+              planPath: payload.plan_path,
+              confirmOverwriteFields: payload.confirm_overwrite_fields
+            });
+            return {
+              result,
+              proofRef: result.proofPath || null,
+              resultSummary: {
+                status: result.status,
+                code: result.code,
+                apply_method: result.apply ? result.apply.apply_method : (result.proof ? result.proof.apply_method : null)
+              }
+            };
+          }
         });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
 
-        sendJson(response, 200, {
+        sendJson(response, 200, buildOperationResponse(operationResult, {
           ok: true,
           project: summarizeProjectForSite(result.project),
           status: result.status,
@@ -1131,7 +1259,7 @@ function createLauncherServer(options) {
           state_path: result.statePath,
           conflicts: result.conflicts || [],
           warnings: result.apply ? result.apply.warnings : (result.proof ? result.proof.warnings : [])
-        });
+        }));
         return;
       }
 
@@ -1139,13 +1267,51 @@ function createLauncherServer(options) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const result = await rollbackStateApply({
+        const operationResult = await runProjectOperation({
           slug,
           projectsRoot,
-          applyPath: payload.apply_path
+          operationType: "state_rollback",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: {
+            project_slug: slug,
+            operation_type: "state_rollback",
+            apply_path: payload.apply_path || "latest"
+          },
+          metadata: {
+            apply_ref: payload.apply_path || "latest"
+          },
+          safety: {
+            live_ai_used: false,
+            apply_used: false,
+            rollback_used: true
+          },
+          execute: async () => {
+            const result = await rollbackStateApply({
+              slug,
+              projectsRoot,
+              applyPath: payload.apply_path
+            });
+            return {
+              result,
+              proofRef: result.proofPath || null,
+              resultSummary: {
+                status: result.status,
+                code: result.code,
+                rollback_fields: result.rollback ? Object.keys(result.rollback.rollback_fields || {}) : []
+              }
+            };
+          }
         });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
 
-        sendJson(response, 200, {
+        sendJson(response, 200, buildOperationResponse(operationResult, {
           ok: true,
           project: summarizeProjectForSite(result.project),
           status: result.status,
@@ -1155,7 +1321,7 @@ function createLauncherServer(options) {
           state_path: result.statePath,
           protected_conflicts: result.protectedConflicts || [],
           warnings: result.rollback ? result.rollback.warnings : []
-        });
+        }));
         return;
       }
 
@@ -1258,6 +1424,7 @@ function createLauncherServer(options) {
       ) ? 400 : 500);
       sendJson(response, statusCode, {
         ok: false,
+        status: "error",
         error: error.message,
         code: error.code || null,
         current_operation: error.current_operation || null,

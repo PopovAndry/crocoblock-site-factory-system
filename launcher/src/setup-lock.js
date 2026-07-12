@@ -1,63 +1,54 @@
 "use strict";
 
+const {
+  getProjectOperationsStatus,
+  runProjectOperation
+} = require("./project-operation-coordinator");
 const { validateExplicitSlug } = require("./project-store");
-
-const setupLocks = new Map();
 
 function normalizeSetupLockSlug(slug) {
   return validateExplicitSlug(slug);
 }
 
-function acquireSetupMutationLock(slug, operation) {
-  const lockKey = normalizeSetupLockSlug(slug);
-  const existing = setupLocks.get(lockKey);
-
-  if (existing) {
-    const error = new Error(
-      "A setup operation is already in progress for project " + lockKey + "."
-    );
-    error.code = "setup_operation_in_progress";
-    error.statusCode = 409;
-    error.current_operation = existing.operation;
-    error.project_slug = lockKey;
-    throw error;
-  }
-
-  const lockRecord = {
-    operation: String(operation || "setup_operation"),
-    acquired_at: new Date().toISOString()
-  };
-  setupLocks.set(lockKey, lockRecord);
-
-  let released = false;
-  return function releaseSetupMutationLock() {
-    if (released) {
-      return;
-    }
-    released = true;
-    const current = setupLocks.get(lockKey);
-    if (current === lockRecord) {
-      setupLocks.delete(lockKey);
-    }
-  };
+function getSetupMutationLock(slug, projectsRoot) {
+  const status = getProjectOperationsStatus({
+    slug,
+    projectsRoot,
+    limit: 1
+  });
+  return status.active_operation
+    ? { operation: status.active_operation.operation_type || status.active_operation.operation_id }
+    : null;
 }
 
-async function withSetupMutationLock(slug, operation, handler) {
-  const release = acquireSetupMutationLock(slug, operation);
-  try {
-    return await handler();
-  } finally {
-    release();
-  }
-}
-
-function getSetupMutationLock(slug) {
-  const lockKey = normalizeSetupLockSlug(slug);
-  return setupLocks.get(lockKey) || null;
+async function withSetupMutationLock(slug, operation, handler, options) {
+  const safeOperation = String(operation || "setup_operation");
+  const operationType = safeOperation === "provision"
+    ? "provision"
+    : (safeOperation === "install-agent" ? "install_agent" : "install_dependency");
+  const result = await runProjectOperation({
+    slug,
+    projectsRoot: options && options.projectsRoot,
+    operationType,
+    idempotencyKey: options && options.idempotencyKey,
+    fingerprintInput: options && options.fingerprintInput || { operation: safeOperation },
+    metadata: options && options.metadata || {},
+    execute: async () => {
+      const businessResult = await handler();
+      return {
+        result: businessResult,
+        proofRef: businessResult && businessResult.proofPath || null,
+        resultSummary: {
+          status: "ok",
+          proof_ref: businessResult && businessResult.proofPath || null
+        }
+      };
+    }
+  });
+  return result.result;
 }
 
 module.exports = {
-  acquireSetupMutationLock,
   getSetupMutationLock,
   normalizeSetupLockSlug,
   withSetupMutationLock
