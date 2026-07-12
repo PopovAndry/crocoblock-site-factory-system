@@ -149,11 +149,24 @@ function buildProtectedPlan(slug, planId, options) {
 }
 
 async function requestJson(baseUrl, requestPath, options) {
-  const response = await fetch(baseUrl + requestPath, Object.assign({
-    headers: {
-      "Content-Type": "application/json"
-    }
-  }, options || {}));
+  const requestOptions = Object.assign({}, options || {});
+  const method = String(requestOptions.method || "GET").toUpperCase();
+  const headers = Object.assign({
+    "Content-Type": "application/json"
+  }, requestOptions.headers || {});
+
+  if (method !== "GET" && method !== "HEAD" && requestOptions.includeMutationToken !== false) {
+    const sessionResponse = await fetch(baseUrl + "/api/session");
+    const mutationToken = sessionResponse.headers.get("X-Factory-Mutation-Token");
+    assert.ok(mutationToken, "expected Launcher mutation token for POST route tests");
+    headers["X-Factory-Mutation-Token"] = mutationToken;
+    headers.Origin = baseUrl;
+  }
+
+  delete requestOptions.includeMutationToken;
+  requestOptions.headers = headers;
+
+  const response = await fetch(baseUrl + requestPath, requestOptions);
   const body = await response.json();
   return { response, body };
 }

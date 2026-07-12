@@ -5,6 +5,12 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 const {
+  DEFAULT_JSON_BODY_LIMIT_BYTES,
+  DEFAULT_LAUNCHER_HOST,
+  createHttpSecurity,
+  sanitizeErrorText
+} = require("./http-security");
+const {
   DEFAULT_PROJECTS_ROOT,
   createProjectScaffold,
   listProjects,
@@ -65,36 +71,76 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, {
+function sendJson(response, statusCode, payload, extraHeaders) {
+  response.writeHead(statusCode, Object.assign({
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store"
-  });
+  }, extraHeaders || {}));
   response.end(JSON.stringify(payload, null, 2));
 }
 
-function sendText(response, statusCode, body, contentType) {
-  response.writeHead(statusCode, {
+function sendText(response, statusCode, body, contentType, extraHeaders) {
+  response.writeHead(statusCode, Object.assign({
     "Content-Type": contentType || "text/plain; charset=utf-8",
     "Cache-Control": "no-store"
-  });
+  }, extraHeaders || {}));
   response.end(body);
 }
 
-function readRequestBody(request) {
-  return new Promise((resolve, reject) => {
-    let body = "";
+function readRequestBody(request, options) {
+  if (request.__factoryBodyPromise) {
+    return request.__factoryBodyPromise;
+  }
+  const limitBytes = Number(options && options.limitBytes || DEFAULT_JSON_BODY_LIMIT_BYTES);
+  request.__factoryBodyPromise = new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalBytes = 0;
+    let tooLarge = false;
 
     request.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 1024 * 1024) {
-        reject(new Error("Request body too large."));
+      totalBytes += chunk.length;
+      if (tooLarge) {
+        return;
       }
+      if (totalBytes > limitBytes) {
+        tooLarge = true;
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
     });
 
-    request.on("end", () => resolve(body));
+    request.on("end", () => {
+      if (tooLarge) {
+        reject(createStructuredError(
+          "Request body exceeds the Launcher JSON limit.",
+          "request_body_too_large",
+          413,
+          { securityBoundary: true }
+        ));
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
     request.on("error", reject);
   });
+  return request.__factoryBodyPromise;
+}
+
+async function readJsonPayload(request, options) {
+  const rawBody = await readRequestBody(request, options);
+  if (!rawBody) {
+    return {};
+  }
+  try {
+    return JSON.parse(rawBody);
+  } catch (error) {
+    throw createStructuredError(
+      "Request body must be valid JSON.",
+      "request_json_invalid",
+      400,
+      { securityBoundary: true }
+    );
+  }
 }
 
 function renderHomePage(config) {
@@ -290,7 +336,8 @@ function renderHomePage(config) {
     "    </section>",
     "  </main>",
     "  <script>window.FactoryLauncherConfig = " + JSON.stringify({
-      projectsRoot: config.projectsRoot
+      projectsRoot: config.projectsRoot,
+      sessionPath: "/api/session"
     }) + ";</script>",
     "  <script src=\"/assets/app.js\"></script>",
     "</body>",
@@ -662,14 +709,27 @@ async function buildStateChangeStatusPayload(slug, projectsRoot) {
 }
 
 function createLauncherServer(options) {
-  const host = options.host || "127.0.0.1";
+  const host = options.host || DEFAULT_LAUNCHER_HOST;
   const port = Number(options.port || 3847);
   const projectsRoot = resolveProjectsRoot(options.projectsRoot || DEFAULT_PROJECTS_ROOT);
+  const httpSecurity = createHttpSecurity({
+    host,
+    port,
+    jsonBodyLimitBytes: options.jsonBodyLimitBytes,
+    mutationRateLimitMax: options.mutationRateLimitMax,
+    mutationRateLimitWindowMs: options.mutationRateLimitWindowMs
+  });
 
   const server = http.createServer(async (request, response) => {
-    const requestUrl = new URL(request.url, "http://" + host + ":" + String(port));
+    const requestUrl = new URL(request.url, "http://" + DEFAULT_LAUNCHER_HOST + ":" + String(port));
+    let requestSecurity = null;
 
     try {
+      requestSecurity = httpSecurity.enforce(request, response, requestUrl);
+      if (requestSecurity && requestSecurity.handled) {
+        return;
+      }
+
       if (request.method === "GET" && requestUrl.pathname === "/") {
         sendText(response, 200, renderHomePage({ projectsRoot }), "text/html; charset=utf-8");
         return;
@@ -697,6 +757,12 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/session") {
+        const sessionBootstrap = httpSecurity.getSessionBootstrap(requestSecurity.hostInfo);
+        sendJson(response, 200, sessionBootstrap.body, sessionBootstrap.headers);
+        return;
+      }
+
       if (request.method === "GET" && requestUrl.pathname === "/api/projects") {
         sendJson(response, 200, {
           projects_root: projectsRoot,
@@ -714,8 +780,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && requestUrl.pathname === "/api/projects") {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const result = createProjectScaffold({
           name: payload.name,
           port: payload.port,
@@ -752,6 +817,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/provision$/.test(requestUrl.pathname)) {
+        await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const operationResult = await runProjectOperation({
           slug,
@@ -800,6 +866,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname)) {
+        await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const operationResult = await runProjectOperation({
           slug,
@@ -868,8 +935,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const approvedSource = resolveApprovedDependencySource(payload.dependency);
 
@@ -932,13 +998,12 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = await planProject({
           slug,
           prompt: payload.prompt,
-          projectsRoot: payload.projectsRoot || projectsRoot
+          projectsRoot
         });
 
         sendJson(response, 200, {
@@ -954,8 +1019,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
         assertProjectExistsForRoute(slug, projectsRoot);
         const prompt = validateGenerationPrompt(payload.prompt);
@@ -1054,8 +1118,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
         assertProjectExistsForRoute(slug, projectsRoot);
         if (payload.confirm_generate !== true) {
@@ -1176,6 +1239,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname)) {
+        await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = await writeSiteSurfaceProof({
           slug,
@@ -1229,6 +1293,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/proof-pack\/generate$/.test(requestUrl.pathname)) {
+        await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = await generateProofPack({
           slug,
@@ -1249,6 +1314,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname)) {
+        await readJsonPayload(request);
         const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
         assertProjectExistsForRoute(slug, projectsRoot);
         const result = await refreshState({
@@ -1270,8 +1336,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/plan$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
         assertProjectExistsForRoute(slug, projectsRoot);
         const prompt = validateChangeRequestPrompt(payload.prompt);
@@ -1315,8 +1380,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/apply$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
         assertProjectExistsForRoute(slug, projectsRoot);
         const usesPlanId = Object.prototype.hasOwnProperty.call(payload, "plan_id");
@@ -1436,8 +1500,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/rollback$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
         assertProjectExistsForRoute(slug, projectsRoot);
         const usesOperationId = Object.prototype.hasOwnProperty.call(payload, "apply_operation_id");
@@ -1591,8 +1654,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/ai\/configure$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = configureAi({
           slug,
@@ -1614,6 +1676,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/ai\/enable-live$/.test(requestUrl.pathname)) {
+        await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = enableLiveAi({
           slug,
@@ -1631,8 +1694,7 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)) {
-        const rawBody = await readRequestBody(request);
-        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const payload = await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = estimateAi({
           slug,
@@ -1671,17 +1733,28 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/ai\/enable-live$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/ai\/estimate$/.test(requestUrl.pathname)
       ) ? 400 : 500);
+      const isSecurityBoundary = error.securityBoundary === true;
+      const responseHeaders = {};
+      if (isSecurityBoundary) {
+        responseHeaders.Connection = "close";
+        if (!request.complete) {
+          request.resume();
+        }
+      }
+      if (Number.isInteger(error.retryAfterSeconds) && error.retryAfterSeconds > 0) {
+        responseHeaders["Retry-After"] = String(error.retryAfterSeconds);
+      }
       sendJson(response, statusCode, {
         ok: false,
         status: "error",
-        error: error.message,
+        error: sanitizeErrorText(error.message),
         code: error.code || null,
-        current_operation: error.current_operation || null,
-        required_fields: error.required_fields || [],
-        proof_path: error.proofPath || null,
-        blockers: error.blockers || [],
-        rejected_fields: error.rejected_fields || []
-      });
+        current_operation: isSecurityBoundary ? null : (error.current_operation || null),
+        required_fields: isSecurityBoundary ? [] : (error.required_fields || []),
+        proof_path: isSecurityBoundary ? null : (error.proofPath || null),
+        blockers: isSecurityBoundary ? [] : (error.blockers || []),
+        rejected_fields: isSecurityBoundary ? [] : (error.rejected_fields || [])
+      }, responseHeaders);
     }
   });
 

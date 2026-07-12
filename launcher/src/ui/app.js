@@ -76,6 +76,9 @@
   };
   let stateChangeRequestId = 0;
   let stateChangeAbortController = null;
+  let mutationSessionToken = "";
+  let mutationSessionOrigin = "";
+  let mutationSessionPromise = null;
   let stateChangeView = {
     slug: "",
     requestId: 0,
@@ -350,6 +353,85 @@
       return safePrefix + ":" + window.crypto.randomUUID();
     }
     return safePrefix + ":" + Date.now().toString(36) + ":" + Math.random().toString(36).slice(2);
+  }
+
+  function isLauncherMutationSessionCode(code) {
+    return code === "mutation_session_token_required" || code === "mutation_session_token_invalid";
+  }
+
+  async function ensureLauncherMutationSession(forceRefresh) {
+    if (!forceRefresh && mutationSessionToken) {
+      return {
+        token: mutationSessionToken,
+        origin: mutationSessionOrigin || window.location.origin
+      };
+    }
+    if (mutationSessionPromise) {
+      return mutationSessionPromise;
+    }
+
+    mutationSessionPromise = (async () => {
+      const response = await fetch(config.sessionPath || "/api/session", {
+        cache: "no-store"
+      });
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (error) {
+        payload = {};
+      }
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to refresh the Launcher security session.");
+      }
+      const token = response.headers.get("X-Factory-Mutation-Token");
+      if (!token) {
+        throw new Error("Launcher security session token is unavailable.");
+      }
+      mutationSessionToken = token;
+      mutationSessionOrigin = payload.launcher_origin || window.location.origin;
+      return {
+        token: mutationSessionToken,
+        origin: mutationSessionOrigin
+      };
+    })();
+
+    try {
+      return await mutationSessionPromise;
+    } finally {
+      mutationSessionPromise = null;
+    }
+  }
+
+  async function launcherMutationFetch(input, options) {
+    await ensureLauncherMutationSession(false);
+    const requestOptions = Object.assign({}, options || {});
+    const headers = new Headers(requestOptions.headers || {});
+    headers.set("X-Factory-Mutation-Token", mutationSessionToken);
+    requestOptions.headers = headers;
+    const response = await fetch(input, requestOptions);
+
+    if (response.status === 403) {
+      let payload = null;
+      try {
+        payload = await response.clone().json();
+      } catch (error) {
+        payload = null;
+      }
+      if (payload && isLauncherMutationSessionCode(payload.code)) {
+        mutationSessionToken = "";
+        mutationSessionOrigin = "";
+        try {
+          await ensureLauncherMutationSession(true);
+        } catch (refreshError) {
+          // Keep the original mutation error surface if refresh fails.
+        }
+        const sessionError = new Error("Launcher security session expired. Retry the action.");
+        sessionError.code = payload.code;
+        throw sessionError;
+      }
+    }
+
+    return response;
   }
 
   function renderSetupStatus(payload) {
@@ -1171,7 +1253,7 @@
         const applyOperationId = rollbackButton.getAttribute("data-apply-operation-id") || "";
         rollbackButton.disabled = true;
         try {
-          const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/rollback", {
+          const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/state/rollback", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1385,7 +1467,7 @@
         const selectedPlanId = applyButton.getAttribute("data-plan-id") || "";
         applyButton.disabled = true;
         try {
-          const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/apply", {
+          const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/state/apply", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1512,7 +1594,7 @@
           : [];
         for (const row of rows) {
           if (row.source_available && !row.active) {
-            const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/install-dependency", {
+            const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/install-dependency", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -1550,7 +1632,7 @@
         throw new Error("Unsupported setup action: " + action);
       }
 
-      const response = await fetch(endpoint, {
+      const response = await launcherMutationFetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1923,7 +2005,7 @@
 
     submitButton.disabled = true;
     try {
-      const response = await fetch("/api/projects", {
+      const response = await launcherMutationFetch("/api/projects", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -1969,8 +2051,7 @@
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        prompt,
-        projectsRoot: config.projectsRoot
+        prompt
       })
     });
 
@@ -2057,7 +2138,7 @@
     startGenerationWatch(slug, generatePreviewState.plan_id);
 
     try {
-      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/generate", {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2102,7 +2183,7 @@
       return;
     }
 
-    const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/refresh", {
+    const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/state/refresh", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -2209,7 +2290,7 @@
 
     proofPackGenerateButton.disabled = true;
     try {
-      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/proof-pack/generate", {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/proof-pack/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2269,6 +2350,7 @@
     });
   }
 
+  ensureLauncherMutationSession(false).catch(() => {});
   loadProjects().catch((error) => {
     showResult(createResult, { error: error.message }, true);
   });
