@@ -361,6 +361,29 @@ function findSuccessfulControlledGenerateByPlanId(options) {
   return null;
 }
 
+function findSuccessfulOperationByMetadata(options) {
+  const operationType = String(options.operationType || "").trim();
+  const metadataKey = String(options.metadataKey || "").trim();
+  const metadataValue = String(options.metadataValue || "").trim();
+  if (!operationType || !metadataKey || !metadataValue) {
+    return null;
+  }
+
+  for (const operation of listOperations({
+    slug: options.slug,
+    projectsRoot: options.projectsRoot,
+    includeRaw: false
+  })) {
+    if (operation.operation_type !== operationType || operation.status !== "succeeded") {
+      continue;
+    }
+    if (operation.metadata && String(operation.metadata[metadataKey] || "") === metadataValue) {
+      return operation;
+    }
+  }
+  return null;
+}
+
 function readLock(runtimePath) {
   const lockDir = getLockDirectory(runtimePath);
   const metadataPath = path.join(lockDir, "lock.json");
@@ -408,6 +431,7 @@ module.exports = {
   createOperationId,
   createRequestedOperation,
   findOperationByIdempotencyHash,
+  findSuccessfulOperationByMetadata,
   findSuccessfulControlledGenerateByPlanId,
   getLockDirectory,
   getOperationPath,

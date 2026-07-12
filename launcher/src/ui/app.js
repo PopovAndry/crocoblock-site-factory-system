@@ -32,6 +32,7 @@
   const refreshStateButton = document.getElementById("refresh-state-button");
   const statePlanForm = document.getElementById("state-plan-form");
   const statePlanPrompt = document.getElementById("state-plan-prompt");
+  const stateOverwriteHeroTitleCheckbox = document.getElementById("state-overwrite-hero-title-checkbox");
   const statePlanResult = document.getElementById("state-plan-result");
   const stateRollbackResult = document.getElementById("state-rollback-result");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
@@ -73,6 +74,18 @@
     sitePayload: null,
     error: null
   };
+  let stateChangeRequestId = 0;
+  let stateChangeAbortController = null;
+  let stateChangeView = {
+    slug: "",
+    requestId: 0,
+    loading: false,
+    payload: null,
+    plan: null,
+    apply: null,
+    rollback: null,
+    error: null
+  };
 
   function slugifyProjectName(value) {
     return String(value || "")
@@ -89,6 +102,63 @@
 
   function setGenerationStatusEmpty(message) {
     generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
+  function isActiveStateSelection(slug, requestId) {
+    return String(stateChangeView.slug || "") === String(slug || "")
+      && Number(stateChangeView.requestId) === Number(requestId)
+      && String(generateProjectSlug.value || "").trim() === String(slug || "");
+  }
+
+  function resetStateChangeView(slug) {
+    stateChangeRequestId += 1;
+    if (stateChangeAbortController) {
+      stateChangeAbortController.abort();
+      stateChangeAbortController = null;
+    }
+    stateChangeView = {
+      slug: String(slug || "").trim(),
+      requestId: stateChangeRequestId,
+      loading: true,
+      payload: null,
+      plan: null,
+      apply: null,
+      rollback: null,
+      error: null
+    };
+    statePlanPrompt.value = "";
+    if (stateOverwriteHeroTitleCheckbox) {
+      stateOverwriteHeroTitleCheckbox.checked = false;
+    }
+    statePlanResult.hidden = true;
+    statePlanResult.innerHTML = "";
+    stateRollbackResult.hidden = true;
+    stateRollbackResult.innerHTML = "";
+    renderStateChangeView();
+    return stateChangeView.requestId;
+  }
+
+  function renderStateChangeView() {
+    const payload = stateChangeView.payload;
+    managedState.setAttribute("data-project-slug", stateChangeView.slug || "");
+    managedState.setAttribute("data-request-id", String(stateChangeView.requestId || 0));
+    if (!stateChangeView.slug) {
+      setManagedStateEmpty("Select a project to preview AI site changes.");
+      return;
+    }
+    if (stateChangeView.loading && !payload) {
+      setManagedStateEmpty("Loading AI site change status for " + stateChangeView.slug + "...");
+      return;
+    }
+    if (stateChangeView.error && !payload) {
+      setManagedStateEmpty("Unable to load AI site change status: " + stateChangeView.error);
+      return;
+    }
+    if (payload) {
+      renderManagedState(payload);
+      return;
+    }
+    setManagedStateEmpty("Managed state has not been refreshed yet.");
   }
 
   function setProjectOperationsEmpty(message) {
@@ -1039,6 +1109,9 @@
     const summary = payload.summary;
     const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
     const rollback = payload.rollback || null;
+    const rollbackCandidates = Array.isArray(payload.rollback_candidates) ? payload.rollback_candidates : [];
+    const rollbackCandidate = rollbackCandidates.find((candidate) => candidate.rollback_eligible) || rollbackCandidates[0] || null;
+    const activeOperation = payload.active_operation || null;
     const effectiveSafeFields = Array.isArray(summary.effective_safe_fields) ? summary.effective_safe_fields : [];
     const effectiveWarnings = Array.isArray(summary.effective_safe_field_warnings) ? summary.effective_safe_field_warnings : [];
     managedState.innerHTML = [
@@ -1057,13 +1130,20 @@
       "    <div><dt>User overrides</dt><dd>" + escapeHtml(String(summary.user_overrides_count)) + "</dd></div>",
       "    <div><dt>Protected fields</dt><dd>" + escapeHtml(summary.protected_fields.length ? summary.protected_fields.join(", ") : "None") + "</dd></div>",
       "    <div><dt>Last apply</dt><dd>" + escapeHtml(summary.latest_apply_method || "None") + "</dd></div>",
+      "    <div><dt>Active operation</dt><dd>" + escapeHtml(activeOperation ? (activeOperation.operation_type + " / " + activeOperation.status) : "None") + "</dd></div>",
       "    <div><dt>Effective fields</dt><dd>" + escapeHtml(String(summary.effective_safe_fields_count || 0)) + "</dd></div>",
       "  </dl>",
       effectiveSafeFields.length
         ? "  <ul class=\"warning-list\">" + effectiveSafeFields.map((field) => "<li><strong>" + escapeHtml(field.field_key) + ":</strong> " + escapeHtml(field.value) + " <em>[" + escapeHtml(field.source + (field.protected ? ", protected" : "") + ", render:" + field.rendered_check) + "]</em></li>").join("") + "</ul>"
         : "",
-      rollback && rollback.available && rollback.safe
-        ? "  <p><button type=\"button\" class=\"button\" id=\"state-rollback-button\" data-apply-path=\"" + escapeHtml(rollback.apply_path || "latest") + "\">Rollback Last Apply</button></p>"
+      rollbackCandidate && rollback && rollback.available && rollback.safe
+        ? [
+          "  <label class=\"checkbox-row\">",
+          "    <input type=\"checkbox\" id=\"state-rollback-confirm-checkbox\">",
+          "    <span>I understand this will roll back the selected safe-field apply only.</span>",
+          "  </label>",
+          "  <p><button type=\"button\" class=\"button\" id=\"state-rollback-button\" data-apply-operation-id=\"" + escapeHtml(rollbackCandidate.apply_operation_id || "") + "\" disabled>Rollback Safe-Field Apply</button></p>"
+        ].join("")
         : "",
       rollback && rollback.available && !rollback.safe
         ? "  <p class=\"project-note\">Rollback blocked: confirmation required.</p>"
@@ -1078,21 +1158,34 @@
     ].join("\n");
 
     const rollbackButton = document.getElementById("state-rollback-button");
+    const rollbackConfirm = document.getElementById("state-rollback-confirm-checkbox");
+    if (rollbackButton && rollbackConfirm) {
+      rollbackConfirm.addEventListener("change", () => {
+        rollbackButton.disabled = !rollbackConfirm.checked;
+      });
+    }
     if (rollbackButton) {
       rollbackButton.addEventListener("click", async () => {
+        const slug = String(generateProjectSlug.value || "").trim();
+        const requestId = stateChangeView.requestId;
+        const applyOperationId = rollbackButton.getAttribute("data-apply-operation-id") || "";
         rollbackButton.disabled = true;
         try {
-          const response = await fetch("/api/projects/" + encodeURIComponent(String(generateProjectSlug.value || "").trim()) + "/state/rollback", {
+          const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/rollback", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "Idempotency-Key": createRequestIdempotencyKey("state-rollback")
             },
             body: JSON.stringify({
-              apply_path: rollbackButton.getAttribute("data-apply-path") || "latest"
+              apply_operation_id: applyOperationId,
+              confirm_rollback: true
             })
           });
           const rollbackResult = await response.json();
+          if (!isActiveStateSelection(slug, requestId)) {
+            return;
+          }
           if (!response.ok) {
             showResult(stateRollbackResult, rollbackResult, true);
             return;
@@ -1100,13 +1193,15 @@
 
           renderStateRollbackResult(rollbackResult);
           await loadProjects();
-          await loadManagedState(generateProjectSlug.value);
+          await loadManagedState(generateProjectSlug.value, { requestId: stateChangeView.requestId });
           await loadSiteStatus(generateProjectSlug.value);
           await loadProofPack(generateProjectSlug.value);
         } catch (error) {
-          showResult(stateRollbackResult, { error: error.message }, true);
+          if (isActiveStateSelection(slug, requestId)) {
+            showResult(stateRollbackResult, { error: error.message }, true);
+          }
         } finally {
-          rollbackButton.disabled = false;
+          rollbackButton.disabled = !(rollbackConfirm && rollbackConfirm.checked);
         }
       });
     }
@@ -1211,6 +1306,9 @@
     const confirmationRequired = plan.confirmation_required && typeof plan.confirmation_required === "object"
       ? plan.confirmation_required
       : null;
+    const planId = result.plan_id || plan.plan_id || "";
+    const unsupportedFields = Array.isArray(result.unsupported_fields) ? result.unsupported_fields : [];
+    const safeCanApply = !conflicts.length && includedFields.length > 0;
     const changeList = Array.isArray(plan.diff && plan.diff.field_changes)
       ? plan.diff.field_changes.map((entry) => {
         return "<li><strong>" + escapeHtml(entry.field_key) + ":</strong> "
@@ -1228,9 +1326,8 @@
     statePlanResult.hidden = false;
     statePlanResult.className = conflicts.length ? "result-box result-box-error" : "result-box result-box-success";
     statePlanResult.innerHTML = [
-      "<strong>Managed state plan created.</strong>",
-      "<p><span>Plan ID:</span> " + escapeHtml(plan.plan_id || "unknown") + "</p>",
-      "<p><span>Plan file:</span> " + escapeHtml(result.plan_path || "Unavailable") + "</p>",
+      "<strong>AI site change plan created.</strong>",
+      "<p><span>Plan ID:</span> " + escapeHtml(planId || "unknown") + "</p>",
       "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
       "<p><span>AI source:</span> " + escapeHtml(result.ai_source || (plan.source && (plan.source.ai_source || plan.source.prompt_personalization_source)) || "local_interpreter") + "</p>",
       "<p><span>Provider called:</span> " + escapeHtml(String(result.provider_called === true || plan.provider_called === true)) + "</p>",
@@ -1240,12 +1337,22 @@
       "<p><span>Preserved protected fields:</span> " + escapeHtml(preservedProtectedFields.length ? preservedProtectedFields.join(", ") : "None") + "</p>",
       "<p><span>Excluded fields:</span> " + escapeHtml(excludedFields.length ? excludedFields.join(", ") : "None") + "</p>",
       "<p><span>Included fields:</span> " + escapeHtml(includedFields.length ? includedFields.join(", ") : "None") + "</p>",
+      "<p><span>Unsupported fields:</span> " + escapeHtml(unsupportedFields.length ? unsupportedFields.join(", ") : "None") + "</p>",
       "<p><span>Requires confirmation fields:</span> " + escapeHtml(requiresConfirmationFields.length ? requiresConfirmationFields.join(", ") : "None") + "</p>",
       "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>",
       "<p><span>Protected fields:</span> " + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</p>",
       "<p><span>Can apply without confirmation:</span> " + escapeHtml(String(plan.can_apply_without_confirmation === true)) + "</p>",
-      plan.can_apply_without_confirmation === true && !conflicts.length && includedFields.length > 0
-        ? "<p><button type=\"button\" class=\"button\" id=\"state-apply-button\" data-plan-path=\"" + escapeHtml(result.plan_path || "latest") + "\">Apply Plan</button></p>"
+      safeCanApply
+        ? [
+          "<label class=\"checkbox-row\">",
+          "  <input type=\"checkbox\" id=\"state-apply-confirm-checkbox\">",
+          "  <span>I understand this will apply supported safe fields to this WordPress project.</span>",
+          "</label>",
+          confirmationRequired && confirmationRequired.required
+            ? "<label class=\"checkbox-row\"><input type=\"checkbox\" id=\"state-protected-overwrite-confirm-checkbox\"><span>I explicitly confirm protected field overwrite for: " + escapeHtml((confirmationRequired.fields || []).join(", ")) + "</span></label>"
+            : "",
+          "<p><button type=\"button\" class=\"button\" id=\"state-apply-button\" data-plan-id=\"" + escapeHtml(planId) + "\" disabled>Apply Safe Changes</button></p>"
+        ].join("")
         : (confirmationRequired && confirmationRequired.required
           ? "<p class=\"project-note\">Overwrite confirmation required for: " + escapeHtml((confirmationRequired.fields || []).join(", ")) + "</p>"
           : (conflicts.length
@@ -1256,21 +1363,44 @@
     ].join("");
 
     const applyButton = document.getElementById("state-apply-button");
+    const applyConfirm = document.getElementById("state-apply-confirm-checkbox");
+    const protectedConfirm = document.getElementById("state-protected-overwrite-confirm-checkbox");
+    function updateApplyButton() {
+      if (!applyButton || !applyConfirm) {
+        return;
+      }
+      const protectedOk = !protectedConfirm || protectedConfirm.checked;
+      applyButton.disabled = !applyConfirm.checked || !protectedOk;
+    }
+    if (applyConfirm) {
+      applyConfirm.addEventListener("change", updateApplyButton);
+    }
+    if (protectedConfirm) {
+      protectedConfirm.addEventListener("change", updateApplyButton);
+    }
     if (applyButton) {
       applyButton.addEventListener("click", async () => {
+        const slug = String(generateProjectSlug.value || "").trim();
+        const requestId = stateChangeView.requestId;
+        const selectedPlanId = applyButton.getAttribute("data-plan-id") || "";
         applyButton.disabled = true;
         try {
-          const response = await fetch("/api/projects/" + encodeURIComponent(String(generateProjectSlug.value || "").trim()) + "/state/apply", {
+          const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/apply", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "Idempotency-Key": createRequestIdempotencyKey("state-apply")
             },
             body: JSON.stringify({
-              plan_path: applyButton.getAttribute("data-plan-path") || "latest"
+              plan_id: selectedPlanId,
+              confirm_apply: true,
+              confirm_protected_overwrite: Boolean(protectedConfirm && protectedConfirm.checked)
             })
           });
           const applyResult = await response.json();
+          if (!isActiveStateSelection(slug, requestId)) {
+            return;
+          }
           if (!response.ok) {
             showResult(statePlanResult, applyResult, true);
             return;
@@ -1278,13 +1408,15 @@
 
           renderStateApplyResult(applyResult);
           await loadProjects();
-          await loadManagedState(generateProjectSlug.value);
+          await loadManagedState(generateProjectSlug.value, { requestId: stateChangeView.requestId });
           await loadSiteStatus(generateProjectSlug.value);
           await loadProofPack(generateProjectSlug.value);
         } catch (error) {
-          showResult(statePlanResult, { error: error.message }, true);
+          if (isActiveStateSelection(slug, requestId)) {
+            showResult(statePlanResult, { error: error.message }, true);
+          }
         } finally {
-          applyButton.disabled = false;
+          updateApplyButton();
         }
       });
     }
@@ -1610,20 +1742,42 @@
     }
   }
 
-  async function loadManagedState(slug) {
+  async function loadManagedState(slug, options) {
     const selectedSlug = String(slug || "").trim();
     if (!selectedSlug) {
       setManagedStateEmpty("Select a project to view managed state.");
       return;
     }
 
-    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/state");
+    const requestId = options && options.requestId ? options.requestId : stateChangeView.requestId;
+    if (!requestId || stateChangeView.slug !== selectedSlug) {
+      stateChangeView.slug = selectedSlug;
+      stateChangeView.requestId = requestId || ++stateChangeRequestId;
+    }
+    if (stateChangeAbortController) {
+      stateChangeAbortController.abort();
+    }
+    stateChangeAbortController = new AbortController();
+    stateChangeView.loading = true;
+    renderStateChangeView();
+    const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/state", {
+      signal: stateChangeAbortController.signal
+    });
     const payload = await response.json();
+    if (!isActiveStateSelection(selectedSlug, requestId)) {
+      return;
+    }
     if (!response.ok) {
-      throw new Error(payload.error || "Unable to load managed state.");
+      stateChangeView.error = payload.error || "Unable to load managed state.";
+      stateChangeView.loading = false;
+      renderStateChangeView();
+      throw new Error(stateChangeView.error);
     }
 
-    renderManagedState(payload);
+    stateChangeView.payload = payload;
+    stateChangeView.error = null;
+    stateChangeView.loading = false;
+    renderStateChangeView();
   }
 
   async function loadProofPack(slug) {
@@ -1684,7 +1838,10 @@
     if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
       return;
     }
-    await loadManagedState(generateSlugSnapshot);
+    const managedStateRequestId = stateChangeView.slug === generateSlugSnapshot
+      ? stateChangeView.requestId
+      : resetStateChangeView(generateSlugSnapshot);
+    await loadManagedState(generateSlugSnapshot, { requestId: managedStateRequestId });
     if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
       return;
     }
@@ -1697,10 +1854,11 @@
     preferredSelectedSlug = setupProjectSlug.value;
     planProjectSlug.value = setupProjectSlug.value;
     generateProjectSlug.value = setupProjectSlug.value;
+    const stateRequestId = resetStateChangeView(setupProjectSlug.value);
     Promise.all([
       loadSetupStatus(setupProjectSlug.value),
       loadGenerationViewForSelection(setupProjectSlug.value),
-      loadManagedState(setupProjectSlug.value),
+      loadManagedState(setupProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(setupProjectSlug.value)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
@@ -1713,10 +1871,11 @@
     preferredSelectedSlug = planProjectSlug.value;
     setupProjectSlug.value = planProjectSlug.value;
     generateProjectSlug.value = planProjectSlug.value;
+    const stateRequestId = resetStateChangeView(planProjectSlug.value);
     Promise.all([
       loadSetupStatus(planProjectSlug.value),
       loadGenerationViewForSelection(planProjectSlug.value),
-      loadManagedState(planProjectSlug.value),
+      loadManagedState(planProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(planProjectSlug.value)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
@@ -1728,10 +1887,11 @@
     preferredSelectedSlug = generateProjectSlug.value;
     setupProjectSlug.value = generateProjectSlug.value;
     planProjectSlug.value = generateProjectSlug.value;
+    const stateRequestId = resetStateChangeView(generateProjectSlug.value);
     Promise.all([
       loadSetupStatus(generateProjectSlug.value),
       loadGenerationViewForSelection(generateProjectSlug.value),
-      loadManagedState(generateProjectSlug.value),
+      loadManagedState(generateProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(generateProjectSlug.value)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
@@ -1936,6 +2096,7 @@
 
   refreshStateButton.addEventListener("click", async () => {
     const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = stateChangeView.slug === slug ? stateChangeView.requestId : resetStateChangeView(slug);
     if (!slug) {
       setManagedStateEmpty("Select a project to refresh managed state.");
       return;
@@ -1949,17 +2110,15 @@
       body: JSON.stringify({})
     });
     const result = await response.json();
+    if (!isActiveStateSelection(slug, requestId)) {
+      return;
+    }
     if (!response.ok) {
       showResult(createResult, result, true);
       return;
     }
 
-    renderManagedState({
-      exists: true,
-      project: result.project,
-      summary: result.summary,
-      warnings: result.warnings || []
-    });
+    await loadManagedState(slug, { requestId });
     await loadProofPack(slug);
   });
 
@@ -1967,27 +2126,65 @@
     event.preventDefault();
     const slug = String(generateProjectSlug.value || "").trim();
     const prompt = String(statePlanPrompt.value || "").trim();
+    const overwriteFields = stateOverwriteHeroTitleCheckbox && stateOverwriteHeroTitleCheckbox.checked
+      ? ["hero_title"]
+      : [];
+    const requestId = stateChangeView.slug === slug ? stateChangeView.requestId : resetStateChangeView(slug);
 
     if (!slug) {
       setManagedStateEmpty("Select a project before planning against managed state.");
       return;
     }
 
+    statePlanResult.hidden = false;
+    statePlanResult.className = "result-box";
+    statePlanResult.innerHTML = "<strong>Previewing AI site changes...</strong>";
+    stateRollbackResult.hidden = true;
+
     const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/plan", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({
+        prompt,
+        overwrite_fields: overwriteFields
+      })
     });
     const result = await response.json();
+    if (!isActiveStateSelection(slug, requestId)) {
+      return;
+    }
     if (!response.ok) {
       showResult(statePlanResult, result, true);
       return;
     }
 
+    stateChangeView.plan = result;
     renderStatePlanResult(result);
   });
+
+  statePlanPrompt.addEventListener("input", () => {
+    stateChangeView.plan = null;
+    stateChangeView.apply = null;
+    stateChangeView.rollback = null;
+    statePlanResult.hidden = true;
+    statePlanResult.innerHTML = "";
+    stateRollbackResult.hidden = true;
+    stateRollbackResult.innerHTML = "";
+  });
+
+  if (stateOverwriteHeroTitleCheckbox) {
+    stateOverwriteHeroTitleCheckbox.addEventListener("change", () => {
+      stateChangeView.plan = null;
+      stateChangeView.apply = null;
+      stateChangeView.rollback = null;
+      statePlanResult.hidden = true;
+      statePlanResult.innerHTML = "";
+      stateRollbackResult.hidden = true;
+      stateRollbackResult.innerHTML = "";
+    });
+  }
 
   proofPackRefreshButton.addEventListener("click", async () => {
     const slug = String(generateProjectSlug.value || "").trim();

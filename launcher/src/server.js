@@ -21,7 +21,15 @@ const { planProject } = require("./plan");
 const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
 const { assertPlanningRunReady, generateProject, readRunFile } = require("./generate");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
-const { readStateStatus, refreshState, planState, applyStatePlan, rollbackStateApply } = require("./state");
+const {
+  readStateStatus,
+  refreshState,
+  planState,
+  applyStatePlan,
+  rollbackStateApply,
+  resolveStateApplyPathById,
+  resolveStatePlanPathById
+} = require("./state");
 const { generateProofPack, getProofPackStatus } = require("./proof-pack");
 const {
   computeRequestFingerprint,
@@ -29,11 +37,22 @@ const {
   runProjectOperation
 } = require("./project-operation-coordinator");
 const {
-  findSuccessfulControlledGenerateByPlanId
+  findSuccessfulControlledGenerateByPlanId,
+  findSuccessfulOperationByMetadata,
+  readOperationById
 } = require("./project-operation-store");
 const {
   normalizePlanId
 } = require("./generation-operation");
+const {
+  assertOperationBelongsToProject,
+  assertPlanBelongsToProject,
+  normalizeOperationId,
+  normalizeStatePlanId,
+  rejectBrowserSuppliedStatePaths,
+  summarizeStatePlanForClient,
+  validateChangeRequestPrompt
+} = require("./state-change-contract");
 
 const UI_DIR = path.join(__dirname, "ui");
 
@@ -237,8 +256,8 @@ function renderHomePage(config) {
     "        </div>",
     "        <div id=\"site-status\" class=\"project-list\"></div>",
     "        <div class=\"panel-header\">",
-    "          <h2>Managed State</h2>",
-    "          <p>Launcher-managed ownership, personalization, and protected override summary.</p>",
+    "          <h2>AI Site Changes</h2>",
+    "          <p>Preview local desired-state changes, review protected fields, apply scoped safe fields, and roll back the exact safe-field apply.</p>",
     "        </div>",
     "        <div id=\"managed-state\" class=\"project-list\"></div>",
     "        <div class=\"managed-state-actions\">",
@@ -246,10 +265,14 @@ function renderHomePage(config) {
     "        </div>",
     "        <form id=\"state-plan-form\" class=\"project-form compact-form\">",
     "          <label>",
-    "            <span>Plan a change against current state</span>",
+    "            <span>Change request</span>",
     "            <textarea name=\"prompt\" id=\"state-plan-prompt\" rows=\"4\" placeholder=\"Describe the next site direction without applying it yet.\"></textarea>",
     "          </label>",
-    "          <button type=\"submit\" class=\"button\" id=\"state-plan-button\">Plan Change</button>",
+    "          <label class=\"checkbox-row\">",
+    "            <input type=\"checkbox\" id=\"state-overwrite-hero-title-checkbox\">",
+    "            <span>Request protected hero_title overwrite if this plan proposes a replacement.</span>",
+    "          </label>",
+    "          <button type=\"submit\" class=\"button\" id=\"state-plan-button\">Preview Changes</button>",
     "        </form>",
     "        <div id=\"state-plan-result\" class=\"result-box\" hidden></div>",
     "        <div id=\"state-rollback-result\" class=\"result-box\" hidden></div>",
@@ -524,6 +547,117 @@ async function buildGenerationStatusPayload(slug, projectsRoot) {
       current_operation: operationsStatus.active_operation
     } : null,
     site: siteResult.site
+  };
+}
+
+function readJsonMaybe(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    return null;
+  }
+}
+
+function resolveStatePlanForRoute(slug, projectsRoot, planId) {
+  const safePlanId = normalizeStatePlanId(planId);
+  const planPath = resolveStatePlanPathById({
+    slug,
+    projectsRoot,
+    planId: safePlanId
+  });
+  if (!planPath) {
+    throw createStructuredError(
+      "State plan was not found for this project.",
+      "state_plan_not_found",
+      404
+    );
+  }
+
+  const plan = readJsonMaybe(planPath);
+  if (!plan) {
+    throw createStructuredError(
+      "State plan could not be read.",
+      "state_plan_unreadable",
+      409
+    );
+  }
+  assertPlanBelongsToProject(plan, slug);
+  return { planId: safePlanId, planPath, plan };
+}
+
+function getStateRollbackCandidates(slug, projectsRoot, operations) {
+  const safeOperations = Array.isArray(operations) ? operations : [];
+  const successfulRollbacks = new Set(
+    safeOperations
+      .filter((operation) => operation.operation_type === "state_rollback" && operation.status === "succeeded")
+      .flatMap((operation) => [
+        operation.metadata && operation.metadata.target_apply_operation_id,
+        operation.metadata && operation.metadata.source_apply_id
+      ])
+      .filter(Boolean)
+  );
+
+  return safeOperations
+    .filter((operation) => operation.operation_type === "state_apply" && operation.status === "succeeded")
+    .filter((operation) => !successfulRollbacks.has(operation.operation_id))
+    .filter((operation) => {
+      const applyId = operation.result_summary && operation.result_summary.apply_id;
+      return !applyId || !successfulRollbacks.has(applyId);
+    })
+    .map((operation) => {
+      const applyId = operation.result_summary && operation.result_summary.apply_id || null;
+      return {
+        apply_operation_id: operation.operation_id,
+        apply_id: applyId,
+        status: operation.status,
+        completed_at: operation.completed_at || null,
+        apply_method: operation.result_summary && operation.result_summary.apply_method || null,
+        applied_fields: operation.result_summary && Array.isArray(operation.result_summary.applied_fields)
+          ? operation.result_summary.applied_fields
+          : [],
+        rollback_eligible: Boolean(applyId && resolveStateApplyPathById({
+          slug,
+          projectsRoot,
+          applyId
+        }))
+      };
+    });
+}
+
+async function buildStateChangeStatusPayload(slug, projectsRoot) {
+  const result = readStateStatus({
+    slug,
+    projectsRoot
+  });
+  const stateProject = summarizeProjectForSite(result.project);
+  if (result.exists && result.state && stateProject.generated_site) {
+    stateProject.generated_site = Object.assign({}, stateProject.generated_site, {
+      personalization_last_applied: result.state.personalization || null
+    });
+  }
+  const operationsStatus = getProjectOperationsStatus({
+    slug,
+    projectsRoot,
+    limit: 30
+  });
+  const rollbackCandidates = getStateRollbackCandidates(slug, projectsRoot, operationsStatus.operations);
+
+  return {
+    ok: true,
+    exists: result.exists,
+    project: stateProject,
+    state_path: result.statePath,
+    summary: result.summary,
+    effective_safe_fields: result.exists && result.state ? result.state.effective_safe_fields || null : null,
+    latest_apply_method: result.summary ? result.summary.latest_apply_method || null : null,
+    active_operation: operationsStatus.active_operation || null,
+    operations: operationsStatus.operations.filter((operation) => operation.operation_type === "state_apply" || operation.operation_type === "state_rollback"),
+    rollback_candidates: rollbackCandidates,
+    rollback: Object.assign({}, result.rollback || {}, {
+      apply_operation_id: rollbackCandidates.length ? rollbackCandidates[0].apply_operation_id : null,
+      apply_path: undefined
+    }),
+    warnings: result.warnings
   };
 }
 
@@ -1060,29 +1194,10 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/state$/.test(requestUrl.pathname)) {
-        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const result = readStateStatus({
-          slug,
-          projectsRoot
-        });
-        const stateProject = summarizeProjectForSite(result.project);
-        if (result.exists && result.state && stateProject.generated_site) {
-          stateProject.generated_site = Object.assign({}, stateProject.generated_site, {
-            personalization_last_applied: result.state.personalization || null
-          });
-        }
-
-        sendJson(response, 200, {
-          ok: true,
-          exists: result.exists,
-          project: stateProject,
-          state_path: result.statePath,
-          summary: result.summary,
-          effective_safe_fields: result.exists && result.state ? result.state.effective_safe_fields || null : null,
-          latest_apply_method: result.summary ? result.summary.latest_apply_method || null : null,
-          warnings: result.warnings,
-          rollback: result.rollback || null
-        });
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const result = await buildStateChangeStatusPayload(slug, projectsRoot);
+        sendJson(response, 200, result);
         return;
       }
 
@@ -1134,7 +1249,8 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname)) {
-        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
         const result = await refreshState({
           slug,
           projectsRoot
@@ -1156,11 +1272,13 @@ function createLauncherServer(options) {
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/plan$/.test(requestUrl.pathname)) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
-        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const prompt = validateChangeRequestPrompt(payload.prompt);
         const result = await planState({
           slug,
           projectsRoot,
-          prompt: payload.prompt,
+          prompt,
           overwriteFields: payload.overwrite_fields,
           aiSource: payload.ai_source,
           confirmLive: payload.confirm_live === true,
@@ -1168,6 +1286,7 @@ function createLauncherServer(options) {
         });
 
         sendJson(response, 200, {
+          ...summarizeStatePlanForClient(result),
           ok: true,
           project: summarizeProjectForSite(result.project),
           plan: result.plan,
@@ -1198,7 +1317,40 @@ function createLauncherServer(options) {
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/apply$/.test(requestUrl.pathname)) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
-        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const usesPlanId = Object.prototype.hasOwnProperty.call(payload, "plan_id");
+        let planPath = payload.plan_path;
+        let planId = null;
+        let resolvedPlan = null;
+        let confirmOverwriteFields = payload.confirm_overwrite_fields;
+
+        if (usesPlanId) {
+          rejectBrowserSuppliedStatePaths(payload);
+          if (payload.confirm_apply !== true) {
+            throw createStructuredError(
+              "State apply requires confirm_apply=true.",
+              "state_apply_confirmation_required",
+              400
+            );
+          }
+          resolvedPlan = resolveStatePlanForRoute(slug, projectsRoot, payload.plan_id);
+          planId = resolvedPlan.planId;
+          planPath = resolvedPlan.planPath;
+          const requiredFields = resolvedPlan.plan && resolvedPlan.plan.confirmation_required && Array.isArray(resolvedPlan.plan.confirmation_required.fields)
+            ? resolvedPlan.plan.confirmation_required.fields
+            : [];
+          if (requiredFields.length && payload.confirm_protected_overwrite !== true) {
+            throw createStructuredError(
+              "Protected field overwrite requires explicit confirm_protected_overwrite=true.",
+              "state_apply_protected_overwrite_confirmation_required",
+              409,
+              { required_fields: requiredFields }
+            );
+          }
+          confirmOverwriteFields = payload.confirm_protected_overwrite === true ? requiredFields : [];
+        }
+
         const operationResult = await runProjectOperation({
           slug,
           projectsRoot,
@@ -1207,13 +1359,17 @@ function createLauncherServer(options) {
           fingerprintInput: {
             project_slug: slug,
             operation_type: "state_apply",
-            plan_path: payload.plan_path || "latest",
-            confirm_overwrite_fields: Array.isArray(payload.confirm_overwrite_fields)
-              ? payload.confirm_overwrite_fields.slice().sort()
-              : payload.confirm_overwrite_fields || []
+            plan_id: planId || null,
+            plan_path: usesPlanId ? null : (payload.plan_path || "latest"),
+            confirm_apply: usesPlanId ? payload.confirm_apply === true : null,
+            confirm_protected_overwrite: usesPlanId ? payload.confirm_protected_overwrite === true : null,
+            confirm_overwrite_fields: Array.isArray(confirmOverwriteFields)
+              ? confirmOverwriteFields.slice().sort()
+              : confirmOverwriteFields || []
           },
           metadata: {
-            plan_ref: payload.plan_path || "latest"
+            plan_id: planId || null,
+            plan_ref: usesPlanId ? planId : (payload.plan_path || "latest")
           },
           safety: {
             live_ai_used: false,
@@ -1221,11 +1377,24 @@ function createLauncherServer(options) {
             rollback_used: false
           },
           execute: async () => {
+            if (planId && findSuccessfulOperationByMetadata({
+              slug,
+              projectsRoot,
+              operationType: "state_apply",
+              metadataKey: "plan_id",
+              metadataValue: planId
+            })) {
+              throw createStructuredError(
+                "This state plan was already consumed by a successful state apply.",
+                "state_plan_already_consumed",
+                409
+              );
+            }
             const result = await applyStatePlan({
               slug,
               projectsRoot,
-              planPath: payload.plan_path,
-              confirmOverwriteFields: payload.confirm_overwrite_fields
+              planPath,
+              confirmOverwriteFields
             });
             return {
               result,
@@ -1233,7 +1402,10 @@ function createLauncherServer(options) {
               resultSummary: {
                 status: result.status,
                 code: result.code,
-                apply_method: result.apply ? result.apply.apply_method : (result.proof ? result.proof.apply_method : null)
+                apply_id: result.apply ? result.apply.apply_id : (result.proof ? result.proof.apply_id : null),
+                plan_id: result.apply ? result.apply.plan_id : (result.proof ? result.proof.plan_id : planId),
+                apply_method: result.apply ? result.apply.apply_method : (result.proof ? result.proof.apply_method : null),
+                applied_fields: result.apply && Array.isArray(result.apply.applied_fields) ? result.apply.applied_fields : []
               }
             };
           }
@@ -1266,7 +1438,66 @@ function createLauncherServer(options) {
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/state\/rollback$/.test(requestUrl.pathname)) {
         const rawBody = await readRequestBody(request);
         const payload = rawBody ? JSON.parse(rawBody) : {};
-        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const usesOperationId = Object.prototype.hasOwnProperty.call(payload, "apply_operation_id");
+        let applyPath = payload.apply_path;
+        let targetApplyOperationId = null;
+        let sourceApplyId = null;
+
+        if (usesOperationId) {
+          rejectBrowserSuppliedStatePaths(payload);
+          if (payload.confirm_rollback !== true) {
+            throw createStructuredError(
+              "State rollback requires confirm_rollback=true.",
+              "state_rollback_confirmation_required",
+              400
+            );
+          }
+          targetApplyOperationId = normalizeOperationId(payload.apply_operation_id, "state_apply_operation_id_invalid");
+          const applyOperationRecord = readOperationById({
+            slug,
+            projectsRoot,
+            operationId: targetApplyOperationId
+          });
+          if (!applyOperationRecord || !applyOperationRecord.operation) {
+            throw createStructuredError(
+              "State apply operation was not found.",
+              "state_apply_operation_not_found",
+              404
+            );
+          }
+          const applyOperation = applyOperationRecord.operation;
+          assertOperationBelongsToProject(applyOperation, slug, "state_apply_operation_project_mismatch");
+          if (applyOperation.operation_type !== "state_apply" || applyOperation.status !== "succeeded") {
+            throw createStructuredError(
+              "Selected operation is not a successful state apply.",
+              "state_apply_operation_not_rollback_eligible",
+              409
+            );
+          }
+          sourceApplyId = applyOperation.result_summary && applyOperation.result_summary.apply_id || null;
+          if (!sourceApplyId) {
+            throw createStructuredError(
+              "Selected state apply operation is missing its apply id.",
+              "state_apply_operation_missing_apply_id",
+              409
+            );
+          }
+          applyPath = resolveStateApplyPathById({
+            slug,
+            projectsRoot,
+            applyId: sourceApplyId
+          });
+          if (!applyPath) {
+            throw createStructuredError(
+              "State apply record is unavailable or not rollback-eligible.",
+              "state_apply_record_not_found",
+              404
+            );
+          }
+        }
+
         const operationResult = await runProjectOperation({
           slug,
           projectsRoot,
@@ -1275,10 +1506,14 @@ function createLauncherServer(options) {
           fingerprintInput: {
             project_slug: slug,
             operation_type: "state_rollback",
-            apply_path: payload.apply_path || "latest"
+            target_apply_operation_id: targetApplyOperationId || null,
+            source_apply_id: sourceApplyId || null,
+            apply_path: usesOperationId ? null : (payload.apply_path || "latest")
           },
           metadata: {
-            apply_ref: payload.apply_path || "latest"
+            target_apply_operation_id: targetApplyOperationId || null,
+            source_apply_id: sourceApplyId || null,
+            apply_ref: usesOperationId ? targetApplyOperationId : (payload.apply_path || "latest")
           },
           safety: {
             live_ai_used: false,
@@ -1286,10 +1521,23 @@ function createLauncherServer(options) {
             rollback_used: true
           },
           execute: async () => {
+            if (targetApplyOperationId && findSuccessfulOperationByMetadata({
+              slug,
+              projectsRoot,
+              operationType: "state_rollback",
+              metadataKey: "target_apply_operation_id",
+              metadataValue: targetApplyOperationId
+            })) {
+              throw createStructuredError(
+                "This state apply operation has already been rolled back.",
+                "state_apply_already_rolled_back",
+                409
+              );
+            }
             const result = await rollbackStateApply({
               slug,
               projectsRoot,
-              applyPath: payload.apply_path
+              applyPath
             });
             return {
               result,
@@ -1297,6 +1545,7 @@ function createLauncherServer(options) {
               resultSummary: {
                 status: result.status,
                 code: result.code,
+                source_apply_id: result.rollback ? result.rollback.source_apply_id : sourceApplyId,
                 rollback_fields: result.rollback ? Object.keys(result.rollback.rollback_fields || {}) : []
               }
             };
@@ -1428,8 +1677,10 @@ function createLauncherServer(options) {
         error: error.message,
         code: error.code || null,
         current_operation: error.current_operation || null,
+        required_fields: error.required_fields || [],
         proof_path: error.proofPath || null,
-        blockers: error.blockers || []
+        blockers: error.blockers || [],
+        rejected_fields: error.rejected_fields || []
       });
     }
   });

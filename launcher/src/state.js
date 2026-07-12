@@ -1118,6 +1118,30 @@ function mergeConfirmedOverwriteOverrides(runtimePath, overrides, warnings) {
     return overrides;
   }
 
+  const rolledBackApplyIds = new Set(
+    fs.readdirSync(proofsPath, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.startsWith("state-rollback-") && entry.name.endsWith(".json"))
+      .map((entry) => path.join(proofsPath, entry.name))
+      .map((filePath) => {
+        try {
+          const parsed = safeJsonRead(filePath);
+          if (
+            parsed
+            && parsed.schema === STATE_ROLLBACK_SCHEMA
+            && asString(parsed.status) === "ok"
+            && asString(parsed.code) === "state_rollback_applied"
+          ) {
+            return asString(parsed.source_apply_id);
+          }
+        } catch (error) {
+          warnings.push("Confirmed overwrite merge skipped one unreadable state rollback proof.");
+        }
+
+        return "";
+      })
+      .filter(Boolean)
+  );
+
   const candidates = fs.readdirSync(proofsPath, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.startsWith("state-apply-") && entry.name.endsWith(".json"))
     .map((entry) => {
@@ -1142,7 +1166,14 @@ function mergeConfirmedOverwriteOverrides(runtimePath, overrides, warnings) {
       const candidateFields = confirmation && confirmation.confirmed === true
         ? normalizeConfirmationFieldRequests(confirmation.overwritten_protected_fields)
         : [];
-      if (parsed && parsed.status === "ok" && candidateFields.length) {
+      const candidateApplyId = asString(parsed && parsed.apply_id);
+      if (
+        parsed
+        && parsed.status === "ok"
+        && candidateFields.length
+        && candidateApplyId
+        && !rolledBackApplyIds.has(candidateApplyId)
+      ) {
         applyProof = parsed;
         applyProofPath = candidate.filePath;
         overwrittenFields = candidateFields;
@@ -1865,6 +1896,41 @@ function resolveStatePlanPath(statePaths, runtimePath, planPathValue) {
   return path.resolve(runtimePath, raw);
 }
 
+function resolveStatePlanPathById(options) {
+  const projectsRoot = resolveProjectsRoot(options.projectsRoot);
+  const projectState = readProjectBySlug(options.slug, projectsRoot);
+  const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  const statePaths = ensureStatePaths(safeRuntimePath);
+  const planId = asString(options.planId);
+
+  if (!planId) {
+    return null;
+  }
+
+  if (!fs.existsSync(statePaths.plansPath)) {
+    return null;
+  }
+
+  const candidates = fs.readdirSync(statePaths.plansPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith("state-plan-") && entry.name.endsWith(".json"))
+    .map((entry) => path.join(statePaths.plansPath, entry.name));
+
+  for (const candidatePath of candidates) {
+    let candidate;
+    try {
+      candidate = safeJsonRead(candidatePath);
+    } catch (error) {
+      continue;
+    }
+
+    if (asString(candidate && candidate.plan_id) === planId) {
+      return candidatePath;
+    }
+  }
+
+  return null;
+}
+
 function buildBlockedApplyProof(projectState, reason, code, conflicts, statePath) {
   const createdAt = stateNow();
   return {
@@ -1972,6 +2038,10 @@ function derivePersonalizationValues(state) {
   }
 
   return values;
+}
+
+function deriveRollbackRestoreValues(state) {
+  return deriveEffectiveCurrentValues(state);
 }
 
 function normalizePlanFieldScope(plan) {
@@ -2403,7 +2473,7 @@ function selectLatestRollbackCandidate(statePaths, currentState) {
       continue;
     }
 
-    const rollbackValues = derivePersonalizationValues(previousState);
+    const rollbackValues = deriveRollbackRestoreValues(previousState);
     const hasMeaningfulChange = STATE_APPLY_ALLOWLIST.some((key) => asString(rollbackValues[key]) !== asString(currentValues[key]));
     if (!hasMeaningfulChange) {
       continue;
@@ -2446,7 +2516,36 @@ function buildRollbackPrompt(previousValues) {
   return "Rollback safe personalization to previous state for " + agency;
 }
 
-function validateStateRollbackCandidate(state, rollbackValues) {
+function canRollbackRestoreProtectedOverride(currentOverride, previousState, fieldKey, rollbackValue) {
+  if (!currentOverride || currentOverride.protected !== true) {
+    return false;
+  }
+
+  if (asString(currentOverride.source) !== "confirmed_overwrite") {
+    return false;
+  }
+
+  if (!rollbackValue) {
+    return false;
+  }
+
+  if (asString(currentOverride.previous_value) === rollbackValue) {
+    return true;
+  }
+
+  const previousOverrides = previousState && previousState.user_overrides && typeof previousState.user_overrides === "object"
+    ? previousState.user_overrides
+    : {};
+  const previousOverride = previousOverrides[fieldKey];
+
+  return Boolean(
+    previousOverride
+    && previousOverride.protected === true
+    && asString(previousOverride.value) === rollbackValue
+  );
+}
+
+function validateStateRollbackCandidate(state, rollbackValues, previousState) {
   const userOverrides = state.user_overrides && typeof state.user_overrides === "object" ? state.user_overrides : {};
   const protectedConflicts = [];
 
@@ -2459,6 +2558,10 @@ function validateStateRollbackCandidate(state, rollbackValues) {
     const currentValue = asString(override.value);
 
     if (rollbackValue && rollbackValue !== currentValue) {
+      if (canRollbackRestoreProtectedOverride(override, previousState, fieldKey, rollbackValue)) {
+        continue;
+      }
+
       protectedConflicts.push({
         type: "protected_user_override",
         severity: "requires_confirmation",
@@ -2485,8 +2588,8 @@ function buildRollbackUiSummary(statePaths, state) {
     };
   }
 
-  const rollbackValues = derivePersonalizationValues(candidate.previousState);
-  const protectedConflicts = validateStateRollbackCandidate(state, rollbackValues);
+  const rollbackValues = deriveRollbackRestoreValues(candidate.previousState);
+  const protectedConflicts = validateStateRollbackCandidate(state, rollbackValues, candidate.previousState);
 
   return {
     available: true,
@@ -2499,6 +2602,31 @@ function buildRollbackUiSummary(statePaths, state) {
     apply_path: candidate.applyPath,
     protected_conflicts: protectedConflicts
   };
+}
+
+function resolveStateApplyPathById(options) {
+  const projectsRoot = resolveProjectsRoot(options.projectsRoot);
+  const projectState = readProjectBySlug(options.slug, projectsRoot);
+  const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  const statePaths = ensureStatePaths(safeRuntimePath);
+  const applyId = asString(options.applyId);
+
+  if (!applyId || !fs.existsSync(statePaths.appliesPath)) {
+    return null;
+  }
+
+  const candidates = fs.readdirSync(statePaths.appliesPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith("state-apply-") && entry.name.endsWith(".json"))
+    .map((entry) => path.join(statePaths.appliesPath, entry.name));
+
+  for (const candidatePath of candidates) {
+    const applyRecord = readSuccessfulStateApplyRecord(candidatePath);
+    if (applyRecord && asString(applyRecord.apply_id) === applyId) {
+      return candidatePath;
+    }
+  }
+
+  return null;
 }
 
 function validateStatePlanForApply(state, plan, options) {
@@ -3072,8 +3200,8 @@ async function rollbackStateApply(options) {
   }
 
   const { applyPath, applyRecord, previousState } = rollbackCandidate;
-  const rollbackValues = derivePersonalizationValues(previousState);
-  const protectedConflicts = validateStateRollbackCandidate(state, rollbackValues);
+  const rollbackValues = deriveRollbackRestoreValues(previousState);
+  const protectedConflicts = validateStateRollbackCandidate(state, rollbackValues, previousState);
 
   if (protectedConflicts.length > 0) {
     const blockedProof = buildBlockedRollbackProof(
@@ -3337,5 +3465,7 @@ module.exports = {
   rollbackStateApply,
   planState,
   readStateStatus,
-  refreshState
+  refreshState,
+  resolveStateApplyPathById,
+  resolveStatePlanPathById
 };

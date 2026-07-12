@@ -326,11 +326,16 @@ function checkIdempotency(options) {
   }
 
   if (existing.status === "succeeded") {
+    const replayOperation = Object.assign({}, existing, {
+      idempotent_replay: true
+    });
+    delete replayOperation.raw;
+    delete replayOperation._filePath;
+    delete replayOperation._mtimeMs;
+
     return {
       replay: true,
-      operation: Object.assign({}, existing, {
-        idempotent_replay: true
-      })
+      operation: replayOperation
     };
   }
 
