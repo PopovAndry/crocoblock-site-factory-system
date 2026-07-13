@@ -1,7 +1,6 @@
 "use strict";
 
 const fs = require("fs");
-const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const {
@@ -14,15 +13,13 @@ const {
   writeJsonFile
 } = require("./project-store");
 const {
-  createBasicAuthHeader,
-  fetchJsonWithCookie,
+  fetchJsonWithSignedAuth,
   requestJson,
   waitForUrl
 } = require("./agent-client");
 const {
-  createRestNonce,
-  loginWithAdminCookie
-} = require("./install-agent");
+  requireAgentSigningCredential
+} = require("./agent-credential-store");
 const { fetchDependencyStatus } = require("./dependencies");
 const { runCommand } = require("./runtime-tools");
 const {
@@ -138,82 +135,26 @@ function toBooleanTrue(value) {
 async function postAgentJson(projectState, targetUrl, payload, proofId, warnings) {
   const requestBody = JSON.stringify(payload);
   const requestTimeoutMs = payload && payload.execute ? 300000 : 120000;
-
-  try {
-    if (!projectState.env.WP_APP_PASSWORD) {
-      throw new Error("Launcher project is missing a stored application password.");
-    }
-    const headers = {
-      Authorization: createBasicAuthHeader(projectState.env.WP_ADMIN_USER, projectState.env.WP_APP_PASSWORD),
+  const credential = requireAgentSigningCredential(projectState);
+  warnings.push("Agent generate request used signed Launcher authentication.");
+  return fetchJsonWithSignedAuth(targetUrl, credential, {
+    method: "POST",
+    headers: {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(requestBody)
-    };
-    const response = await requestJson(targetUrl, {
-      method: "POST",
-      headers,
-      body: requestBody,
-      timeoutMs: requestTimeoutMs
-    });
-
-    if (response.statusCode >= 200 && response.statusCode < 300 && response.json) {
-      return response;
-    }
-
-    if (response.statusCode !== 401 && response.statusCode !== 403) {
-      throw new Error("Agent endpoint request failed: " + targetUrl + " (HTTP " + String(response.statusCode) + ")");
-    }
-  } catch (error) {
-    if (!/stored application password|HTTP 401|HTTP 403|Agent endpoint request failed: .* \(HTTP 401\)|Agent endpoint request failed: .* \(HTTP 403\)/i.test(error.message)) {
-      throw error;
-    }
-
-    const cookieHeader = await loginWithAdminCookie(projectState);
-    const restNonce = await createRestNonce(projectState, proofId);
-    warnings.push("Agent generate auth fell back to admin cookie context.");
-    return fetchJsonWithCookie(targetUrl, cookieHeader, restNonce, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(requestBody)
-      },
-      body: requestBody,
-      timeoutMs: requestTimeoutMs
-    });
-  }
+    },
+    body: requestBody,
+    timeoutMs: requestTimeoutMs
+  });
 }
 
 async function getAgentJson(projectState, targetUrl, proofId, warnings) {
-  try {
-    if (!projectState.env.WP_APP_PASSWORD) {
-      throw new Error("Launcher project is missing a stored application password.");
-    }
-    const response = await requestJson(targetUrl, {
-      method: "GET",
-      headers: {
-        Authorization: createBasicAuthHeader(projectState.env.WP_ADMIN_USER, projectState.env.WP_APP_PASSWORD)
-      },
-      timeoutMs: 30000
-    });
-
-    if (response.statusCode >= 200 && response.statusCode < 300 && response.json) {
-      return response;
-    }
-
-    if (response.statusCode !== 401 && response.statusCode !== 403) {
-      throw new Error("Agent endpoint request failed: " + targetUrl + " (HTTP " + String(response.statusCode) + ")");
-    }
-  } catch (error) {
-    if (!/stored application password|HTTP 401|HTTP 403|Agent endpoint request failed: .* \(HTTP 401\)|Agent endpoint request failed: .* \(HTTP 403\)/i.test(error.message)) {
-      throw error;
-    }
-
-    const cookieHeader = await loginWithAdminCookie(projectState);
-    const restNonce = await createRestNonce(projectState, proofId);
-    warnings.push("Agent generate health auth fell back to admin cookie context.");
-    return fetchJsonWithCookie(targetUrl, cookieHeader, restNonce, {
-      timeoutMs: 30000
-    });
-  }
+  const credential = requireAgentSigningCredential(projectState);
+  warnings.push("Agent generate read request used signed Launcher authentication.");
+  return fetchJsonWithSignedAuth(targetUrl, credential, {
+    method: "GET",
+    timeoutMs: 30000
+  });
 }
 
 function readRunFile(projectState, runId) {

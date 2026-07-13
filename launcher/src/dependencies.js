@@ -10,14 +10,12 @@ const {
   writeJsonFile
 } = require("./project-store");
 const {
-  fetchJsonWithBasicAuth,
-  fetchJsonWithCookie,
+  fetchJsonWithSignedAuth,
   waitForUrl
 } = require("./agent-client");
 const {
-  createRestNonce,
-  loginWithAdminCookie
-} = require("./install-agent");
+  requireAgentSigningCredential
+} = require("./agent-credential-store");
 
 function timestampCompact() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -28,18 +26,9 @@ function toBooleanTrue(value) {
 }
 
 async function getAgentJson(projectState, targetUrl, warnings) {
-  try {
-    if (!projectState.env.WP_APP_PASSWORD) {
-      throw new Error("Launcher project is missing a stored application password.");
-    }
-
-    return await fetchJsonWithBasicAuth(targetUrl, projectState.env.WP_ADMIN_USER, projectState.env.WP_APP_PASSWORD);
-  } catch (error) {
-    const cookieHeader = await loginWithAdminCookie(projectState);
-    const restNonce = await createRestNonce(projectState, "dependencies-read-" + timestampCompact());
-    warnings.push("Agent dependency auth fell back to admin cookie context.");
-    return fetchJsonWithCookie(targetUrl, cookieHeader, restNonce);
-  }
+  const credential = requireAgentSigningCredential(projectState);
+  warnings.push("Agent dependency status used signed Launcher authentication.");
+  return fetchJsonWithSignedAuth(targetUrl, credential);
 }
 
 function summarizeDependencies(payload) {

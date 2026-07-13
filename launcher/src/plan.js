@@ -10,14 +10,12 @@ const {
   writeJsonFile
 } = require("./project-store");
 const {
-  fetchJsonWithBasicAuth,
-  fetchJsonWithCookie,
+  fetchJsonWithSignedAuth,
   waitForUrl
 } = require("./agent-client");
 const {
-  createRestNonce,
-  loginWithAdminCookie
-} = require("./install-agent");
+  requireAgentSigningCredential
+} = require("./agent-credential-store");
 const {
   estimateInputTokens,
   estimateOutputTokens,
@@ -196,33 +194,16 @@ function hashPrompt(prompt) {
 
 async function postAgentJson(projectState, targetUrl, payload, proofId, warnings) {
   const requestBody = JSON.stringify(payload);
-
-  try {
-    if (!projectState.env.WP_APP_PASSWORD) {
-      throw new Error("Launcher project is missing a stored application password.");
-    }
-
-    return await fetchJsonWithBasicAuth(targetUrl, projectState.env.WP_ADMIN_USER, projectState.env.WP_APP_PASSWORD, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(requestBody)
-      },
-      body: requestBody
-    });
-  } catch (error) {
-    const cookieHeader = await loginWithAdminCookie(projectState);
-    const restNonce = await createRestNonce(projectState, proofId);
-    warnings.push("Agent planning auth fell back to admin cookie context.");
-    return fetchJsonWithCookie(targetUrl, cookieHeader, restNonce, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(requestBody)
-      },
-      body: requestBody
-    });
-  }
+  const credential = requireAgentSigningCredential(projectState);
+  warnings.push("Agent planning request used signed Launcher authentication.");
+  return fetchJsonWithSignedAuth(targetUrl, credential, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(requestBody)
+    },
+    body: requestBody
+  });
 }
 
 async function planProject(options) {

@@ -14,12 +14,12 @@ function factory_register_ai_settings_rest_routes(): void {
 			[
 				'methods'             => 'GET',
 				'callback'            => 'factory_rest_ai_get_settings',
-				'permission_callback' => 'factory_rest_require_manage_options',
+				'permission_callback' => 'factory_rest_require_signed_launcher',
 			],
 			[
 				'methods'             => 'POST',
 				'callback'            => 'factory_rest_ai_save_settings',
-				'permission_callback' => 'factory_rest_require_manage_options',
+				'permission_callback' => 'factory_rest_require_signed_launcher',
 			],
 		]
 	);
@@ -30,7 +30,7 @@ function factory_register_ai_settings_rest_routes(): void {
 		[
 			'methods'             => 'POST',
 			'callback'            => 'factory_rest_ai_estimate',
-			'permission_callback' => 'factory_rest_require_manage_options',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
 		]
 	);
 }

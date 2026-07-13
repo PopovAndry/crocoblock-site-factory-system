@@ -121,6 +121,7 @@ test("cross-language fixed vector matches PHP canonicalization and signature", (
   const vector = {
     version: SIGNED_AUTH_VERSION,
     key_id: "key-alpha",
+    project_slug: "project-alpha",
     timestamp: FIXED_TIMESTAMP,
     request_id: FIXED_REQUEST_ID,
     method: "post",
@@ -133,6 +134,7 @@ test("cross-language fixed vector matches PHP canonicalization and signature", (
   const nodeCanonical = createCanonicalString({
     version: vector.version,
     keyId: vector.key_id,
+    projectSlug: vector.project_slug,
     timestamp: vector.timestamp,
     requestId: vector.request_id,
     method: vector.method,
@@ -158,6 +160,7 @@ test("canonicalization is deterministic and method path query body differences c
   const base = signRequest();
   const differentMethod = signRequest({ method: "GET" });
   const differentPath = signRequest({ path: "/wp-json/factory/v1/agent/health" });
+  const differentProject = signRequest({ projectSlug: "project-beta" });
   const differentQuery = signRequest({ query: "a=first&z=last&z=again" });
   const differentBody = signRequest({ body: "{\"agency_name\":\"Beta\"}" });
 
@@ -165,6 +168,7 @@ test("canonicalization is deterministic and method path query body differences c
   assert.equal(canonicalizeQuery("?b=2&a=first&a=alpha"), "a=alpha&a=first&b=2");
   assert.notEqual(differentMethod.headers[SIGNED_AUTH_HEADERS.signature], base.headers[SIGNED_AUTH_HEADERS.signature]);
   assert.notEqual(differentPath.headers[SIGNED_AUTH_HEADERS.signature], base.headers[SIGNED_AUTH_HEADERS.signature]);
+  assert.notEqual(differentProject.headers[SIGNED_AUTH_HEADERS.signature], base.headers[SIGNED_AUTH_HEADERS.signature]);
   assert.notEqual(differentQuery.headers[SIGNED_AUTH_HEADERS.signature], base.headers[SIGNED_AUTH_HEADERS.signature]);
   assert.notEqual(differentBody.headers[SIGNED_AUTH_HEADERS.signature], base.headers[SIGNED_AUTH_HEADERS.signature]);
 });
@@ -223,7 +227,27 @@ test("key status and project binding are enforced", () => {
   assertRejectsWithCode(() => verify({ resolveCredential: () => null }), "signed_auth_key_unknown");
   assertRejectsWithCode(() => verify({ resolveCredential: () => credential({ status: "revoked" }) }), "signed_auth_key_revoked");
   assertRejectsWithCode(() => verify({ resolveCredential: () => credential({ status: "disabled" }) }), "signed_auth_key_revoked");
-  assertRejectsWithCode(() => verify({ projectSlug: "project-beta" }), "signed_auth_key_unknown");
+  assertRejectsWithCode(() => verify({ projectSlug: "project-beta" }), "signed_auth_project_mismatch");
+
+  const missingProjectHeader = signRequest();
+  delete missingProjectHeader.headers[SIGNED_AUTH_HEADERS.projectSlug];
+  assertRejectsWithCode(() => verify({ headers: missingProjectHeader.headers }), "signed_auth_project_required");
+
+  const unboundCredential = credential({ project_slug: "" });
+  const unboundSigned = signRequest({ credential: unboundCredential, projectSlug: "" });
+  assertRejectsWithCode(() => verify({
+    headers: unboundSigned.headers,
+    resolveCredential: () => unboundCredential,
+    projectSlug: ""
+  }), "signed_auth_project_required");
+
+  const copiedKeyWrongProject = credential({ project_slug: "project-beta" });
+  const copiedSigned = signRequest({ credential: copiedKeyWrongProject });
+  assertRejectsWithCode(() => verify({
+    headers: copiedSigned.headers,
+    resolveCredential: () => credential(),
+    projectSlug: "project-alpha"
+  }), "signed_auth_project_mismatch");
 
   const beta = credential({ key_id: "key-beta", project_slug: "project-beta" });
   const betaSigned = signRequest({ credential: beta });
@@ -231,7 +255,7 @@ test("key status and project binding are enforced", () => {
     headers: betaSigned.headers,
     resolveCredential: () => beta,
     projectSlug: "project-alpha"
-  }), "signed_auth_key_unknown");
+  }), "signed_auth_project_mismatch");
 });
 
 test("capabilities are route derived and caller cannot claim stronger access", () => {
@@ -341,6 +365,7 @@ test("shared Agent client can attach signed headers without exposing the secret"
     assert.equal(received.body, body);
     assert.equal(received.headers[SIGNED_AUTH_HEADERS.version], SIGNED_AUTH_VERSION);
     assert.equal(received.headers[SIGNED_AUTH_HEADERS.keyId], "key-alpha");
+    assert.equal(received.headers[SIGNED_AUTH_HEADERS.projectSlug], "project-alpha");
     assert.equal(JSON.stringify(received.headers).includes(FIXED_SECRET), false);
     assert.equal(response.signedAuth.requestId, "req-client-signed");
   } finally {

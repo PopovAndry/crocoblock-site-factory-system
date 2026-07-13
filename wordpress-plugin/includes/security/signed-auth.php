@@ -7,11 +7,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 const FACTORY_AGENT_SIGNED_AUTH_VERSION = 'factory-agent-hmac-v1';
 const FACTORY_AGENT_SIGNED_AUTH_FRESHNESS_SECONDS = 300;
 const FACTORY_AGENT_SIGNED_AUTH_CLOCK_SKEW_SECONDS = 30;
+const FACTORY_AGENT_SIGNED_AUTH_OPTION = 'factory_agent_signed_auth_credentials';
 
 function factory_agent_signed_auth_headers(): array {
 	return [
 		'version'   => 'x-factory-agent-auth-version',
 		'key_id'    => 'x-factory-agent-key-id',
+		'project_slug' => 'x-factory-project-slug',
 		'timestamp' => 'x-factory-agent-timestamp',
 		'request_id' => 'x-factory-agent-request-id',
 		'body_hash' => 'x-factory-agent-body-sha256',
@@ -142,6 +144,7 @@ function factory_agent_signed_auth_canonical_string( array $fields ): string {
 		[
 			(string) ( $fields['version'] ?? '' ),
 			(string) ( $fields['key_id'] ?? '' ),
+			(string) ( $fields['project_slug'] ?? '' ),
 			(string) ( $fields['timestamp'] ?? '' ),
 			(string) ( $fields['request_id'] ?? '' ),
 			factory_agent_signed_auth_normalize_method( (string) ( $fields['method'] ?? '' ) ),
@@ -181,6 +184,121 @@ function factory_agent_signed_auth_redact_credential( array $credential ): array
 	return $credential;
 }
 
+function factory_agent_signed_auth_sanitize_credential_metadata( array $credential ): array {
+	return [
+		'contract_version' => sanitize_text_field( (string) ( $credential['contract_version'] ?? '' ) ),
+		'key_id'           => sanitize_text_field( (string) ( $credential['key_id'] ?? '' ) ),
+		'status'           => sanitize_key( (string) ( $credential['status'] ?? '' ) ),
+		'created_at'       => sanitize_text_field( (string) ( $credential['created_at'] ?? '' ) ),
+		'revoked_at'       => isset( $credential['revoked_at'] ) && null !== $credential['revoked_at'] ? sanitize_text_field( (string) $credential['revoked_at'] ) : null,
+		'capabilities'     => array_values( array_map( 'sanitize_text_field', is_array( $credential['capabilities'] ?? null ) ? $credential['capabilities'] : [] ) ),
+		'project_slug'     => sanitize_key( (string) ( $credential['project_slug'] ?? '' ) ),
+	];
+}
+
+function factory_agent_signed_auth_validate_credential_record( array $credential ) {
+	if ( FACTORY_AGENT_SIGNED_AUTH_VERSION !== ( $credential['contract_version'] ?? '' ) ) {
+		return factory_agent_signed_auth_error( 'agent_signed_auth_bootstrap_invalid', 400 );
+	}
+
+	if ( ! is_string( $credential['key_id'] ?? null ) || '' === trim( $credential['key_id'] ) ) {
+		return factory_agent_signed_auth_error( 'agent_signed_auth_bootstrap_invalid', 400 );
+	}
+
+	if ( ! is_string( $credential['signing_secret'] ?? null ) || '' === trim( $credential['signing_secret'] ) ) {
+		return factory_agent_signed_auth_error( 'agent_signed_auth_bootstrap_invalid', 400 );
+	}
+
+	if ( strlen( factory_agent_signed_auth_secret_bytes( (string) $credential['signing_secret'] ) ) < 32 ) {
+		return factory_agent_signed_auth_error( 'agent_signed_auth_bootstrap_invalid', 400 );
+	}
+
+	$capabilities = is_array( $credential['capabilities'] ?? null ) ? $credential['capabilities'] : [];
+	$allowed = factory_agent_signed_auth_capabilities();
+	foreach ( $capabilities as $capability ) {
+		if ( ! is_string( $capability ) || ! in_array( $capability, $allowed, true ) ) {
+			return factory_agent_signed_auth_error( 'agent_signed_auth_bootstrap_invalid', 400 );
+		}
+	}
+
+	if ( ! is_string( $credential['project_slug'] ?? null ) || '' === trim( $credential['project_slug'] ) ) {
+		return factory_agent_signed_auth_error( 'agent_signed_auth_bootstrap_invalid', 400 );
+	}
+
+	return true;
+}
+
+function factory_agent_signed_auth_get_stored_credentials(): array {
+	$stored = get_option( FACTORY_AGENT_SIGNED_AUTH_OPTION, [] );
+	if ( ! is_array( $stored ) ) {
+		return [];
+	}
+
+	return $stored;
+}
+
+function factory_agent_signed_auth_store_credential( array $credential ) {
+	$validation = factory_agent_signed_auth_validate_credential_record( $credential );
+	if ( is_wp_error( $validation ) ) {
+		return $validation;
+	}
+
+	$stored = factory_agent_signed_auth_get_stored_credentials();
+	$active = array_values(
+		array_filter(
+			$stored,
+			static function ( $candidate ): bool {
+				return is_array( $candidate ) && 'active' === ( $candidate['status'] ?? '' );
+			}
+		)
+	);
+
+	foreach ( $active as $candidate ) {
+		if ( (string) ( $candidate['key_id'] ?? '' ) === (string) $credential['key_id'] ) {
+			$same_secret = hash_equals( (string) ( $candidate['signing_secret'] ?? '' ), (string) $credential['signing_secret'] );
+			$same_capabilities = array_values( $candidate['capabilities'] ?? [] ) === array_values( $credential['capabilities'] ?? [] );
+			$candidate_project = (string) ( $candidate['project_slug'] ?? '' );
+			$incoming_project = (string) ( $credential['project_slug'] ?? '' );
+			$same_project = $candidate_project === $incoming_project;
+			if ( $same_secret && $same_capabilities && $same_project ) {
+				return [
+					'status'     => 'ok',
+					'code'       => 'agent_auth_bootstrap_already_configured',
+					'credential' => factory_agent_signed_auth_sanitize_credential_metadata( $candidate ),
+				];
+			}
+
+			if ( $same_secret && $same_capabilities && '' === $candidate_project && '' !== $incoming_project ) {
+				foreach ( $stored as $index => $stored_candidate ) {
+					if ( is_array( $stored_candidate ) && (string) ( $stored_candidate['key_id'] ?? '' ) === (string) $credential['key_id'] ) {
+						$stored[ $index ]['project_slug'] = $incoming_project;
+						update_option( FACTORY_AGENT_SIGNED_AUTH_OPTION, $stored, false );
+						return [
+							'status'     => 'ok',
+							'code'       => 'agent_auth_bootstrap_project_bound',
+							'credential' => factory_agent_signed_auth_sanitize_credential_metadata( $stored[ $index ] ),
+						];
+					}
+				}
+			}
+
+			return factory_agent_signed_auth_error( 'agent_auth_bootstrap_conflict', 409 );
+		}
+
+		return factory_agent_signed_auth_error( 'agent_auth_bootstrap_conflict', 409 );
+	}
+
+	$credential['status'] = 'active';
+	$stored[] = $credential;
+	update_option( FACTORY_AGENT_SIGNED_AUTH_OPTION, $stored, false );
+
+	return [
+		'status'     => 'ok',
+		'code'       => 'agent_auth_bootstrap_created',
+		'credential' => factory_agent_signed_auth_sanitize_credential_metadata( $credential ),
+	];
+}
+
 function factory_agent_signed_auth_error( string $code, int $status = 401 ): WP_Error {
 	return new WP_Error(
 		$code,
@@ -198,7 +316,8 @@ function factory_agent_signed_auth_header_value( WP_REST_Request $request, strin
 	$values = [];
 
 	foreach ( $headers as $name => $value ) {
-		if ( strtolower( (string) $name ) !== $key ) {
+		$normalized_name = str_replace( '_', '-', strtolower( (string) $name ) );
+		if ( $normalized_name !== $key ) {
 			continue;
 		}
 		if ( is_array( $value ) ) {
@@ -225,8 +344,10 @@ function factory_agent_signed_auth_read_headers( WP_REST_Request $request ) {
 	foreach ( factory_agent_signed_auth_headers() as $field => $header ) {
 		$result = factory_agent_signed_auth_header_value( $request, $header );
 		if ( isset( $result['error'] ) ) {
+			$missing_code = 'project_slug' === $field ? 'signed_auth_project_required' : 'signed_auth_required';
+			$invalid_code = 'project_slug' === $field && 'invalid' === $result['error'] ? 'signed_auth_project_required' : 'signed_auth_header_invalid';
 			return factory_agent_signed_auth_error(
-				'missing' === $result['error'] ? 'signed_auth_required' : 'signed_auth_header_invalid'
+				'missing' === $result['error'] ? $missing_code : $invalid_code
 			);
 		}
 		$out[ $field ] = $result['value'];
@@ -243,7 +364,7 @@ function factory_agent_signed_auth_lookup_capability( string $method, string $pa
 }
 
 function factory_agent_signed_auth_resolve_credential( string $key_id ): ?array {
-	$credentials = apply_filters( 'factory_agent_signed_auth_credentials', [], $key_id );
+	$credentials = apply_filters( 'factory_agent_signed_auth_credentials', factory_agent_signed_auth_get_stored_credentials(), $key_id );
 	if ( ! is_array( $credentials ) ) {
 		return null;
 	}
@@ -313,6 +434,15 @@ function factory_agent_signed_auth_verify( WP_REST_Request $request, ?string $re
 	if ( ! empty( $credential['revoked_at'] ) || 'revoked' === ( $credential['status'] ?? '' ) || ( isset( $credential['status'] ) && 'active' !== $credential['status'] ) ) {
 		return factory_agent_signed_auth_error( 'signed_auth_key_revoked' );
 	}
+	if ( '' === (string) ( $headers['project_slug'] ?? '' ) ) {
+		return factory_agent_signed_auth_error( 'signed_auth_project_required' );
+	}
+	if ( '' === (string) ( $credential['project_slug'] ?? '' ) ) {
+		return factory_agent_signed_auth_error( 'signed_auth_project_required' );
+	}
+	if ( (string) $credential['project_slug'] !== (string) $headers['project_slug'] ) {
+		return factory_agent_signed_auth_error( 'signed_auth_project_mismatch' );
+	}
 
 	$timestamp = strtotime( $headers['timestamp'] );
 	if ( false === $timestamp || ! preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/', $headers['timestamp'] ) ) {
@@ -338,6 +468,7 @@ function factory_agent_signed_auth_verify( WP_REST_Request $request, ?string $re
 		[
 			'version'    => $headers['version'],
 			'key_id'     => $headers['key_id'],
+			'project_slug' => $headers['project_slug'],
 			'timestamp'  => $headers['timestamp'],
 			'request_id' => $headers['request_id'],
 			'method'     => $request->get_method(),
@@ -373,11 +504,21 @@ function factory_agent_signed_auth_verify( WP_REST_Request $request, ?string $re
 		'auth_type'        => 'factory_agent_signed_request',
 		'contract_version' => FACTORY_AGENT_SIGNED_AUTH_VERSION,
 		'key_id'           => $headers['key_id'],
+		'project_slug'     => $headers['project_slug'],
 		'request_id'       => $headers['request_id'],
 		'timestamp'        => $headers['timestamp'],
 		'capability'       => $capability,
-		'project_slug'     => $credential['project_slug'] ?? null,
 	];
+}
+
+function factory_rest_require_signed_launcher( WP_REST_Request $request ) {
+	$auth = factory_agent_signed_auth_verify( $request );
+	if ( ! is_wp_error( $auth ) ) {
+		$request->set_param( '_factory_signed_auth_context', $auth );
+		return true;
+	}
+
+	return $auth;
 }
 
 function factory_rest_require_signed_launcher_or_legacy_admin( WP_REST_Request $request, ?string $required_capability = null, bool $allow_legacy_admin = true ) {

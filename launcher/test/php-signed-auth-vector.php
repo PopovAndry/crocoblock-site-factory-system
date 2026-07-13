@@ -21,6 +21,7 @@ $canonical = factory_agent_signed_auth_canonical_string(
 	[
 		'version'    => (string) ( $input['version'] ?? '' ),
 		'key_id'     => (string) ( $input['key_id'] ?? '' ),
+		'project_slug' => (string) ( $input['project_slug'] ?? '' ),
 		'timestamp'  => (string) ( $input['timestamp'] ?? '' ),
 		'request_id' => (string) ( $input['request_id'] ?? '' ),
 		'method'     => (string) ( $input['method'] ?? '' ),

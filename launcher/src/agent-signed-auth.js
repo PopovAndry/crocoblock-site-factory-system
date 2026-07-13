@@ -9,6 +9,7 @@ const SIGNED_AUTH_CLOCK_SKEW_SECONDS = 30;
 const SIGNED_AUTH_HEADERS = Object.freeze({
   version: "x-factory-agent-auth-version",
   keyId: "x-factory-agent-key-id",
+  projectSlug: "x-factory-project-slug",
   timestamp: "x-factory-agent-timestamp",
   requestId: "x-factory-agent-request-id",
   bodyHash: "x-factory-agent-body-sha256",
@@ -56,6 +57,8 @@ const SIGNED_AUTH_ERROR_CODES = Object.freeze([
   "signed_auth_header_invalid",
   "signed_auth_key_unknown",
   "signed_auth_key_revoked",
+  "signed_auth_project_required",
+  "signed_auth_project_mismatch",
   "signed_auth_timestamp_invalid",
   "signed_auth_request_expired",
   "signed_auth_body_hash_mismatch",
@@ -165,6 +168,7 @@ function createCanonicalString(fields) {
   return [
     fields.version,
     fields.keyId,
+    fields.projectSlug,
     fields.timestamp,
     fields.requestId,
     normalizeMethod(fields.method),
@@ -200,9 +204,11 @@ function createSignedAgentHeaders(options) {
   const bodyHash = safeOptions.bodyHash || sha256Hex(bodyBuffer);
   const timestamp = safeOptions.timestamp || (safeOptions.clock ? safeOptions.clock() : nowIso());
   const requestId = safeOptions.requestId || (safeOptions.requestIdGenerator ? safeOptions.requestIdGenerator() : crypto.randomUUID());
+  const projectSlug = safeOptions.projectSlug || credential.project_slug || "";
   const fields = {
     version: SIGNED_AUTH_VERSION,
     keyId: credential.key_id,
+    projectSlug,
     timestamp,
     requestId,
     method: safeOptions.method,
@@ -217,6 +223,7 @@ function createSignedAgentHeaders(options) {
     headers: {
       [SIGNED_AUTH_HEADERS.version]: fields.version,
       [SIGNED_AUTH_HEADERS.keyId]: fields.keyId,
+      [SIGNED_AUTH_HEADERS.projectSlug]: fields.projectSlug,
       [SIGNED_AUTH_HEADERS.timestamp]: fields.timestamp,
       [SIGNED_AUTH_HEADERS.requestId]: fields.requestId,
       [SIGNED_AUTH_HEADERS.bodyHash]: fields.bodyHash,
@@ -271,7 +278,9 @@ function readSignedHeaders(headers) {
   for (const [field, headerName] of Object.entries(SIGNED_AUTH_HEADERS)) {
     const result = getHeaderValue(headers, headerName);
     if (result.error) {
-      throw signedAuthError(result.error === "missing" ? "signed_auth_required" : "signed_auth_header_invalid", 401, { header: headerName });
+      const missingCode = field === "projectSlug" ? "signed_auth_project_required" : "signed_auth_required";
+      const invalidCode = field === "projectSlug" && result.error === "invalid" ? "signed_auth_project_required" : "signed_auth_header_invalid";
+      throw signedAuthError(result.error === "missing" ? missingCode : invalidCode, 401, { header: headerName });
     }
     out[field] = result.value;
   }
@@ -329,8 +338,17 @@ function verifySignedAgentRequest(options) {
   if (credential.status && credential.status !== "active") {
     throw signedAuthError("signed_auth_key_revoked", 401);
   }
-  if (safeOptions.projectSlug && credential.project_slug && credential.project_slug !== safeOptions.projectSlug) {
-    throw signedAuthError("signed_auth_key_unknown", 401);
+  if (!signedHeaders.projectSlug) {
+    throw signedAuthError("signed_auth_project_required", 401);
+  }
+  if (!credential.project_slug) {
+    throw signedAuthError("signed_auth_project_required", 401);
+  }
+  if (credential.project_slug !== signedHeaders.projectSlug) {
+    throw signedAuthError("signed_auth_project_mismatch", 401);
+  }
+  if (safeOptions.projectSlug && signedHeaders.projectSlug !== safeOptions.projectSlug) {
+    throw signedAuthError("signed_auth_project_mismatch", 401);
   }
 
   const timestampMs = parseTimestamp(signedHeaders.timestamp);
@@ -352,6 +370,7 @@ function verifySignedAgentRequest(options) {
   const canonicalString = createCanonicalString({
     version: signedHeaders.version,
     keyId: signedHeaders.keyId,
+    projectSlug: signedHeaders.projectSlug,
     timestamp: signedHeaders.timestamp,
     requestId: signedHeaders.requestId,
     method: safeOptions.method,
@@ -387,10 +406,10 @@ function verifySignedAgentRequest(options) {
     auth_type: "factory_agent_signed_request",
     contract_version: SIGNED_AUTH_VERSION,
     key_id: signedHeaders.keyId,
+    project_slug: signedHeaders.projectSlug,
     request_id: signedHeaders.requestId,
     timestamp: signedHeaders.timestamp,
-    capability: routeCapability,
-    project_slug: credential.project_slug || safeOptions.projectSlug || null
+    capability: routeCapability
   };
 }
 

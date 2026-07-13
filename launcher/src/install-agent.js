@@ -16,9 +16,14 @@ const { runCommand } = require("./runtime-tools");
 const {
   fetchJsonWithBasicAuth,
   fetchJsonWithCookie,
+  fetchJsonWithSignedAuth,
   requestJson,
   waitForUrl
 } = require("./agent-client");
+const {
+  ensureAgentSigningCredential,
+  redactAgentSigningCredential
+} = require("./agent-credential-store");
 
 const PLUGIN_SLUG = "crocoblock-site-factory";
 const APP_PASSWORD_NAME = "Factory Launcher";
@@ -179,6 +184,40 @@ async function createRestNonce(projectState, proofStem) {
   return nonce;
 }
 
+async function bootstrapAgentSignedAuth(projectState, restBase, credential, proofId, warnings) {
+  const requestBody = JSON.stringify({
+    contract_version: credential.contract_version,
+    key_id: credential.key_id,
+    signing_secret: credential.signing_secret,
+    status: credential.status,
+    created_at: credential.created_at,
+    revoked_at: credential.revoked_at,
+    capabilities: credential.capabilities,
+    project_slug: credential.project_slug
+  });
+  const options = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(requestBody)
+    },
+    body: requestBody
+  };
+
+  try {
+    const auth = await ensureAgentApplicationPassword(projectState, proofId, warnings);
+    return (await fetchJsonWithBasicAuth(restBase + "/agent/auth/bootstrap", auth.username, auth.password, options)).json;
+  } catch (error) {
+    if (error && typeof error.statusCode === "number" && ![401, 403].includes(error.statusCode)) {
+      throw error;
+    }
+    const cookieHeader = await loginWithAdminCookie(projectState);
+    const restNonce = await createRestNonce(projectState, proofId);
+    warnings.push("Agent signed-auth bootstrap used explicit admin cookie fallback.");
+    return (await fetchJsonWithCookie(restBase + "/agent/auth/bootstrap", cookieHeader, restNonce, options)).json;
+  }
+}
+
 async function installAgent(options) {
   const projectsRoot = resolveProjectsRoot(options.projectsRoot);
   const projectState = readProjectBySlug(options.slug, projectsRoot);
@@ -225,20 +264,10 @@ async function installAgent(options) {
   }
 
   const restBase = projectState.project.wp_url + "/wp-json/factory/v1";
-  let health;
-  let capabilities;
-
-  try {
-    const auth = await ensureAgentApplicationPassword(projectState, proofId, warnings);
-    health = (await fetchJsonWithBasicAuth(restBase + "/agent/health", auth.username, auth.password)).json;
-    capabilities = (await fetchJsonWithBasicAuth(restBase + "/agent/capabilities", auth.username, auth.password)).json;
-  } catch (error) {
-    const cookieHeader = await loginWithAdminCookie(projectState);
-    const restNonce = await createRestNonce(projectState, proofId);
-    warnings.push("Agent endpoint auth fell back to admin cookie context.");
-    health = (await fetchJsonWithCookie(restBase + "/agent/health", cookieHeader, restNonce)).json;
-    capabilities = (await fetchJsonWithCookie(restBase + "/agent/capabilities", cookieHeader, restNonce)).json;
-  }
+  const signing = ensureAgentSigningCredential(projectState);
+  const bootstrap = await bootstrapAgentSignedAuth(projectState, restBase, signing.credential, proofId, warnings);
+  const health = (await fetchJsonWithSignedAuth(restBase + "/agent/health", signing.credential)).json;
+  const capabilities = (await fetchJsonWithSignedAuth(restBase + "/agent/capabilities", signing.credential)).json;
 
   const proof = {
     proof_id: proofId,
@@ -252,6 +281,13 @@ async function installAgent(options) {
     rest_base: restBase,
     frontend_safe_edit_fields: Array.isArray(capabilities.frontend_safe_edit_fields) ? capabilities.frontend_safe_edit_fields : [],
     supported_verticals: Array.isArray(capabilities.supported_verticals) ? capabilities.supported_verticals : [],
+    signed_auth: {
+      status: "ready",
+      bootstrap_code: bootstrap.code || null,
+      key_id: signing.credential.key_id,
+      credential_created: signing.created,
+      credential: redactAgentSigningCredential(signing.credential)
+    },
     created_at: new Date().toISOString(),
     warnings,
     applies_changes: true,
@@ -278,6 +314,13 @@ async function installAgent(options) {
       last_run_id: health.last_run_id || null,
       auth_mode: health.auth_mode || null
     },
+    signed_auth: {
+      status: "ready",
+      key_id: signing.credential.key_id,
+      bootstrap_code: bootstrap.code || null,
+      credential_created: signing.created,
+      contract_version: signing.credential.contract_version
+    },
     capabilities: {
       status: capabilities.status || null,
       code: capabilities.code || null,
@@ -301,7 +344,8 @@ async function installAgent(options) {
     pluginPaths,
     restBase,
     health,
-    capabilities
+    capabilities,
+    bootstrap
   };
 }
 

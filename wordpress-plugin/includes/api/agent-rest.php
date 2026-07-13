@@ -25,7 +25,7 @@ function factory_register_agent_rest_routes(): void {
 		[
 			'methods'             => 'GET',
 			'callback'            => 'factory_rest_agent_health',
-			'permission_callback' => 'factory_rest_require_manage_options',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
 		]
 	);
 
@@ -35,7 +35,7 @@ function factory_register_agent_rest_routes(): void {
 		[
 			'methods'             => 'GET',
 			'callback'            => 'factory_rest_agent_capabilities',
-			'permission_callback' => 'factory_rest_require_manage_options',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
 		]
 	);
 
@@ -45,7 +45,7 @@ function factory_register_agent_rest_routes(): void {
 		[
 			'methods'             => 'GET',
 			'callback'            => 'factory_rest_agent_dependencies',
-			'permission_callback' => 'factory_rest_require_manage_options',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
 		]
 	);
 
@@ -55,9 +55,48 @@ function factory_register_agent_rest_routes(): void {
 		[
 			'methods'             => 'POST',
 			'callback'            => 'factory_rest_agent_safe_fields_apply',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
+		]
+	);
+
+	register_rest_route(
+		'factory/v1',
+		'/agent/auth/bootstrap',
+		[
+			'methods'             => 'POST',
+			'callback'            => 'factory_rest_agent_auth_bootstrap',
 			'permission_callback' => 'factory_rest_require_manage_options',
 		]
 	);
+}
+
+function factory_rest_agent_auth_bootstrap( WP_REST_Request $request ): WP_REST_Response {
+	$payload = [
+		'schema'           => 'factory_agent_signing_credential',
+		'version'          => 1,
+		'contract_version' => sanitize_text_field( (string) $request->get_param( 'contract_version' ) ),
+		'key_id'           => sanitize_text_field( (string) $request->get_param( 'key_id' ) ),
+		'signing_secret'   => is_string( $request->get_param( 'signing_secret' ) ) ? (string) $request->get_param( 'signing_secret' ) : '',
+		'status'           => 'active',
+		'created_at'       => sanitize_text_field( (string) $request->get_param( 'created_at' ) ),
+		'revoked_at'       => null,
+		'capabilities'     => is_array( $request->get_param( 'capabilities' ) ) ? array_values( $request->get_param( 'capabilities' ) ) : [],
+		'project_slug'     => sanitize_key( (string) $request->get_param( 'project_slug' ) ),
+	];
+
+	$result = factory_agent_signed_auth_store_credential( $payload );
+	if ( is_wp_error( $result ) ) {
+		$status = (int) ( $result->get_error_data()['status'] ?? 400 );
+		return new WP_REST_Response(
+			[
+				'status' => 'error',
+				'code'   => $result->get_error_code(),
+			],
+			$status
+		);
+	}
+
+	return new WP_REST_Response( $result );
 }
 
 function factory_rest_agent_health(): WP_REST_Response {
@@ -86,7 +125,7 @@ function factory_rest_agent_health(): WP_REST_Response {
 			'rest_namespace'         => 'factory/v1',
 			'generated_site_present' => $generated_site_present,
 			'last_run_id'            => $latest_run,
-			'auth_mode'              => 'wp_application_password_or_admin_context_alpha',
+			'auth_mode'              => 'factory_agent_hmac_signed_request',
 		]
 	);
 }

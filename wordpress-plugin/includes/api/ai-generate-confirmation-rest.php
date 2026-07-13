@@ -13,7 +13,7 @@ function factory_register_ai_generate_confirmation_rest_routes(): void {
 		[
 			'methods'             => 'POST',
 			'callback'            => 'factory_rest_ai_generate_confirmation',
-			'permission_callback' => 'factory_rest_require_manage_options',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
 		]
 	);
 }

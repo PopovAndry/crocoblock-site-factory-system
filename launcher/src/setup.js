@@ -4,6 +4,7 @@ const path = require("path");
 const { readProjectBySlug, resolveProjectsRoot } = require("./project-store");
 const { fetchDependencyStatus } = require("./dependencies");
 const { listApprovedDependencySources } = require("./dependency-sources");
+const { readAgentSigningCredential } = require("./agent-credential-store");
 
 function getProofPath(runtimePath, proofId) {
   if (!proofId) {
@@ -42,9 +43,23 @@ async function getSetupStatus(options) {
   let dependencyStatus = "not_started";
   let blockers = dependencyState && Array.isArray(dependencyState.blockers) ? dependencyState.blockers : [];
   let dependencies = [];
+  let signedAuthStatus = "not_configured";
+  let signedAuthKeyId = null;
+
+  try {
+    const credential = readAgentSigningCredential(projectState);
+    if (credential) {
+      signedAuthStatus = "ready";
+      signedAuthKeyId = credential.key_id;
+    }
+  } catch (error) {
+    signedAuthStatus = "local_credential_invalid";
+    warnings.push("Agent signed-auth credential is invalid. Run Agent install/repair to restore signed auth.");
+  }
 
   if ((projectState.project.runtime && projectState.project.runtime.status) === "provisioned" &&
-      (projectState.project.agent && projectState.project.agent.status) === "installed") {
+      (projectState.project.agent && projectState.project.agent.status) === "installed" &&
+      signedAuthStatus === "ready") {
     try {
       const liveDependencyStatus = await fetchDependencyStatus(projectState, warnings);
       dependencyState = Object.assign({}, dependencyState || {}, {
@@ -63,6 +78,8 @@ async function getSetupStatus(options) {
     } catch (error) {
       warnings.push("Dependency refresh failed: " + error.message);
     }
+  } else if ((projectState.project.agent && projectState.project.agent.status) === "installed" && signedAuthStatus !== "ready") {
+    warnings.push("Agent is installed but signed authentication is not ready. Run Agent install/repair to bootstrap it.");
   }
 
   if (dependencyState) {
@@ -93,11 +110,18 @@ async function getSetupStatus(options) {
         proof_path: runtimeProofPath
       },
       agent: {
-        status: projectState.project.agent && projectState.project.agent.status === "installed" ? "ready" : "not_started",
+        status: projectState.project.agent && projectState.project.agent.status === "installed"
+          ? (signedAuthStatus === "ready" ? "ready" : "signed_auth_required")
+          : "not_started",
         health_status: projectState.project.agent && projectState.project.agent.health ? projectState.project.agent.health.status : null,
         capabilities_status: projectState.project.agent && projectState.project.agent.capabilities ? projectState.project.agent.capabilities.status : null,
         rest_base: projectState.project.agent && projectState.project.agent.rest_base || null,
-        proof_path: agentProofPath
+        proof_path: agentProofPath,
+        signed_auth: {
+          status: signedAuthStatus,
+          key_id: signedAuthKeyId,
+          contract_version: signedAuthStatus === "ready" ? "factory-agent-hmac-v1" : null
+        }
       },
       dependencies: {
         status: dependencyStatus,
