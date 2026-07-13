@@ -76,8 +76,8 @@
       "sections": [
         {
           "type": "hero",
-          "title": "Kyiv Turquoise Realty",
-          "subtitle": "Find apartments, houses, and commercial spaces in Kyiv",
+          "title": "Find Your Place in Kyiv",
+          "subtitle": "Explore apartments, houses, and commercial spaces across Kyiv.",
           "cta_label": "Browse properties",
           "cta_url": "/properties/"
         },
@@ -135,7 +135,7 @@
     "contact": {
       "slug": "contact",
       "title": "Contact Kyiv Turquoise Realty",
-      "text": "Schedule a viewing or request more details about Kyiv properties.",
+      "text": "Schedule a viewing or request more details about properties in Kyiv.",
       "phone": "+380 44 000 0000",
       "email": "hello@example.com",
       "cta_label": "Browse properties",
