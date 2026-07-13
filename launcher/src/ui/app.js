@@ -52,6 +52,162 @@
       .replace(/'/g, "&#39;");
   }
 
+  function normalizeDisplayText(value) {
+    return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  }
+
+  function titleCaseWords(value) {
+    return normalizeDisplayText(value)
+      .toLowerCase()
+      .replace(/(^|[\s/-])([a-zа-яіїєґ0-9])/g, (match, prefix, char) => prefix + char.toUpperCase());
+  }
+
+  function humanizeFieldKey(fieldKey) {
+    const normalizedKey = String(fieldKey || "");
+    if (normalizedKey === "hero_title") {
+      return "Homepage headline";
+    }
+    return titleCaseWords(normalizedKey.replace(/_/g, " "));
+  }
+
+  function humanizeOperationType(operationType) {
+    switch (String(operationType || "")) {
+      case "state_apply":
+        return "Website content updated";
+      case "state_rollback":
+        return "Content changes undone";
+      case "state_apply_rollback_v1":
+        return "Content changes undone";
+      case "controlled_generate":
+        return "Website generated";
+      case "install_dependency":
+        return "Required product installed";
+      case "install_agent":
+        return "Site Factory Agent installed";
+      case "agent_auth_rotate":
+      case "agent_auth_rotation_completed":
+        return "Secure connection refreshed";
+      case "agent_auth_revoke":
+      case "agent_auth_revoke_completed":
+        return "Secure connection disconnected";
+      case "provision":
+        return "WordPress prepared";
+      case "state_plan":
+        return "Change previewed";
+      case "project_operation_in_progress":
+        return "Another project task is still running";
+      default:
+        return humanizeFieldKey(operationType || "Operation");
+    }
+  }
+
+  function humanizeOperationStatus(status) {
+    switch (String(status || "")) {
+      case "requested":
+        return "Queued";
+      case "running":
+        return "Running";
+      case "succeeded":
+        return "Done";
+      case "failed":
+        return "Failed";
+      case "interrupted":
+        return "Interrupted";
+      default:
+        return humanizeFieldKey(status || "Unknown");
+    }
+  }
+
+  function humanizeReadinessStatus(status) {
+    switch (String(status || "")) {
+      case "ready_for_alpha_evaluation":
+        return "Ready for demo review";
+      case "generated_site_ready":
+        return "Generated site ready";
+      case "partial_alpha_evaluation":
+        return "Partially ready";
+      case "proofs_incomplete":
+        return "Proof pack incomplete";
+      case "ready":
+        return "Ready";
+      case "blocked":
+        return "Blocked";
+      case "running":
+        return "Running";
+      case "unknown":
+        return "Unknown";
+      default:
+        return humanizeFieldKey(status || "Unknown");
+    }
+  }
+
+  function formatReadableTime(value) {
+    if (!value) {
+      return "Unavailable";
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    try {
+      return date.toLocaleString([], {
+        dateStyle: "medium",
+        timeStyle: "short"
+      });
+    } catch (error) {
+      return date.toISOString();
+    }
+  }
+
+  function formatTechnicalValue(value) {
+    if (value == null || value === "") {
+      return "Unavailable";
+    }
+
+    if (Array.isArray(value)) {
+      return value.length ? value.join(", ") : "None";
+    }
+
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch (error) {
+        return "Unavailable";
+      }
+    }
+
+    return String(value);
+  }
+
+  function buildTechnicalDetails(title, rows) {
+    const normalizedRows = Array.isArray(rows)
+      ? rows.filter((row) => row && row.length >= 2 && formatTechnicalValue(row[1]) !== "Unavailable")
+      : [];
+
+    if (!normalizedRows.length) {
+      return "";
+    }
+
+    return [
+      "<details class=\"technical-details\">",
+      "  <summary>" + escapeHtml(title || "Advanced details") + "</summary>",
+      "  <dl>",
+      normalizedRows.map(([label, value]) => {
+        return "<div><dt>" + escapeHtml(label) + "</dt><dd>" + escapeHtml(formatTechnicalValue(value)) + "</dd></div>";
+      }).join(""),
+      "  </dl>",
+      "</details>"
+    ].join("\n");
+  }
+
+  function buildActionLinks(links) {
+    return Array.isArray(links)
+      ? links.filter(Boolean).join("")
+      : "";
+  }
+
   let projectsCache = [];
   let lastSetupPayload = null;
   let setupActionInFlight = false;
@@ -251,32 +407,59 @@
       : "Not recorded";
     milestoneGenerate.disabled = !(selectedProject.dependency_state && selectedProject.dependency_state.can_generate && selectedProject.current_run_id);
 
+    const selectedGenerateSlug = String(generateProjectSlug.value || "").trim();
     projectList.innerHTML = projects.map((project) => {
       const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
       const dependencyState = project.dependency_state || null;
       const generationState = project.generation || null;
       const generatedSite = project.generated_site || null;
+      const siteCounts = generatedSite && generatedSite.counts_summary && generatedSite.counts_summary.after
+        ? generatedSite.counts_summary.after
+        : (generatedSite && generatedSite.counts ? generatedSite.counts : null);
+      const isSelected = project.slug === selectedGenerateSlug;
       const blockerSummary = dependencyState && Array.isArray(dependencyState.blockers) && dependencyState.blockers.length
         ? dependencyState.blockers.join(" | ")
         : "Not checked yet";
+      const overallReadiness = dependencyState
+        ? (dependencyState.can_generate ? "Project ready" : "Needs setup")
+        : "Unknown";
+      const siteHealth = generatedSite && generatedSite.present
+        ? "Healthy"
+        : (generationState && generationState.status && generationState.status !== "not_generated"
+          ? humanizeOperationStatus(generationState.status)
+          : "Not generated yet");
+      const lastMeaningfulOperation = generationState && generationState.status && generationState.status !== "not_generated"
+        ? humanizeOperationType(generationState.status === "succeeded" ? "controlled_generate" : generationState.status)
+        : "None";
+      const actionLinks = isSelected
+        ? buildActionLinks([
+          generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
+            ? "<a class=\"button\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
+            : "",
+          "<a class=\"button\" href=\"#state-plan-form\">Ask AI to Change</a>"
+        ])
+        : (generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
+          ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
+          : "");
       return [
-        "<article class=\"project-card\">",
+        "<article class=\"project-card" + (isSelected ? " project-card--selected" : "") + "\">",
         "  <div class=\"project-card__header\">",
-        "    <h3>" + escapeHtml(project.site_name) + "</h3>",
-        "    <span class=\"status-pill\">Runtime " + escapeHtml(runtimeStatus.replace(/_/g, " ")) + "</span>",
+        "    <div>",
+        "      <h3>" + escapeHtml(project.site_name) + "</h3>",
+        "      <p class=\"project-note project-note--compact\">" + escapeHtml(project.slug) + "</p>",
+        "    </div>",
+        "    <span class=\"status-pill\">" + escapeHtml(isSelected ? "Selected" : ("Runtime " + runtimeStatus.replace(/_/g, " "))) + "</span>",
         "  </div>",
         "  <dl>",
-        "    <div><dt>Slug</dt><dd>" + escapeHtml(project.slug) + "</dd></div>",
-        "    <div><dt>WordPress URL</dt><dd>" + escapeHtml(project.wp_url) + "</dd></div>",
-        "    <div><dt>Runtime</dt><dd>" + escapeHtml(runtimeStatus) + "</dd></div>",
-        "    <div><dt>Agent</dt><dd>" + escapeHtml(project.agent && project.agent.status || "unknown") + "</dd></div>",
-        "    <div><dt>Dependencies</dt><dd>" + escapeHtml(dependencyState ? (dependencyState.can_generate ? "ready" : "blocked") : "unknown") + "</dd></div>",
-        "    <div><dt>Generate</dt><dd>" + escapeHtml(generationState && generationState.status || "not_generated") + "</dd></div>",
-        "    <div><dt>Blockers</dt><dd>" + escapeHtml(blockerSummary) + "</dd></div>",
-        "    <div><dt>Created</dt><dd>" + escapeHtml(project.created_at || "") + "</dd></div>",
+        "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(overallReadiness) + "</dd></div>",
+        "    <div><dt>Site health</dt><dd>" + escapeHtml(siteHealth) + "</dd></div>",
+        "    <div><dt>Pages</dt><dd>" + escapeHtml(siteCounts && siteCounts.pages != null ? String(siteCounts.pages) : "Unavailable") + "</dd></div>",
+        "    <div><dt>Properties</dt><dd>" + escapeHtml(siteCounts && siteCounts.properties != null ? String(siteCounts.properties) : "Unavailable") + "</dd></div>",
+        "    <div><dt>Attachments</dt><dd>" + escapeHtml(siteCounts && siteCounts.attachments != null ? String(siteCounts.attachments) : "Unavailable") + "</dd></div>",
+        "    <div><dt>Last operation</dt><dd>" + escapeHtml(lastMeaningfulOperation) + "</dd></div>",
         "  </dl>",
-        dependencyState ? "  <p class=\"project-note\">" + escapeHtml(dependencyState.next_action || "") + "</p>" : "",
-        generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home ? "  <p class=\"project-note\">Open site: <a href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Home</a></p>" : "",
+        dependencyState ? "  <p class=\"project-note\">" + escapeHtml(dependencyState.next_action || (dependencyState.can_generate ? "This project is ready for the next step." : blockerSummary)) + "</p>" : "",
+        actionLinks ? "  <div class=\"site-links\">" + actionLinks + "</div>" : "",
         "</article>"
       ].join("\n");
     }).join("\n");
@@ -571,19 +754,22 @@
     const personalization = result.proof && result.proof.prompt_personalization ? result.proof.prompt_personalization : null;
     const stageList = stages.map((stage) => {
       const status = stage.status || stage.code || "ok";
-      return "<li><strong>" + escapeHtml(stage.label || stage.name) + ":</strong> " + escapeHtml(status) + "</li>";
+      return "<li><strong>" + escapeHtml(stage.label || stage.name || "Stage") + ":</strong> " + escapeHtml(status) + "</li>";
     }).join("");
 
     planResult.hidden = false;
     planResult.className = "result-box result-box-success";
     planResult.innerHTML = [
-      "<strong>Read-only planning run completed.</strong>",
-      "<p><span>Run ID:</span> " + escapeHtml(result.run.run_id) + "</p>",
-      "<p><span>Run file:</span> " + escapeHtml(result.run_path) + "</p>",
-      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path) + "</p>",
-      personalization ? "<p><span>Personalization:</span> " + escapeHtml(personalization.source) + " -> " + escapeHtml(Object.keys(personalization.fields || {}).join(", ")) + "</p>" : "",
+      "<strong>Change preview ready.</strong>",
+      personalization ? "<p><span>Personalization:</span> " + escapeHtml(humanizeFieldKey(personalization.source || "local_interpreter")) + " -> " + escapeHtml(Object.keys(personalization.fields || {}).map(humanizeFieldKey).join(", ")) + "</p>" : "",
       "<p><span>Stages:</span></p>",
-      "<ul>" + stageList + "</ul>"
+      "<ul>" + stageList + "</ul>",
+      buildTechnicalDetails("Advanced details", [
+        ["Run file", result.run_path || "Unavailable"],
+        ["Proof file", result.proof_path || "Unavailable"],
+        ["Run stages", String(stages.length)],
+        ["Run ID", result.run && result.run.run_id || "Unavailable"]
+      ])
     ].join("");
   }
 
@@ -595,19 +781,27 @@
     generateResult.hidden = false;
     generateResult.className = "result-box result-box-success";
     generateResult.innerHTML = [
-      "<strong>Controlled generate completed.</strong>",
-      result.operation_path ? "<p><span>Operation record:</span> " + escapeHtml(result.operation_path) + "</p>" : "",
-      result.operation && result.operation.operation_id ? "<p><span>Operation ID:</span> " + escapeHtml(result.operation.operation_id) + "</p>" : "",
+      "<strong>Website generated.</strong>",
       "<p><span>Status:</span> " + escapeHtml(result.status || "unknown") + "</p>",
       "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
-      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path) + "</p>",
       "<p><span>Pages:</span> " + escapeHtml(formatCountChange(beforeCounts.pages, afterCounts.pages)) + "</p>",
       "<p><span>Properties:</span> " + escapeHtml(formatCountChange(beforeCounts.properties, afterCounts.properties)) + "</p>",
       "<p><span>Attachments:</span> " + escapeHtml(formatCountChange(beforeCounts.attachments, afterCounts.attachments)) + "</p>",
-      personalization ? "<p><span>Personalization:</span> " + escapeHtml(personalization.source || "local_interpreter") + " -> " + escapeHtml((personalization.applied_fields || []).join(", ")) + "</p>" : "",
       "<p><span>Home:</span> " + escapeHtml(urls.home || urls.root || result.project.wp_url) + "</p>",
-      "<p><span>Properties:</span> " + escapeHtml(urls.properties || "Unavailable") + "</p>",
-      "<p><span>Contact:</span> " + escapeHtml(urls.contact || "Unavailable") + "</p>"
+      "<div class=\"site-links\">" + buildActionLinks([
+        urls.home || urls.root ? "<a class=\"button\" href=\"" + escapeHtml(urls.home || urls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>" : "",
+        urls.properties ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.properties) + "\" target=\"_blank\" rel=\"noreferrer\">Open Properties</a>" : "",
+        urls.contact ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.contact) + "\" target=\"_blank\" rel=\"noreferrer\">Open Contact</a>" : ""
+      ]) + "</div>",
+      personalization ? "<p><span>Personalization:</span> " + escapeHtml(personalization.source || "local_interpreter") + " -> " + escapeHtml((personalization.applied_fields || []).map(humanizeFieldKey).join(", ")) + "</p>" : "",
+      buildTechnicalDetails("Advanced details", [
+        ["Operation record", result.operation_path || "Unavailable"],
+        ["Operation ID", result.operation && result.operation.operation_id || "Unavailable"],
+        ["Proof file", result.proof_path || "Unavailable"],
+        ["Home URL", urls.home || urls.root || result.project.wp_url || "Unavailable"],
+        ["Properties URL", urls.properties || "Unavailable"],
+        ["Contact URL", urls.contact || "Unavailable"]
+      ])
     ].join("");
   }
 
@@ -763,15 +957,12 @@
     const warnings = Array.isArray(safeResult.warnings) ? safeResult.warnings : [];
     const stale = Boolean(options && options.stale);
 
-    return {
+      return {
       className: stale ? "result-box result-box-error" : "result-box result-box-success",
       html: [
       "<strong>" + escapeHtml(stale ? "Preview is stale." : "Generate preview ready.") + "</strong>",
       stale ? "<p>The prompt changed after preview. Preview Plan again before Generate.</p>" : "",
-      "<p><span>Plan ID:</span> " + escapeHtml(safeResult.plan_id || "Unavailable") + "</p>",
-      "<p><span>Prompt hash:</span> " + escapeHtml(safeResult.prompt_hash || "Unavailable") + "</p>",
       "<p><span>Personalization source:</span> " + escapeHtml(safeResult.personalization_source || "local_interpreter") + "</p>",
-      "<p><span>Provider called:</span> " + escapeHtml(String(safeResult.provider_called === true)) + "</p>",
       "<p><span>Can generate:</span> " + escapeHtml(String(safeResult.can_generate === true)) + "</p>",
       "<p><span>Dependency blockers:</span> " + escapeHtml((safeResult.dependency_blockers || []).length ? safeResult.dependency_blockers.join(", ") : "None") + "</p>",
       "<p><span>Estimated input tokens:</span> " + escapeHtml(String(safeResult.estimated_input_tokens != null ? safeResult.estimated_input_tokens : "Not available")) + "</p>",
@@ -789,6 +980,11 @@
         + "<li>Full-site rollback is not available in this version.</li>"
         + "<li>Safe-field rollback is not the same as full-site rollback.</li>"
         + "</ul>",
+      buildTechnicalDetails("Advanced details", [
+        ["Plan ID", safeResult.plan_id || "Unavailable"],
+        ["Prompt hash", safeResult.prompt_hash || "Unavailable"],
+        ["Provider called", String(safeResult.provider_called === true)]
+      ]),
       warnings.length ? "<ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : ""
       ].join("")
     };
@@ -813,36 +1009,56 @@
     const blockers = setup.dependencies && Array.isArray(setup.dependencies.blockers)
       ? setup.dependencies.blockers
       : [];
-    const readinessMessage = setup.ready_to_generate === true
-      ? "Preview Plan and Generate are available after a valid prompt and explicit confirmation."
-      : "Finish Project Setup before previewing or running Generate.";
+    const siteCounts = site.counts_summary && site.counts_summary.after ? site.counts_summary.after : {};
+    const overallReadiness = setup.ready_to_generate === true ? "Project ready" : "Needs setup";
+    const siteHealth = site.generated_site_present
+      ? "Healthy"
+      : (site.controlled_generate_status === "ok" || site.generation_status === "succeeded"
+        ? "Healthy"
+        : (site.controlled_generate_status || site.generation_status || "Not generated yet"));
+    const lastMeaningfulOperation = site.controlled_generate_status === "ok" || site.generated_site_present
+      ? humanizeOperationType("controlled_generate")
+      : (latestOperation && latestOperation.operation_type ? humanizeOperationType(latestOperation.operation_type) : "None");
     const generatedUrls = site.generated_urls || {};
-    const siteLinks = [
-      generatedUrls.home || generatedUrls.root ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.home || generatedUrls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Home</a>" : "",
+    const primaryLinks = buildActionLinks([
+      generatedUrls.home || generatedUrls.root
+        ? "<a class=\"button\" href=\"" + escapeHtml(generatedUrls.home || generatedUrls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
+        : "",
+      "<a class=\"button\" href=\"#state-plan-form\">Ask AI to Change</a>"
+    ]);
+    const secondaryLinks = buildActionLinks([
       generatedUrls.properties ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.properties) + "\" target=\"_blank\" rel=\"noreferrer\">Open Properties</a>" : "",
       generatedUrls.contact ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.contact) + "\" target=\"_blank\" rel=\"noreferrer\">Open Contact</a>" : ""
-    ].filter(Boolean).join("");
+    ]);
 
     return [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
       "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
-      "    <span class=\"status-pill\">" + escapeHtml(setup.ready_to_generate ? "Ready to Generate" : "Blocked") + "</span>",
+      "    <span class=\"status-pill\">" + escapeHtml(humanizeReadinessStatus(setup.ready_to_generate ? "ready" : "blocked")) + "</span>",
       "  </div>",
       "  <dl>",
-      "    <div><dt>Project</dt><dd>" + escapeHtml(payload.project.slug) + "</dd></div>",
-      "    <div><dt>WordPress</dt><dd>" + escapeHtml(payload.project.wp_url || "Unavailable") + "</dd></div>",
-      "    <div><dt>Dependencies</dt><dd>" + escapeHtml(setup.dependencies && setup.dependencies.status || "unknown") + "</dd></div>",
-      "    <div><dt>Ready to Generate</dt><dd>" + escapeHtml(String(setup.ready_to_generate === true)) + "</dd></div>",
-      "    <div><dt>Latest plan</dt><dd>" + escapeHtml(latestPlan && latestPlan.plan_id || "None") + "</dd></div>",
-      "    <div><dt>Interpreter</dt><dd>" + escapeHtml(latestPlan && latestPlan.personalization_source || "local_interpreter") + "</dd></div>",
-      "    <div><dt>Latest operation</dt><dd>" + escapeHtml(latestOperation && latestOperation.status || "none") + "</dd></div>",
-      "    <div><dt>Operation step</dt><dd>" + escapeHtml(latestOperation && (latestOperation.stage || latestOperation.status_detail) || "n/a") + "</dd></div>",
-      "    <div><dt>Generate proof</dt><dd>" + escapeHtml(site.latest_generate_proof_path || "Unavailable") + "</dd></div>",
+      "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(overallReadiness) + "</dd></div>",
+      "    <div><dt>Site health</dt><dd>" + escapeHtml(siteHealth) + "</dd></div>",
+      "    <div><dt>Pages</dt><dd>" + escapeHtml(siteCounts.pages != null ? String(siteCounts.pages) : "Unavailable") + "</dd></div>",
+      "    <div><dt>Properties</dt><dd>" + escapeHtml(siteCounts.properties != null ? String(siteCounts.properties) : "Unavailable") + "</dd></div>",
+      "    <div><dt>Attachments</dt><dd>" + escapeHtml(siteCounts.attachments != null ? String(siteCounts.attachments) : "Unavailable") + "</dd></div>",
+      "    <div><dt>Last operation</dt><dd>" + escapeHtml(lastMeaningfulOperation) + "</dd></div>",
       "  </dl>",
-      blockers.length ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>" : "  <p class=\"project-note\">" + escapeHtml(readinessMessage) + "</p>",
-      latestOperation && latestOperation.operation_path ? "  <p class=\"project-note\">Operation record: " + escapeHtml(latestOperation.operation_path) + "</p>" : "",
-      siteLinks ? "  <div class=\"site-links\">" + siteLinks + "</div>" : "",
+      primaryLinks ? "  <div class=\"site-links\">" + primaryLinks + "</div>" : "",
+      secondaryLinks ? "  <div class=\"site-links\">" + secondaryLinks + "</div>" : "",
+      blockers.length ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>" : "  <p class=\"project-note\">" + escapeHtml(setup.ready_to_generate === true ? "Open the real site, then ask AI to change it, review the plan, and explicitly confirm generate when ready." : "Finish Project Setup before previewing or running Generate.") + "</p>",
+      buildTechnicalDetails("Advanced details", [
+        ["Project", payload.project.slug],
+        ["WordPress", payload.project.wp_url || "Unavailable"],
+        ["Dependencies", setup.dependencies && setup.dependencies.status || "unknown"],
+        ["Ready to Generate", String(setup.ready_to_generate === true)],
+        ["Latest plan", latestPlan && latestPlan.plan_id || "None"],
+        ["Interpreter", latestPlan && latestPlan.personalization_source || "local_interpreter"],
+        ["Latest operation", latestOperation && latestOperation.status || "none"],
+        ["Operation step", latestOperation && (latestOperation.stage || latestOperation.status_detail) || "n/a"],
+        ["Generate proof", site.latest_generate_proof_path || "Unavailable"]
+      ]),
       "</article>"
     ].join("\n");
   }
@@ -884,27 +1100,36 @@
       const error = operation.error && typeof operation.error === "object"
         ? operation.error
         : {};
-      const detailParts = [
-        operation.stage ? "stage=" + operation.stage : "",
-        operation.proof_ref ? "proof=" + operation.proof_ref : "",
-        summary.code ? "code=" + summary.code : "",
-        error.code ? "error=" + error.code : "",
-        operation.legacy ? "legacy=true" : ""
+      const title = humanizeOperationType(operation.operation_type);
+      const statusLabel = humanizeOperationStatus(operation.status || "unknown");
+      const readableTime = formatReadableTime(operation.completed_at || operation.started_at || operation.requested_at);
+      const conciseSummaryParts = [
+        summary.code ? humanizeOperationType(summary.code) : "",
+        operation.stage ? operation.stage : "",
+        error.code ? error.code : ""
       ].filter(Boolean);
       return [
         "<article class=\"project-card\">",
         "  <div class=\"project-card__header\">",
-        "    <h3>" + escapeHtml(operation.operation_type || "operation") + "</h3>",
-        "    <span class=\"status-pill\">" + escapeHtml(operation.status || "unknown") + "</span>",
+        "    <div>",
+        "      <h3>" + escapeHtml(title) + "</h3>",
+        "      <p class=\"project-note project-note--compact\">" + escapeHtml(readableTime) + "</p>",
+        "    </div>",
+        "    <span class=\"status-pill\">" + escapeHtml(statusLabel) + "</span>",
         "  </div>",
-        "  <dl>",
-        "    <div><dt>ID</dt><dd>" + escapeHtml(operation.operation_id || "Unavailable") + "</dd></div>",
-        "    <div><dt>Requested</dt><dd>" + escapeHtml(formatOperationTime(operation.requested_at)) + "</dd></div>",
-        "    <div><dt>Started</dt><dd>" + escapeHtml(formatOperationTime(operation.started_at)) + "</dd></div>",
-        "    <div><dt>Completed</dt><dd>" + escapeHtml(formatOperationTime(operation.completed_at)) + "</dd></div>",
-        "    <div><dt>Duration</dt><dd>" + escapeHtml(formatOperationDuration(operation)) + "</dd></div>",
-        "  </dl>",
-        detailParts.length ? "  <p class=\"project-note\">" + escapeHtml(detailParts.join(" | ")) + "</p>" : "",
+        conciseSummaryParts.length ? "  <p class=\"project-note\">" + escapeHtml(conciseSummaryParts.join(" · ")) + "</p>" : "",
+        buildTechnicalDetails("Advanced details", [
+          ["Operation ID", operation.operation_id || "Unavailable"],
+          ["Requested", formatReadableTime(operation.requested_at)],
+          ["Started", formatReadableTime(operation.started_at)],
+          ["Completed", formatReadableTime(operation.completed_at)],
+          ["Duration", formatOperationDuration(operation)],
+          ["Raw type", operation.operation_type || "unknown"],
+          ["Proof reference", operation.proof_ref || "Unavailable"],
+          ["Result code", summary.code || "Unavailable"],
+          ["Error code", error.code || "Unavailable"],
+          ["Legacy", operation.legacy ? "true" : "false"]
+        ]),
         "</article>"
       ].join("\n");
     }).join("\n");
@@ -912,12 +1137,12 @@
     return [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
-      "    <h3>" + escapeHtml(payload.project.slug || "Project") + "</h3>",
-      "    <span class=\"status-pill\">" + escapeHtml(activeOperation ? "operation running" : "idle") + "</span>",
+        "    <h3>" + escapeHtml(payload.project.slug || "Project") + "</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(activeOperation ? "Running" : "Idle") + "</span>",
       "  </div>",
       activeOperation
-        ? "  <p class=\"project-note\">Active operation: " + escapeHtml(activeOperation.operation_type || "operation") + " (" + escapeHtml(activeOperation.status || "unknown") + ")</p>"
-        : "  <p class=\"project-note\">No active project mutation operation.</p>",
+        ? "  <p class=\"project-note\">Active task: " + escapeHtml(humanizeOperationType(activeOperation.operation_type) + " · " + humanizeOperationStatus(activeOperation.status || "unknown")) + "</p>"
+        : "  <p class=\"project-note\">No active project task is running right now.</p>",
       "</article>",
       operationRows || "<p class=\"empty-state\">No project operations have been recorded yet.</p>"
     ].join("\n");
@@ -1075,7 +1300,7 @@
     }
 
     const links = [
-      urls.home || urls.root ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.home || urls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Home</a>" : "",
+      urls.home || urls.root ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.home || urls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>" : "",
       urls.properties ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.properties) + "\" target=\"_blank\" rel=\"noreferrer\">Open Properties</a>" : "",
       urls.contact ? "<a class=\"site-link\" href=\"" + escapeHtml(urls.contact) + "\" target=\"_blank\" rel=\"noreferrer\">Open Contact</a>" : "",
       site.frontend_edit_available && site.frontend_edit_url ? "<a class=\"site-link\" href=\"" + escapeHtml(site.frontend_edit_url) + "\" target=\"_blank\" rel=\"noreferrer\">Open Frontend Edit</a>" : "",
@@ -1085,14 +1310,11 @@
     return [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
-      "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
-      "    <span class=\"status-pill\">Generate " + escapeHtml(site.generation_status || "unknown") + "</span>",
+        "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(site.generated_site_present ? "Website generated" : "Generated site unavailable") + "</span>",
       "  </div>",
       "  <dl>",
-      "    <div><dt>Proof</dt><dd>" + escapeHtml(site.latest_generate_proof_id || "Unavailable") + "</dd></div>",
-      "    <div><dt>Proof path</dt><dd>" + escapeHtml(site.latest_generate_proof_path || "Unavailable") + "</dd></div>",
       "    <div><dt>Status</dt><dd>" + escapeHtml(site.controlled_generate_status || site.generation_status || "unknown") + "</dd></div>",
-      "    <div><dt>Code</dt><dd>" + escapeHtml(site.controlled_generate_code || "Unavailable") + "</dd></div>",
       "    <div><dt>Pages</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.pages, afterCounts.pages)) + "</dd></div>",
       "    <div><dt>Properties</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.properties, afterCounts.properties)) + "</dd></div>",
       "    <div><dt>Attachments</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.attachments, afterCounts.attachments)) + "</dd></div>",
@@ -1104,6 +1326,15 @@
       links ? "  <div class=\"site-links\">" + links + "</div>" : "",
       site.frontend_edit_available ? "  <p class=\"project-note\">Frontend editing requires a WordPress admin browser session.</p>" : "",
       "  <p class=\"project-note\">" + escapeHtml(site.next_suggested_action || "Review the generated site.") + "</p>",
+      buildTechnicalDetails("Advanced details", [
+        ["Proof", site.latest_generate_proof_id || "Unavailable"],
+        ["Proof path", site.latest_generate_proof_path || "Unavailable"],
+        ["Code", site.controlled_generate_code || "Unavailable"],
+        ["Generated site status", site.generation_status || "unknown"],
+        ["Home URL", urls.home || urls.root || "Unavailable"],
+        ["Properties URL", urls.properties || "Unavailable"],
+        ["Contact URL", urls.contact || "Unavailable"]
+      ]),
       warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       "</article>"
     ].join("\n");
@@ -1151,8 +1382,7 @@
     } else if (generationView.error) {
       generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(generationView.error) + "</p>";
     } else {
-      const cachedProject = projectsCache.find((entry) => entry.slug === selectedSlug);
-      generationStatus.innerHTML = buildGenerationStatusFromProjectCache(cachedProject);
+      setGenerationStatusEmpty("Generate readiness has not been loaded yet.");
     }
 
     if (generationView.loading && !generationView.sitePayload) {
@@ -1171,12 +1401,7 @@
     } else if (generationView.error) {
       setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
     } else {
-      const cachedProject = projectsCache.find((entry) => entry.slug === selectedSlug);
-      if (cachedProject && cachedProject.generation && cachedProject.generation.last_proof_id) {
-        setSiteStatusEmpty("Loading generated site status for " + selectedSlug + "...");
-      } else {
-        setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
-      }
+      setSiteStatusEmpty("Run controlled generate to populate generated site proof.");
     }
 
     updateGenerateActionState();
@@ -1196,27 +1421,42 @@
     const activeOperation = payload.active_operation || null;
     const effectiveSafeFields = Array.isArray(summary.effective_safe_fields) ? summary.effective_safe_fields : [];
     const effectiveWarnings = Array.isArray(summary.effective_safe_field_warnings) ? summary.effective_safe_field_warnings : [];
+    const protectedFieldsText = summary.protected_fields.length ? summary.protected_fields.map(humanizeFieldKey).join(", ") : "None";
+    const lastApplyLabel = summary.latest_apply_method ? humanizeOperationType(summary.latest_apply_method) : "None";
+    const activeTaskLabel = activeOperation ? (humanizeOperationType(activeOperation.operation_type) + " · " + humanizeOperationStatus(activeOperation.status || "unknown")) : "None";
     managedState.innerHTML = [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
       "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
-      "    <span class=\"status-pill\">State v" + escapeHtml(String(summary.version)) + "</span>",
+      "    <span class=\"status-pill\">Managed state</span>",
       "  </div>",
       "  <dl>",
       "    <div><dt>State</dt><dd>Available</dd></div>",
-      "    <div><dt>Updated</dt><dd>" + escapeHtml(summary.last_updated || "Unknown") + "</dd></div>",
+      "    <div><dt>Updated</dt><dd>" + escapeHtml(formatReadableTime(summary.last_updated || "Unknown")) + "</dd></div>",
       "    <div><dt>Pages</dt><dd>" + escapeHtml(String(summary.pages)) + "</dd></div>",
       "    <div><dt>Properties</dt><dd>" + escapeHtml(String(summary.property_count)) + "</dd></div>",
       "    <div><dt>Attachments</dt><dd>" + escapeHtml(String(summary.attachment_count)) + "</dd></div>",
       "    <div><dt>Personalization</dt><dd>" + escapeHtml(summary.personalization_source || "unknown") + "</dd></div>",
       "    <div><dt>User overrides</dt><dd>" + escapeHtml(String(summary.user_overrides_count)) + "</dd></div>",
-      "    <div><dt>Protected fields</dt><dd>" + escapeHtml(summary.protected_fields.length ? summary.protected_fields.join(", ") : "None") + "</dd></div>",
-      "    <div><dt>Last apply</dt><dd>" + escapeHtml(summary.latest_apply_method || "None") + "</dd></div>",
-      "    <div><dt>Active operation</dt><dd>" + escapeHtml(activeOperation ? (activeOperation.operation_type + " / " + activeOperation.status) : "None") + "</dd></div>",
+      "    <div><dt>Protected fields</dt><dd>" + escapeHtml(protectedFieldsText) + "</dd></div>",
+      "    <div><dt>Last meaningful operation</dt><dd>" + escapeHtml(lastApplyLabel) + "</dd></div>",
+      "    <div><dt>Active task</dt><dd>" + escapeHtml(activeTaskLabel) + "</dd></div>",
       "    <div><dt>Effective fields</dt><dd>" + escapeHtml(String(summary.effective_safe_fields_count || 0)) + "</dd></div>",
       "  </dl>",
       effectiveSafeFields.length
-        ? "  <ul class=\"warning-list\">" + effectiveSafeFields.map((field) => "<li><strong>" + escapeHtml(field.field_key) + ":</strong> " + escapeHtml(field.value) + " <em>[" + escapeHtml(field.source + (field.protected ? ", protected" : "") + ", render:" + field.rendered_check) + "]</em></li>").join("") + "</ul>"
+        ? "  <ul class=\"warning-list\">" + effectiveSafeFields.map((field) => {
+          const fieldLabel = humanizeFieldKey(field.field_key);
+          const sourceLabel = humanizeFieldKey(field.source || "unknown");
+          const tags = [
+            sourceLabel,
+            field.protected ? "protected" : null,
+            field.rendered_check ? "render:" + field.rendered_check : null
+          ].filter(Boolean).join(", ");
+          return "<li><strong>" + escapeHtml(fieldLabel) + ":</strong> " + escapeHtml(field.value || "Unavailable") + " <em>[" + escapeHtml(tags) + "]</em></li>";
+        }).join("") + "</ul>"
+        : "",
+      summary.protected_fields.length
+        ? "  <p class=\"project-note\">Factory protects content edited manually and will not replace it without your confirmation.</p>"
         : "",
       rollbackCandidate && rollback && rollback.available && rollback.safe
         ? [
@@ -1233,7 +1473,16 @@
       rollback && !rollback.available
         ? "  <p class=\"project-note\">" + escapeHtml(rollback.message || "No rollback-ready apply is available.") + "</p>"
         : "",
-      "  <p class=\"project-note\">State path: " + escapeHtml(summary.state_path) + "</p>",
+      buildTechnicalDetails("Advanced details", [
+        ["State path", summary.state_path || "Unavailable"],
+        ["State version", String(summary.version)],
+        ["Last apply method", summary.latest_apply_method || "None"],
+        ["Latest rollback proof", summary.latest_rollback_proof_path || "Unavailable"],
+        ["Active operation type", activeOperation && activeOperation.operation_type || "None"],
+        ["Active operation status", activeOperation && activeOperation.status || "None"],
+        ["User overrides", String(summary.user_overrides_count)],
+        ["Effective fields", String(summary.effective_safe_fields_count || 0)]
+      ]),
       effectiveWarnings.length ? "  <ul class=\"warning-list\">" + effectiveWarnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       "</article>"
@@ -1306,9 +1555,9 @@
     const siteCounts = siteSummary.counts_summary && siteSummary.counts_summary.after
       ? siteSummary.counts_summary.after
       : {};
-    const effectiveFields = Array.isArray(effectiveSafeFieldPayload.fields)
-      ? effectiveSafeFieldPayload.fields
-      : [];
+    const effectiveFieldEntries = Array.isArray(effectiveSafeFieldPayload.fields)
+      ? effectiveSafeFieldPayload.fields.map((entry) => [entry.field_key, entry])
+      : Object.entries(effectiveSafeFieldPayload.fields || {});
     const protectedFields = Array.isArray(summary && summary.protected_fields)
       ? summary.protected_fields
       : (Array.isArray(stateSummary.protected_fields) ? stateSummary.protected_fields : []);
@@ -1326,20 +1575,16 @@
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
       "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
-      "    <span class=\"status-pill\">" + escapeHtml(summary.readiness_status || "unknown") + "</span>",
+      "    <span class=\"status-pill\">" + escapeHtml(humanizeReadinessStatus(summary.readiness_status || evaluatorReadiness.status || "unknown")) + "</span>",
       "  </div>",
       "  <dl>",
-      "    <div><dt>Proof pack</dt><dd>" + escapeHtml(summary.proof_id || "Unavailable") + "</dd></div>",
-      "    <div><dt>Generated</dt><dd>" + escapeHtml(summary.generated_at || "Unavailable") + "</dd></div>",
-      "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(evaluatorReadiness.status || summary.readiness_status || "unknown") + "</dd></div>",
-      "    <div><dt>Generated site</dt><dd>" + escapeHtml(generatedReadiness.status || "unknown") + "</dd></div>",
-      "    <div><dt>AI history</dt><dd>" + escapeHtml(aiHistoryReadiness.status || "unknown") + "</dd></div>",
-      "    <div><dt>Secrets</dt><dd>" + escapeHtml(secretsReadiness.status || "unknown") + "</dd></div>",
-      "    <div><dt>JSON path</dt><dd>" + escapeHtml(payload.json_path || "Unavailable") + "</dd></div>",
-      "    <div><dt>Markdown path</dt><dd>" + escapeHtml(payload.markdown_path || "Unavailable") + "</dd></div>",
-      "    <div><dt>Effective mutation</dt><dd>" + escapeHtml(stateSummary.latest_effective_mutation_method || summary.current_effective_mutation || "Unavailable") + "</dd></div>",
-      "    <div><dt>Latest rollback proof</dt><dd>" + escapeHtml(stateSummary.latest_rollback_proof_path || summary.latest_rollback_proof_path || "Unavailable") + "</dd></div>",
-      "    <div><dt>Protected fields</dt><dd>" + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</dd></div>",
+      "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(humanizeReadinessStatus(evaluatorReadiness.status || summary.readiness_status || "unknown")) + "</dd></div>",
+      "    <div><dt>Generated site</dt><dd>" + escapeHtml(humanizeReadinessStatus(generatedReadiness.status || "unknown")) + "</dd></div>",
+      "    <div><dt>AI safe-apply history</dt><dd>" + escapeHtml(humanizeReadinessStatus(aiHistoryReadiness.status || "unknown")) + "</dd></div>",
+      "    <div><dt>Secrets</dt><dd>" + escapeHtml(humanizeReadinessStatus(secretsReadiness.status || "unknown")) + "</dd></div>",
+      "    <div><dt>Effective mutation</dt><dd>" + escapeHtml(humanizeOperationType(stateSummary.latest_effective_mutation_method || summary.current_effective_mutation || "Unavailable")) + "</dd></div>",
+      "    <div><dt>Rollback proof</dt><dd>" + escapeHtml((stateSummary.latest_rollback_proof_path || summary.latest_rollback_proof_path) ? "Available" : "Unavailable") + "</dd></div>",
+      "    <div><dt>Protected fields</dt><dd>" + escapeHtml(protectedFields.length ? protectedFields.map(humanizeFieldKey).join(", ") : "None") + "</dd></div>",
       "    <div><dt>Pages</dt><dd>" + escapeHtml(String(stateSummary.pages || (summary.counts && summary.counts.pages) || siteCounts.pages || 0)) + "</dd></div>",
       "    <div><dt>Properties</dt><dd>" + escapeHtml(String(stateSummary.property_count || (summary.counts && summary.counts.properties) || siteCounts.properties || 0)) + "</dd></div>",
       "    <div><dt>Attachments</dt><dd>" + escapeHtml(String(stateSummary.attachment_count || (summary.counts && summary.counts.attachments) || siteCounts.attachments || 0)) + "</dd></div>",
@@ -1347,8 +1592,16 @@
       "    <div><dt>Properties URL</dt><dd>" + escapeHtml(String((summary.url_status && summary.url_status.properties) || (siteSummary.url_status && siteSummary.url_status.properties) || "Unavailable")) + "</dd></div>",
       "    <div><dt>Contact URL</dt><dd>" + escapeHtml(String((summary.url_status && summary.url_status.contact) || (siteSummary.url_status && siteSummary.url_status.contact) || "Unavailable")) + "</dd></div>",
       "  </dl>",
-      effectiveFields.length
-        ? "  <ul class=\"warning-list\">" + effectiveFields.map((field) => "<li><strong>" + escapeHtml(field.field_key) + ":</strong> " + escapeHtml(field.value) + " <em>[" + escapeHtml(field.source + (field.protected ? ", protected" : "") + ", render:" + field.rendered_check) + "]</em></li>").join("") + "</ul>"
+      effectiveFieldEntries.length
+        ? "  <ul class=\"warning-list\">" + effectiveFieldEntries.map(([fieldKey, field]) => {
+          const entry = field && typeof field === "object" ? field : { value: field };
+          const tags = [
+            humanizeFieldKey(entry.source || "unknown"),
+            entry.protected ? "protected" : null,
+            entry.rendered_check ? "render:" + entry.rendered_check : null
+          ].filter(Boolean).join(", ");
+          return "<li><strong>" + escapeHtml(humanizeFieldKey(fieldKey)) + ":</strong> " + escapeHtml(entry.value || "Unavailable") + " <em>[" + escapeHtml(tags) + "]</em></li>";
+        }).join("") + "</ul>"
         : "",
       evaluatorReadiness.reason
         ? "  <p class=\"project-note\">" + escapeHtml(evaluatorReadiness.reason) + "</p>"
@@ -1363,6 +1616,16 @@
       "    <li>No raw key persistence</li>",
       "    <li>secrets/ai.env absent</li>",
       "  </ul>",
+      buildTechnicalDetails("Advanced details", [
+        ["Proof pack", summary.proof_id || "Unavailable"],
+        ["Generated", summary.generated_at || "Unavailable"],
+        ["Readiness status", summary.readiness_status || "unknown"],
+        ["JSON path", payload.json_path || "Unavailable"],
+        ["Markdown path", payload.markdown_path || "Unavailable"],
+        ["Current effective mutation", summary.current_effective_mutation || "Unavailable"],
+        ["Latest rollback proof", summary.latest_rollback_proof_path || "Unavailable"],
+        ["Missing proof categories", missingProofCategories.length ? missingProofCategories.join(", ") : "None"]
+      ]),
       warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
       "</article>"
     ].join("\n");
@@ -1393,36 +1656,34 @@
     const safeCanApply = !conflicts.length && includedFields.length > 0;
     const changeList = Array.isArray(plan.diff && plan.diff.field_changes)
       ? plan.diff.field_changes.map((entry) => {
-        return "<li><strong>" + escapeHtml(entry.field_key) + ":</strong> "
-          + escapeHtml(entry.change_type + " -> effective: " + (entry.effective_value || "(empty)"))
-          + (entry.protected ? " <em>(protected)</em>" : "")
-          + (entry.included_in_apply ? " <em>(included)</em>" : "")
-          + (entry.excluded_reason ? " <em>(" + escapeHtml(entry.excluded_reason) + ")</em>" : "")
-          + "</li>";
+        const fieldLabel = humanizeFieldKey(entry.field_key);
+        const detailBits = [
+          "Current: " + formatTechnicalValue(entry.current_value),
+          "Proposed: " + formatTechnicalValue(entry.proposed_value),
+          entry.change_type ? "Change: " + humanizeFieldKey(entry.change_type) : "",
+          entry.protected ? "Protected field" : "",
+          entry.included_in_apply ? "Included" : "",
+          entry.excluded_reason ? "Excluded: " + entry.excluded_reason : ""
+        ].filter(Boolean);
+        return "<li><strong>" + escapeHtml(fieldLabel) + ":</strong> " + escapeHtml(detailBits.join(" · ")) + "</li>";
       }).join("")
       : "";
     const conflictList = conflicts.map((conflict) => {
-      return "<li><strong>" + escapeHtml(conflict.field_key) + ":</strong> " + escapeHtml(conflict.message || "Requires confirmation") + "</li>";
+      return "<li><strong>" + escapeHtml(humanizeFieldKey(conflict.field_key)) + ":</strong> " + escapeHtml(conflict.message || "Requires confirmation") + "</li>";
     }).join("");
 
     statePlanResult.hidden = false;
     statePlanResult.className = conflicts.length ? "result-box result-box-error" : "result-box result-box-success";
     statePlanResult.innerHTML = [
-      "<strong>AI site change plan created.</strong>",
-      "<p><span>Plan ID:</span> " + escapeHtml(planId || "unknown") + "</p>",
-      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
-      "<p><span>AI source:</span> " + escapeHtml(result.ai_source || (plan.source && (plan.source.ai_source || plan.source.prompt_personalization_source)) || "local_interpreter") + "</p>",
-      "<p><span>Provider called:</span> " + escapeHtml(String(result.provider_called === true || plan.provider_called === true)) + "</p>",
-      result.estimate_id ? "<p><span>Estimate ID:</span> " + escapeHtml(result.estimate_id) + "</p>" : "",
-      result.ai_candidate_proof_path ? "<p><span>AI candidate proof:</span> " + escapeHtml(result.ai_candidate_proof_path) + "</p>" : "",
+      "<strong>Change preview ready.</strong>",
       "<p><span>Field changes:</span> " + escapeHtml(String(plan.diff && plan.diff.field_changes ? plan.diff.field_changes.length : 0)) + "</p>",
       "<p><span>Preserved protected fields:</span> " + escapeHtml(preservedProtectedFields.length ? preservedProtectedFields.join(", ") : "None") + "</p>",
-      "<p><span>Excluded fields:</span> " + escapeHtml(excludedFields.length ? excludedFields.join(", ") : "None") + "</p>",
-      "<p><span>Included fields:</span> " + escapeHtml(includedFields.length ? includedFields.join(", ") : "None") + "</p>",
-      "<p><span>Unsupported fields:</span> " + escapeHtml(unsupportedFields.length ? unsupportedFields.join(", ") : "None") + "</p>",
-      "<p><span>Requires confirmation fields:</span> " + escapeHtml(requiresConfirmationFields.length ? requiresConfirmationFields.join(", ") : "None") + "</p>",
+      "<p><span>Excluded fields:</span> " + escapeHtml(excludedFields.length ? excludedFields.map(humanizeFieldKey).join(", ") : "None") + "</p>",
+      "<p><span>Included fields:</span> " + escapeHtml(includedFields.length ? includedFields.map(humanizeFieldKey).join(", ") : "None") + "</p>",
+      "<p><span>Unsupported fields:</span> " + escapeHtml(unsupportedFields.length ? unsupportedFields.map(humanizeFieldKey).join(", ") : "None") + "</p>",
+      "<p><span>Requires confirmation fields:</span> " + escapeHtml(requiresConfirmationFields.length ? requiresConfirmationFields.map(humanizeFieldKey).join(", ") : "None") + "</p>",
       "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>",
-      "<p><span>Protected fields:</span> " + escapeHtml(protectedFields.length ? protectedFields.join(", ") : "None") + "</p>",
+      "<p><span>Protected fields:</span> " + escapeHtml(protectedFields.length ? protectedFields.map(humanizeFieldKey).join(", ") : "None") + "</p>",
       "<p><span>Can apply without confirmation:</span> " + escapeHtml(String(plan.can_apply_without_confirmation === true)) + "</p>",
       safeCanApply
         ? [
@@ -1431,17 +1692,28 @@
           "  <span>I understand this will apply supported safe fields to this WordPress project.</span>",
           "</label>",
           confirmationRequired && confirmationRequired.required
-            ? "<label class=\"checkbox-row\"><input type=\"checkbox\" id=\"state-protected-overwrite-confirm-checkbox\"><span>I explicitly confirm protected field overwrite for: " + escapeHtml((confirmationRequired.fields || []).join(", ")) + "</span></label>"
+            ? "<label class=\"checkbox-row\"><input type=\"checkbox\" id=\"state-protected-overwrite-confirm-checkbox\"><span>Allow Factory to replace manually edited content included in this change: " + escapeHtml((confirmationRequired.fields || []).map(humanizeFieldKey).join(", ")) + "</span></label>"
             : "",
           "<p><button type=\"button\" class=\"button\" id=\"state-apply-button\" data-plan-id=\"" + escapeHtml(planId) + "\" disabled>Apply Safe Changes</button></p>"
         ].join("")
         : (confirmationRequired && confirmationRequired.required
-          ? "<p class=\"project-note\">Overwrite confirmation required for: " + escapeHtml((confirmationRequired.fields || []).join(", ")) + "</p>"
+          ? "<p class=\"project-note\">Overwrite confirmation required for: " + escapeHtml((confirmationRequired.fields || []).map(humanizeFieldKey).join(", ")) + "</p>"
           : (conflicts.length
           ? "<p class=\"project-note\">Apply blocked: confirmation required.</p>"
           : "<p class=\"project-note\">No applyable field changes remain after preserving protected fields.</p>")),
       changeList ? "<p><span>Field changes:</span></p><ul>" + changeList + "</ul>" : "",
-      conflictList ? "<p><span>Conflicts:</span></p><ul>" + conflictList + "</ul>" : ""
+      conflictList ? "<p><span>Conflicts:</span></p><ul>" + conflictList + "</ul>" : "",
+      buildTechnicalDetails("Advanced details", [
+        ["Plan ID", planId || "unknown"],
+        ["Proof file", result.proof_path || "Unavailable"],
+        ["AI source", result.ai_source || (plan.source && (plan.source.ai_source || plan.source.prompt_personalization_source)) || "local_interpreter"],
+        ["Provider called", String(result.provider_called === true || plan.provider_called === true)],
+        ["Estimate ID", result.estimate_id || "Unavailable"],
+        ["AI candidate proof", result.ai_candidate_proof_path || "Unavailable"],
+        ["Planned fields", includedFields.length ? includedFields.join(", ") : "None"],
+        ["Unsupported fields", unsupportedFields.length ? unsupportedFields.join(", ") : "None"],
+        ["Requires confirmation fields", requiresConfirmationFields.length ? requiresConfirmationFields.join(", ") : "None"]
+      ])
     ].join("");
 
     const applyButton = document.getElementById("state-apply-button");
@@ -1513,25 +1785,30 @@
     statePlanResult.hidden = false;
     statePlanResult.className = result.status === "ok" ? "result-box result-box-success" : "result-box result-box-error";
     statePlanResult.innerHTML = [
-      "<strong>Managed state apply " + escapeHtml(result.status || "unknown") + ".</strong>",
-      "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
-      "<p><span>Apply method:</span> " + escapeHtml(result.apply_method || apply.apply_method || "unknown") + "</p>",
-      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
-      "<p><span>State path:</span> " + escapeHtml(result.state_path || "Unavailable") + "</p>",
-      "<p><span>Applied fields:</span> " + escapeHtml((apply.applied_fields || []).length ? apply.applied_fields.join(", ") : "None") + "</p>",
-      "<p><span>Ignored fields:</span> " + escapeHtml((apply.ignored_fields || []).length ? apply.ignored_fields.join(", ") : "None") + "</p>",
-      "<p><span>Field-only manifest:</span> " + escapeHtml((result.field_only_apply && result.field_only_apply.agent_manifest) || (apply.field_only_apply && apply.field_only_apply.agent_manifest) || "Unavailable") + "</p>",
+      "<strong>Safe changes " + escapeHtml(result.status === "ok" ? "applied" : "failed") + ".</strong>",
+      "<p><span>Applied fields:</span> " + escapeHtml((apply.applied_fields || []).length ? apply.applied_fields.map(humanizeFieldKey).join(", ") : "None") + "</p>",
+      "<p><span>Ignored fields:</span> " + escapeHtml((apply.ignored_fields || []).length ? apply.ignored_fields.map(humanizeFieldKey).join(", ") : "None") + "</p>",
       confirmation && confirmation.required
         ? "<p><span>Overwrite confirmation:</span> " + escapeHtml(confirmation.confirmed ? "confirmed" : "required") + "</p>"
         : "",
       confirmation && confirmation.required
-        ? "<p><span>Confirmation fields:</span> " + escapeHtml(((confirmation.confirmed_fields || confirmation.required_fields || []).length ? (confirmation.confirmed_fields || confirmation.required_fields).join(", ") : "None")) + "</p>"
+        ? "<p><span>Confirmation fields:</span> " + escapeHtml(((confirmation.confirmed_fields || confirmation.required_fields || []).length ? (confirmation.confirmed_fields || confirmation.required_fields).map(humanizeFieldKey).join(", ") : "None")) + "</p>"
         : "",
       apply.confirmation && Array.isArray(apply.confirmation.overwritten_protected_fields)
-        ? "<p><span>Overwritten protected fields:</span> " + escapeHtml(apply.confirmation.overwritten_protected_fields.length ? apply.confirmation.overwritten_protected_fields.join(", ") : "None") + "</p>"
+        ? "<p><span>Overwritten protected fields:</span> " + escapeHtml(apply.confirmation.overwritten_protected_fields.length ? apply.confirmation.overwritten_protected_fields.map(humanizeFieldKey).join(", ") : "None") + "</p>"
         : "",
       conflicts.length ? "<p><span>Conflicts:</span> " + escapeHtml(String(conflicts.length)) + "</p>" : "",
-      conflicts.length ? "<ul>" + conflicts.map((conflict) => "<li>" + escapeHtml(conflict.message || conflict.field_key || "Conflict") + "</li>").join("") + "</ul>" : ""
+      conflicts.length ? "<ul>" + conflicts.map((conflict) => "<li>" + escapeHtml(conflict.message || conflict.field_key || "Conflict") + "</li>").join("") + "</ul>" : "",
+      buildTechnicalDetails("Advanced details", [
+        ["Code", result.code || "unknown"],
+        ["Apply method", result.apply_method || apply.apply_method || "unknown"],
+        ["Proof file", result.proof_path || "Unavailable"],
+        ["State path", result.state_path || "Unavailable"],
+        ["Field-only manifest", (result.field_only_apply && result.field_only_apply.agent_manifest) || (apply.field_only_apply && apply.field_only_apply.agent_manifest) || "Unavailable"],
+        ["Operation ID", result.apply && result.apply.operation_id || "Unavailable"],
+        ["Confirmation required", confirmation && confirmation.required ? "true" : "false"],
+        ["Confirmation confirmed", confirmation && confirmation.confirmed ? "true" : "false"]
+      ])
     ].join("");
   }
 
@@ -1541,16 +1818,20 @@
     stateRollbackResult.hidden = false;
     stateRollbackResult.className = result.status === "ok" ? "result-box result-box-success" : "result-box result-box-error";
     stateRollbackResult.innerHTML = [
-      "<strong>Managed state rollback " + escapeHtml(result.status || "unknown") + ".</strong>",
-      "<p><span>Code:</span> " + escapeHtml(result.code || "unknown") + "</p>",
-      "<p><span>Proof file:</span> " + escapeHtml(result.proof_path || "Unavailable") + "</p>",
-      "<p><span>State path:</span> " + escapeHtml(result.state_path || "Unavailable") + "</p>",
+      "<strong>Content changes " + escapeHtml(result.status === "ok" ? "undone" : "not undone") + ".</strong>",
       result.status === "ok"
-        ? "<p><span>Rollback fields:</span> " + escapeHtml(Object.keys(rollback.rollback_fields || {}).join(", ")) + "</p>"
+        ? "<p><span>Rollback fields:</span> " + escapeHtml(Object.keys(rollback.rollback_fields || {}).map(humanizeFieldKey).join(", ")) + "</p>"
         : "",
       protectedConflicts.length
         ? "<ul>" + protectedConflicts.map((conflict) => "<li>" + escapeHtml(conflict.message || conflict.field_key || "Conflict") + "</li>").join("") + "</ul>"
-        : ""
+        : "",
+      buildTechnicalDetails("Advanced details", [
+        ["Code", result.code || "unknown"],
+        ["Proof file", result.proof_path || "Unavailable"],
+        ["State path", result.state_path || "Unavailable"],
+        ["Operation ID", result.rollback && result.rollback.operation_id || "Unavailable"],
+        ["Rollback fields", Object.keys(rollback.rollback_fields || {}).join(", ") || "None"]
+      ])
     ].join("");
   }
 

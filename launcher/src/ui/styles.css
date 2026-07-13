@@ -176,6 +176,9 @@ body {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 12px 18px;
   border: 1px solid var(--accent-strong);
   border-radius: 999px;
@@ -184,6 +187,7 @@ body {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .button-disabled,
@@ -192,6 +196,12 @@ body {
   background: #ece7dd;
   color: #7b786f;
   cursor: not-allowed;
+}
+
+.button:hover,
+.button:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 
 .project-list {
@@ -205,6 +215,11 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 243, 234, 0.95));
+}
+
+.project-card--selected {
+  border-color: rgba(31, 111, 95, 0.42);
+  box-shadow: 0 22px 40px rgba(31, 111, 95, 0.12);
 }
 
 .project-card__header {
@@ -257,6 +272,10 @@ body {
   line-height: 1.5;
 }
 
+.project-note--compact {
+  margin-top: 4px;
+}
+
 .site-links {
   display: flex;
   flex-wrap: wrap;
@@ -288,6 +307,41 @@ body {
   margin: 14px 0 0;
   padding-left: 18px;
   color: var(--muted);
+}
+
+.technical-details {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.technical-details summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
+.technical-details dl {
+  margin: 12px 0 0;
+  display: grid;
+  gap: 10px;
+}
+
+.technical-details dl div {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 12px;
+}
+
+.technical-details dt {
+  color: var(--muted);
+}
+
+.technical-details dd {
+  margin: 0;
+  word-break: break-word;
 }
 
 .setup-step-list {
