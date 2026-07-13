@@ -263,6 +263,121 @@ test("requires a new idempotency key after interrupted operation", async () => {
   assert.strictEqual(interrupted.status, "interrupted");
 });
 
+test("can resume an interrupted operation with the same idempotency key when explicitly allowed", async () => {
+  const projectsRoot = createTempProjectsRoot();
+  const slug = "resume-project";
+  createTempProject(projectsRoot, slug);
+  const operationId = "op-resume";
+  const idempotencyKey = "resume-key-000001";
+  const requestFingerprint = computeRequestFingerprint({
+    project_slug: slug,
+    operation_type: "agent_auth_rotate",
+    input: { action: "resume" }
+  });
+  const state = getProjectState({ slug, projectsRoot });
+
+  createRequestedOperation({
+    slug,
+    projectsRoot,
+    operationId,
+    operationType: "agent_auth_rotate",
+    idempotencyKeyHash: hashValue(idempotencyKey),
+    requestFingerprint
+  });
+  updateOperation({
+    slug,
+    projectsRoot,
+    operationId,
+    patch: {
+      status: "running",
+      stage: "executing",
+      started_at: nowIso()
+    }
+  });
+  fs.mkdirSync(getLockDirectory(state.runtimePath));
+  writeLockMetadata(state.runtimePath, {
+    schema: "factory_project_operation_lock",
+    version: 1,
+    operation_id: operationId,
+    operation_type: "agent_auth_rotate",
+    project_slug: slug,
+    pid: 99999999,
+    process_instance_id: "dead-process",
+    acquired_at: "2000-01-01T00:00:00.000Z",
+    heartbeat_at: "2000-01-01T00:00:00.000Z"
+  });
+
+  let executions = 0;
+  const resumed = await fakeOperation({
+    projectsRoot,
+    slug,
+    operationType: "agent_auth_rotate",
+    idempotencyKey,
+    fingerprintInput: { action: "resume" },
+    onExecute: ({ operationId: resumedOperationId }) => {
+      executions += 1;
+      assert.strictEqual(resumedOperationId, operationId);
+    },
+    override: {
+      allowInterruptedResume: true
+    }
+  });
+
+  assert.strictEqual(resumed.idempotentReplay, false);
+  assert.strictEqual(resumed.operation.operation_id, operationId);
+  assert.strictEqual(resumed.operation.status, "succeeded");
+  assert.strictEqual(executions, 1);
+
+  const operations = listOperations({ slug, projectsRoot, includeRaw: true })
+    .filter((operation) => operation.operation_id === operationId);
+  assert.strictEqual(operations.length, 1);
+  assert.strictEqual(operations[0].status, "succeeded");
+});
+
+test("can resume a failed operation with the same idempotency key when explicitly allowed", async () => {
+  const projectsRoot = createTempProjectsRoot();
+  const slug = "resume-failed-project";
+  createTempProject(projectsRoot, slug);
+  const idempotencyKey = "resume-failed-key-001";
+  const fingerprintInput = { action: "resume-failed" };
+
+  await assert.rejects(
+    fakeOperation({
+      projectsRoot,
+      slug,
+      operationType: "agent_auth_rotate",
+      idempotencyKey,
+      fingerprintInput,
+      fail: true
+    }),
+    (error) => error.code === "planned_failure"
+  );
+
+  let executions = 0;
+  const resumed = await fakeOperation({
+    projectsRoot,
+    slug,
+    operationType: "agent_auth_rotate",
+    idempotencyKey,
+    fingerprintInput,
+    onExecute: ({ operationId }) => {
+      executions += 1;
+      assert.ok(String(operationId || "").startsWith("op-"));
+    },
+    override: {
+      resumeStatuses: ["failed"]
+    }
+  });
+
+  assert.strictEqual(resumed.idempotentReplay, false);
+  assert.strictEqual(resumed.operation.status, "succeeded");
+  assert.strictEqual(executions, 1);
+
+  const operations = listOperations({ slug, projectsRoot, includeRaw: true });
+  assert.strictEqual(operations.filter((operation) => operation.operation_type === "agent_auth_rotate").length, 1);
+  assert.strictEqual(operations[0].status, "succeeded");
+});
+
 test("recovers a stale lock from a dead owner and permits a new key", async () => {
   const projectsRoot = createTempProjectsRoot();
   const slug = "stale-project";

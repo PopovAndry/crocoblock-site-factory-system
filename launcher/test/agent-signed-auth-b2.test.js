@@ -15,6 +15,7 @@ const {
   agentAuthSecretPath,
   ensureAgentSigningCredential,
   hardenCredentialPath,
+  markAgentSigningCredentialRevoked,
   parseWhoamiCsvSid,
   readAgentSigningCredential,
   redactAgentSigningCredential,
@@ -243,6 +244,46 @@ test("credential redaction and project serialization exclude the signing secret"
   assert.equal(redactAgentSigningCredential(created.credential).signing_secret, "[redacted]");
 });
 
+test("explicit local revoke is observable and repair creates a fresh credential", () => {
+  const root = projectsRoot();
+  const project = tempProject(root, "local-revoke-project");
+  const created = ensureAgentSigningCredential(project);
+  const revoked = markAgentSigningCredentialRevoked(project, {
+    keyId: created.credential.key_id,
+    revokedAt: "2026-07-13T01:02:03.000Z"
+  });
+
+  assert.equal(revoked.credential.status, "revoked");
+  assert.equal(readAgentSigningCredential(project, { allowInactive: true }).status, "revoked");
+  assert.throws(
+    () => requireAgentSigningCredential(project),
+    (error) => error.code === "agent_signed_credential_revoked"
+  );
+
+  const repaired = ensureAgentSigningCredential(project, { replaceRevoked: true });
+  assert.equal(repaired.created, true);
+  assert.notEqual(repaired.credential.key_id, created.credential.key_id);
+  assert.equal(repaired.credential.status, "active");
+});
+
+test("install repair can upgrade local capability allowlist without replacing key or secret", () => {
+  const root = projectsRoot();
+  const project = tempProject(root, "local-capability-upgrade-project");
+  const limited = ensureAgentSigningCredential(project, {
+    capabilities: ["health.read", "capabilities.read"]
+  });
+  const upgraded = ensureAgentSigningCredential(project, {
+    capabilities: ["health.read", "capabilities.read", "auth.rotate", "auth.revoke"],
+    upgradeCapabilities: true
+  });
+
+  assert.equal(upgraded.created, false);
+  assert.equal(upgraded.upgraded, true);
+  assert.equal(upgraded.credential.key_id, limited.credential.key_id);
+  assert.equal(upgraded.credential.signing_secret, limited.credential.signing_secret);
+  assert.deepEqual(upgraded.credential.capabilities, ["health.read", "capabilities.read", "auth.rotate", "auth.revoke"]);
+});
+
 test("malformed credential record fails safely and is not silently regenerated", () => {
   const root = projectsRoot();
   const project = tempProject(root, "malformed-project");
@@ -319,10 +360,19 @@ test("PHP Agent bootstrap store is idempotent and conflict-safe without returnin
   assert.equal(parsed.again_code, "agent_auth_bootstrap_already_configured");
   assert.equal(parsed.different_secret_code, "agent_auth_bootstrap_conflict");
   assert.equal(parsed.different_active_key_code, "agent_auth_bootstrap_conflict");
+  assert.equal(parsed.capabilities_updated_code, "agent_auth_bootstrap_capabilities_updated");
   assert.equal(parsed.bound_migration_code, "agent_auth_bootstrap_project_bound");
   assert.equal(parsed.bound_again_code, "agent_auth_bootstrap_already_configured");
   assert.equal(parsed.replace_bound_code, "agent_auth_bootstrap_conflict");
+  assert.equal(parsed.rotation_registered_code, "agent_auth_rotation_registered");
+  assert.equal(parsed.rotation_again_code, "agent_auth_rotation_already_registered");
+  assert.equal(parsed.rotation_expand_code, "agent_auth_rotation_capability_expansion_denied");
+  assert.equal(parsed.rotation_wrong_project_code, "agent_auth_rotation_project_mismatch");
+  assert.equal(parsed.rotation_revoke_code, "agent_auth_revoke_completed");
+  assert.equal(parsed.rotation_revoke_again_code, "agent_auth_revoke_already_revoked");
+  assert.deepEqual(parsed.rotation_active_key_ids, ["rotation-new"]);
   assert.equal(parsed.created_contains_secret, false);
   assert.equal(parsed.again_contains_secret, false);
   assert.equal(parsed.migration_contains_secret, false);
+  assert.equal(parsed.rotation_contains_secret, false);
 });

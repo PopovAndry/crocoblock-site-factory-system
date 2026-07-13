@@ -61,6 +61,26 @@ function factory_register_agent_rest_routes(): void {
 
 	register_rest_route(
 		'factory/v1',
+		'/agent/auth/rotate',
+		[
+			'methods'             => 'POST',
+			'callback'            => 'factory_rest_agent_auth_rotate',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
+		]
+	);
+
+	register_rest_route(
+		'factory/v1',
+		'/agent/auth/revoke',
+		[
+			'methods'             => 'POST',
+			'callback'            => 'factory_rest_agent_auth_revoke',
+			'permission_callback' => 'factory_rest_require_signed_launcher',
+		]
+	);
+
+	register_rest_route(
+		'factory/v1',
 		'/agent/auth/bootstrap',
 		[
 			'methods'             => 'POST',
@@ -68,6 +88,82 @@ function factory_register_agent_rest_routes(): void {
 			'permission_callback' => 'factory_rest_require_manage_options',
 		]
 	);
+}
+
+function factory_rest_agent_signed_auth_context( WP_REST_Request $request ): array {
+	$context = $request->get_param( '_factory_signed_auth_context' );
+	return is_array( $context ) ? $context : [];
+}
+
+function factory_rest_agent_auth_rotate( WP_REST_Request $request ): WP_REST_Response {
+	$credential = $request->get_param( 'credential' );
+	if ( ! is_array( $credential ) ) {
+		return new WP_REST_Response(
+			[
+				'status' => 'error',
+				'code'   => 'agent_auth_rotation_invalid',
+			],
+			400
+		);
+	}
+
+	$payload = [
+		'schema'           => 'factory_agent_signing_credential',
+		'version'          => 1,
+		'contract_version' => sanitize_text_field( (string) ( $credential['contract_version'] ?? '' ) ),
+		'key_id'           => sanitize_text_field( (string) ( $credential['key_id'] ?? '' ) ),
+		'signing_secret'   => is_string( $credential['signing_secret'] ?? null ) ? (string) $credential['signing_secret'] : '',
+		'status'           => 'active',
+		'created_at'       => sanitize_text_field( (string) ( $credential['created_at'] ?? '' ) ),
+		'revoked_at'       => null,
+		'capabilities'     => is_array( $credential['capabilities'] ?? null ) ? array_values( $credential['capabilities'] ) : [],
+		'project_slug'     => sanitize_key( (string) ( $credential['project_slug'] ?? '' ) ),
+	];
+
+	$result = factory_agent_signed_auth_register_rotation_credential(
+		$payload,
+		factory_rest_agent_signed_auth_context( $request )
+	);
+	if ( is_wp_error( $result ) ) {
+		return new WP_REST_Response(
+			[
+				'status' => 'error',
+				'code'   => $result->get_error_code(),
+			],
+			(int) ( $result->get_error_data()['status'] ?? 400 )
+		);
+	}
+
+	return new WP_REST_Response( $result );
+}
+
+function factory_rest_agent_auth_revoke( WP_REST_Request $request ): WP_REST_Response {
+	if ( true !== $request->get_param( 'confirm_revoke' ) ) {
+		return new WP_REST_Response(
+			[
+				'status' => 'error',
+				'code'   => 'agent_auth_revoke_confirmation_required',
+			],
+			400
+		);
+	}
+
+	$key_id = sanitize_text_field( (string) $request->get_param( 'key_id' ) );
+	$result = factory_agent_signed_auth_revoke_key(
+		$key_id,
+		factory_rest_agent_signed_auth_context( $request )
+	);
+	if ( is_wp_error( $result ) ) {
+		return new WP_REST_Response(
+			[
+				'status' => 'error',
+				'code'   => $result->get_error_code(),
+			],
+			(int) ( $result->get_error_data()['status'] ?? 400 )
+		);
+	}
+
+	return new WP_REST_Response( $result );
 }
 
 function factory_rest_agent_auth_bootstrap( WP_REST_Request $request ): WP_REST_Response {
@@ -145,6 +241,8 @@ function factory_rest_agent_capabilities(): WP_REST_Response {
 				'controlled_generate' => true,
 				'safe_fields_apply'  => true,
 				'frontend_safe_edit' => true,
+				'agent_auth_rotate'  => true,
+				'agent_auth_revoke'  => true,
 				'proof_manifest'     => true,
 				'rollback_alpha'     => false,
 			],

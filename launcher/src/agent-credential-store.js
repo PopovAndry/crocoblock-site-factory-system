@@ -16,6 +16,7 @@ const {
 } = require("./project-store");
 
 const AGENT_AUTH_SECRET_RELATIVE_PATH = path.join("secrets", "agent-auth.json");
+const AGENT_AUTH_ROTATION_RELATIVE_PATH = path.join("secrets", "agent-auth-rotation.json");
 const WINDOWS_SYSTEM_SID = "S-1-5-18";
 const WINDOWS_ADMINISTRATORS_SID = "S-1-5-32-544";
 const WINDOWS_USERS_SID = "S-1-5-32-545";
@@ -219,7 +220,8 @@ function atomicWriteJson(filePath, value, options) {
   hardenCredentialPath(filePath, options);
 }
 
-function validateAgentSigningCredential(record, expectedSlug) {
+function validateAgentSigningCredential(record, expectedSlug, options) {
+  const safeOptions = options || {};
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     const error = new Error("Agent signing credential is malformed.");
     error.code = "agent_signed_credential_malformed";
@@ -267,7 +269,7 @@ function validateAgentSigningCredential(record, expectedSlug) {
     throw error;
   }
 
-  if (record.status !== "active") {
+  if (record.status !== "active" && safeOptions.allowInactive !== true) {
     const error = new Error("Agent signing credential is not active.");
     error.code = record.status === "revoked" ? "agent_signed_credential_revoked" : "agent_signed_credential_disabled";
     throw error;
@@ -297,7 +299,9 @@ function readAgentSigningCredential(projectState, options) {
     throw wrapped;
   }
 
-  const credential = validateAgentSigningCredential(parsed, projectState.project.slug);
+  const credential = validateAgentSigningCredential(parsed, projectState.project.slug, {
+    allowInactive: options && options.allowInactive === true
+  });
   hardenAgentSecretContainer(filePath, options && options.acl);
   hardenCredentialPath(filePath, options && options.acl);
   return credential;
@@ -316,11 +320,37 @@ function requireAgentSigningCredential(projectState) {
 function ensureAgentSigningCredential(projectState, options) {
   const safeOptions = options || {};
   const aclOptions = safeOptions.acl || null;
-  const existing = readAgentSigningCredential(projectState, { acl: aclOptions });
+  let existing = null;
+  try {
+    existing = readAgentSigningCredential(projectState, { acl: aclOptions });
+  } catch (error) {
+    if (!(safeOptions.replaceRevoked === true && error && error.code === "agent_signed_credential_revoked")) {
+      throw error;
+    }
+  }
   if (existing) {
+    const desiredCapabilities = Array.isArray(safeOptions.capabilities) ? safeOptions.capabilities.slice() : CAPABILITIES;
+    const currentCapabilities = Array.isArray(existing.capabilities) ? existing.capabilities.slice() : [];
+    const sameCapabilities = desiredCapabilities.length === currentCapabilities.length
+      && desiredCapabilities.every((capability, index) => capability === currentCapabilities[index]);
+    if (safeOptions.upgradeCapabilities === true && !sameCapabilities) {
+      const upgraded = Object.assign({}, existing, {
+        capabilities: desiredCapabilities
+      });
+      const filePath = agentAuthSecretPath(projectState);
+      atomicWriteJson(filePath, upgraded, aclOptions);
+      return {
+        credential: upgraded,
+        created: false,
+        upgraded: true,
+        path: filePath,
+        sanitized: redactAgentSigningCredential(upgraded)
+      };
+    }
     return {
       credential: existing,
       created: false,
+      upgraded: false,
       path: agentAuthSecretPath(projectState),
       sanitized: redactAgentSigningCredential(existing)
     };
@@ -338,9 +368,77 @@ function ensureAgentSigningCredential(projectState, options) {
   return {
     credential,
     created: true,
+    upgraded: false,
     path: filePath,
     sanitized: redactAgentSigningCredential(credential)
   };
+}
+
+function writeAgentSigningCredential(projectState, credential, options) {
+  const filePath = agentAuthSecretPath(projectState);
+  const validated = validateAgentSigningCredential(credential, projectState.project.slug, {
+    allowInactive: options && options.allowInactive === true
+  });
+  atomicWriteJson(filePath, validated, options && options.acl);
+  return {
+    credential: validated,
+    path: filePath,
+    sanitized: redactAgentSigningCredential(validated)
+  };
+}
+
+function markAgentSigningCredentialRevoked(projectState, options) {
+  const filePath = agentAuthSecretPath(projectState);
+  const credential = readAgentSigningCredential(projectState, {
+    allowInactive: true,
+    acl: options && options.acl
+  });
+  if (!credential) {
+    const error = new Error("Agent signed authentication credential is missing.");
+    error.code = "agent_signed_credential_missing";
+    throw error;
+  }
+  const expectedKeyId = options && options.keyId ? String(options.keyId) : credential.key_id;
+  if (String(credential.key_id || "") !== expectedKeyId) {
+    const error = new Error("Agent signing credential key mismatch.");
+    error.code = "agent_signed_credential_key_mismatch";
+    throw error;
+  }
+  const revoked = Object.assign({}, credential, {
+    status: "revoked",
+    revoked_at: options && options.revokedAt || timestampIso()
+  });
+  atomicWriteJson(filePath, revoked, options && options.acl);
+  return {
+    credential: revoked,
+    path: filePath,
+    sanitized: redactAgentSigningCredential(revoked)
+  };
+}
+
+function agentAuthRotationStatePath(projectState) {
+  const projectsRoot = projectState.projectsRoot
+    ? resolveProjectsRoot(projectState.projectsRoot)
+    : path.dirname(path.resolve(projectState.runtimePath));
+  const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  return path.join(safeRuntimePath, AGENT_AUTH_ROTATION_RELATIVE_PATH);
+}
+
+function readAgentAuthRotationState(projectState, options) {
+  const filePath = agentAuthRotationStatePath(projectState);
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  hardenAgentSecretContainer(filePath, options && options.acl);
+  hardenCredentialPath(filePath, options && options.acl);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+}
+
+function writeAgentAuthRotationState(projectState, state, options) {
+  const filePath = agentAuthRotationStatePath(projectState);
+  atomicWriteJson(filePath, state, options && options.acl);
+  return filePath;
 }
 
 function redactAgentSigningCredential(credential) {
@@ -361,13 +459,19 @@ function redactAgentSigningCredential(credential) {
 
 module.exports = {
   AGENT_AUTH_SECRET_RELATIVE_PATH,
+  AGENT_AUTH_ROTATION_RELATIVE_PATH,
   agentAuthSecretPath,
+  agentAuthRotationStatePath,
   hardenCredentialPath,
   parseWhoamiCsvSid,
   resolveCurrentWindowsUserSid,
   ensureAgentSigningCredential,
+  markAgentSigningCredentialRevoked,
+  readAgentAuthRotationState,
   readAgentSigningCredential,
   redactAgentSigningCredential,
   requireAgentSigningCredential,
-  validateAgentSigningCredential
+  validateAgentSigningCredential,
+  writeAgentAuthRotationState,
+  writeAgentSigningCredential
 };

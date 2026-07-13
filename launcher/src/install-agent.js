@@ -264,7 +264,10 @@ async function installAgent(options) {
   }
 
   const restBase = projectState.project.wp_url + "/wp-json/factory/v1";
-  const signing = ensureAgentSigningCredential(projectState);
+  const signing = ensureAgentSigningCredential(projectState, {
+    replaceRevoked: true,
+    upgradeCapabilities: true
+  });
   const bootstrap = await bootstrapAgentSignedAuth(projectState, restBase, signing.credential, proofId, warnings);
   const health = (await fetchJsonWithSignedAuth(restBase + "/agent/health", signing.credential)).json;
   const capabilities = (await fetchJsonWithSignedAuth(restBase + "/agent/capabilities", signing.credential)).json;
@@ -286,6 +289,7 @@ async function installAgent(options) {
       bootstrap_code: bootstrap.code || null,
       key_id: signing.credential.key_id,
       credential_created: signing.created,
+      credential_upgraded: signing.upgraded === true,
       credential: redactAgentSigningCredential(signing.credential)
     },
     created_at: new Date().toISOString(),
@@ -319,6 +323,7 @@ async function installAgent(options) {
       key_id: signing.credential.key_id,
       bootstrap_code: bootstrap.code || null,
       credential_created: signing.created,
+      credential_upgraded: signing.upgraded === true,
       contract_version: signing.credential.contract_version
     },
     capabilities: {

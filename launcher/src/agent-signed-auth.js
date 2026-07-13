@@ -30,13 +30,17 @@ const CAPABILITIES = Object.freeze([
   "ai.plan",
   "ai.estimate",
   "ai.configure",
-  "ai.enable_live"
+  "ai.enable_live",
+  "auth.rotate",
+  "auth.revoke"
 ]);
 
 const AGENT_ROUTE_CAPABILITIES = Object.freeze({
   "GET /factory/v1/agent/health": "health.read",
   "GET /factory/v1/agent/capabilities": "capabilities.read",
   "GET /factory/v1/agent/dependencies": "dependencies.read",
+  "POST /factory/v1/agent/auth/rotate": "auth.rotate",
+  "POST /factory/v1/agent/auth/revoke": "auth.revoke",
   "POST /factory/v1/agent/safe-fields/apply": "state.apply",
   "GET /factory/v1/ai/settings": "ai.configure",
   "POST /factory/v1/ai/settings": "ai.configure",

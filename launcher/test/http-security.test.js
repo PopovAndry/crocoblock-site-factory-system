@@ -225,6 +225,8 @@ test("shared route inventory covers every current POST server route and required
     "project_create",
     "project_provision",
     "agent_install",
+    "agent_auth_rotate",
+    "agent_auth_revoke",
     "dependency_install",
     "project_generate",
     "state_apply",

@@ -20,6 +20,7 @@ const {
 } = require("./project-store");
 const { provisionProject } = require("./provision");
 const { installAgent } = require("./install-agent");
+const { rotateAgentAuth, revokeAgentAuth } = require("./agent-auth-lifecycle");
 const { installDependency } = require("./install-dependency");
 const { listApprovedDependencySources, resolveApprovedDependencySource } = require("./dependency-sources");
 const { getSetupStatus } = require("./setup");
@@ -914,6 +915,134 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/agent-auth\/rotate$/.test(requestUrl.pathname)) {
+        await readJsonPayload(request);
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        const operationResult = await runProjectOperation({
+          slug,
+          projectsRoot,
+          operationType: "agent_auth_rotate",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          resumeStatuses: ["interrupted", "failed"],
+          fingerprintInput: {
+            project_slug: slug,
+            operation_type: "agent_auth_rotate"
+          },
+          metadata: {},
+          safety: {
+            live_ai_used: false,
+            apply_used: false,
+            rollback_used: false
+          },
+          execute: async () => {
+            const result = await rotateAgentAuth({
+              slug,
+              projectsRoot
+            });
+            return {
+              result,
+              proofRef: result.proofPath || null,
+              resultSummary: {
+                status: result.status,
+                code: result.code,
+                old_key_id: result.oldKeyId,
+                new_key_id: result.newKeyId,
+                old_key_rejection_code: result.oldKeyRejectionCode,
+                rotation_stage: result.rotationState ? result.rotationState.stage : null
+              }
+            };
+          }
+        });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
+        sendJson(response, 200, buildOperationResponse(operationResult, {
+          ok: true,
+          status: result.status,
+          code: result.code,
+          old_key_id: result.oldKeyId,
+          new_key_id: result.newKeyId,
+          rotation_state: result.rotationState,
+          proof_path: result.proofPath,
+          old_key_rejection_code: result.oldKeyRejectionCode
+        }));
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/agent-auth\/revoke$/.test(requestUrl.pathname)) {
+        const payload = await readJsonPayload(request);
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        assertProjectExistsForRoute(slug, projectsRoot);
+        if (payload.confirm_revoke !== true) {
+          throw createStructuredError(
+            "Agent credential revoke requires confirm_revoke=true.",
+            "agent_auth_revoke_confirmation_required",
+            400
+          );
+        }
+        const operationResult = await runProjectOperation({
+          slug,
+          projectsRoot,
+          operationType: "agent_auth_revoke",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: {
+            project_slug: slug,
+            operation_type: "agent_auth_revoke",
+            confirm_revoke: true
+          },
+          metadata: {},
+          safety: {
+            live_ai_used: false,
+            apply_used: false,
+            rollback_used: false
+          },
+          execute: async () => {
+            const result = await revokeAgentAuth({
+              slug,
+              projectsRoot,
+              confirmRevoke: true
+            });
+            return {
+              result,
+              proofRef: result.proofPath || null,
+              resultSummary: {
+                status: result.status,
+                code: result.code,
+                key_id: result.keyId,
+                revoked_at: result.revokedAt,
+                revoked_key_rejection_code: result.revokedKeyRejectionCode,
+                repair_required: result.repairRequired
+              }
+            };
+          }
+        });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
+        sendJson(response, 200, buildOperationResponse(operationResult, {
+          ok: true,
+          status: result.status,
+          code: result.code,
+          key_id: result.keyId,
+          revoked_at: result.revokedAt,
+          repair_required: result.repairRequired,
+          revoked_key_rejection_code: result.revokedKeyRejectionCode,
+          proof_path: result.proofPath
+        }));
+        return;
+      }
+
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/dependencies$/.test(requestUrl.pathname)) {
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
         const result = await getSetupStatus({
@@ -1719,6 +1848,8 @@ function createLauncherServer(options) {
         requestUrl.pathname === "/api/projects" ||
         /^\/api\/projects\/[^/]+\/provision$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/agent-auth\/rotate$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/agent-auth\/revoke$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname) ||

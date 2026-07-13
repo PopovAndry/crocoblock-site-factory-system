@@ -47,9 +47,9 @@ async function getSetupStatus(options) {
   let signedAuthKeyId = null;
 
   try {
-    const credential = readAgentSigningCredential(projectState);
+    const credential = readAgentSigningCredential(projectState, { allowInactive: true });
     if (credential) {
-      signedAuthStatus = "ready";
+      signedAuthStatus = credential.status === "revoked" ? "revoked" : "ready";
       signedAuthKeyId = credential.key_id;
     }
   } catch (error) {
@@ -79,7 +79,9 @@ async function getSetupStatus(options) {
       warnings.push("Dependency refresh failed: " + error.message);
     }
   } else if ((projectState.project.agent && projectState.project.agent.status) === "installed" && signedAuthStatus !== "ready") {
-    warnings.push("Agent is installed but signed authentication is not ready. Run Agent install/repair to bootstrap it.");
+    warnings.push(signedAuthStatus === "revoked"
+      ? "Agent signed-auth credential is revoked. Run Agent install/repair to bootstrap a fresh project-bound credential."
+      : "Agent is installed but signed authentication is not ready. Run Agent install/repair to bootstrap it.");
   }
 
   if (dependencyState) {
@@ -120,7 +122,7 @@ async function getSetupStatus(options) {
         signed_auth: {
           status: signedAuthStatus,
           key_id: signedAuthKeyId,
-          contract_version: signedAuthStatus === "ready" ? "factory-agent-hmac-v1" : null
+          contract_version: signedAuthStatus === "ready" || signedAuthStatus === "revoked" ? "factory-agent-hmac-v1" : null
         }
       },
       dependencies: {

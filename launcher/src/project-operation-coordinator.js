@@ -31,7 +31,9 @@ const ALLOWED_OPERATION_TYPES = new Set([
   "install_dependency",
   "controlled_generate",
   "state_apply",
-  "state_rollback"
+  "state_rollback",
+  "agent_auth_rotate",
+  "agent_auth_revoke"
 ]);
 
 function stableStringify(value) {
@@ -316,6 +318,10 @@ function checkIdempotency(options) {
     return null;
   }
 
+  if (options.ignoreOperationId && existing.operation_id === options.ignoreOperationId) {
+    return null;
+  }
+
   const raw = existing.raw || {};
   if (String(raw.request_fingerprint || "") !== String(options.requestFingerprint || "")) {
     throw createCoordinatorError(
@@ -341,6 +347,25 @@ function checkIdempotency(options) {
 
   if (existing.status === "requested" || existing.status === "running") {
     throw createConflictError(existing);
+  }
+
+  const resumeStatuses = new Set(Array.isArray(options.resumeStatuses)
+    ? options.resumeStatuses.map((status) => String(status || ""))
+    : (options.allowInterruptedResume === true ? ["interrupted"] : []));
+
+  if (resumeStatuses.has(existing.status)) {
+    const resumeOperation = Object.assign({}, existing, {
+      idempotent_replay: false
+    });
+    delete resumeOperation.raw;
+    delete resumeOperation._filePath;
+    delete resumeOperation._mtimeMs;
+
+    return {
+      replay: false,
+      resume: true,
+      operation: resumeOperation
+    };
   }
 
   if (existing.status === "failed" || existing.status === "interrupted") {
@@ -376,6 +401,9 @@ async function runProjectOperation(options) {
   });
   const metadata = options.metadata && typeof options.metadata === "object" ? options.metadata : {};
   const safety = options.safety && typeof options.safety === "object" ? options.safety : {};
+  const resumeStatuses = Array.isArray(options.resumeStatuses)
+    ? options.resumeStatuses.slice()
+    : (options.allowInterruptedResume === true ? ["interrupted"] : []);
 
   reconcileInterruptedOperations({
     slug: projectInfo.slug,
@@ -386,17 +414,23 @@ async function runProjectOperation(options) {
     slug: projectInfo.slug,
     projectsRoot: projectInfo.projectsRoot,
     idempotencyKeyHash,
-    requestFingerprint
+    requestFingerprint,
+    resumeStatuses
   });
-  if (replayBeforeLock) {
+  if (replayBeforeLock && replayBeforeLock.replay) {
     return {
       idempotentReplay: true,
       operation: replayBeforeLock.operation,
       result: null
     };
   }
+  const resumeOperation = replayBeforeLock && replayBeforeLock.resume
+    ? replayBeforeLock.operation
+    : null;
 
-  const operationId = options.operationId || createOperationId();
+  const operationId = resumeOperation
+    ? resumeOperation.operation_id
+    : (options.operationId || createOperationId());
   const lock = acquireProjectLock({
     slug: projectInfo.slug,
     projectsRoot: projectInfo.projectsRoot,
@@ -413,9 +447,11 @@ async function runProjectOperation(options) {
       slug: projectInfo.slug,
       projectsRoot: projectInfo.projectsRoot,
       idempotencyKeyHash,
-      requestFingerprint
+      requestFingerprint,
+      resumeStatuses,
+      ignoreOperationId: resumeOperation ? operationId : null
     });
-    if (replayAfterLock) {
+    if (replayAfterLock && replayAfterLock.replay) {
       return {
         idempotentReplay: true,
         operation: replayAfterLock.operation,
@@ -423,27 +459,49 @@ async function runProjectOperation(options) {
       };
     }
 
-    requestedOperation = createRequestedOperation({
-      slug: projectInfo.slug,
-      projectsRoot: projectInfo.projectsRoot,
-      operationId,
-      operationType,
-      idempotencyKeyHash,
-      requestFingerprint,
-      metadata,
-      safety
-    });
-    updateOperation({
-      slug: projectInfo.slug,
-      projectsRoot: projectInfo.projectsRoot,
-      operationId,
-      patch: {
-        status: "running",
-        stage: "preparing",
-        started_at: nowIso(),
-        heartbeat_at: nowIso()
-      }
-    });
+    if (resumeOperation) {
+      const resumed = updateOperation({
+        slug: projectInfo.slug,
+        projectsRoot: projectInfo.projectsRoot,
+        operationId,
+        patch: {
+          status: "running",
+          stage: resumeOperation.stage || "executing",
+          heartbeat_at: nowIso(),
+          completed_at: null,
+          error: {
+            code: null,
+            message: null,
+            stage: null
+          }
+        }
+      });
+      requestedOperation = {
+        operation: resumed.operation
+      };
+    } else {
+      requestedOperation = createRequestedOperation({
+        slug: projectInfo.slug,
+        projectsRoot: projectInfo.projectsRoot,
+        operationId,
+        operationType,
+        idempotencyKeyHash,
+        requestFingerprint,
+        metadata,
+        safety
+      });
+      updateOperation({
+        slug: projectInfo.slug,
+        projectsRoot: projectInfo.projectsRoot,
+        operationId,
+        patch: {
+          status: "running",
+          stage: "preparing",
+          started_at: nowIso(),
+          heartbeat_at: nowIso()
+        }
+      });
+    }
 
     heartbeatTimer = setInterval(() => {
       try {
@@ -505,7 +563,11 @@ async function runProjectOperation(options) {
         completed_at: nowIso(),
         proof_ref: proofRef,
         result_summary: resultSummary,
-        error: {}
+        error: {
+          code: null,
+          message: null,
+          stage: null
+        }
       }
     });
 

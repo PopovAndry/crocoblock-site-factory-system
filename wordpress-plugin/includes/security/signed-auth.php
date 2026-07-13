@@ -37,6 +37,8 @@ function factory_agent_signed_auth_capabilities(): array {
 		'ai.estimate',
 		'ai.configure',
 		'ai.enable_live',
+		'auth.rotate',
+		'auth.revoke',
 	];
 }
 
@@ -45,6 +47,8 @@ function factory_agent_signed_auth_route_capabilities(): array {
 		'GET /factory/v1/agent/health'              => 'health.read',
 		'GET /factory/v1/agent/capabilities'        => 'capabilities.read',
 		'GET /factory/v1/agent/dependencies'        => 'dependencies.read',
+		'POST /factory/v1/agent/auth/rotate'        => 'auth.rotate',
+		'POST /factory/v1/agent/auth/revoke'        => 'auth.revoke',
 		'POST /factory/v1/agent/safe-fields/apply'  => 'state.apply',
 		'GET /factory/v1/ai/settings'               => 'ai.configure',
 		'POST /factory/v1/ai/settings'              => 'ai.configure',
@@ -268,6 +272,20 @@ function factory_agent_signed_auth_store_credential( array $credential ) {
 				];
 			}
 
+			if ( $same_secret && $same_project ) {
+				foreach ( $stored as $index => $stored_candidate ) {
+					if ( is_array( $stored_candidate ) && (string) ( $stored_candidate['key_id'] ?? '' ) === (string) $credential['key_id'] ) {
+						$stored[ $index ]['capabilities'] = array_values( $credential['capabilities'] ?? [] );
+						update_option( FACTORY_AGENT_SIGNED_AUTH_OPTION, $stored, false );
+						return [
+							'status'     => 'ok',
+							'code'       => 'agent_auth_bootstrap_capabilities_updated',
+							'credential' => factory_agent_signed_auth_sanitize_credential_metadata( $stored[ $index ] ),
+						];
+					}
+				}
+			}
+
 			if ( $same_secret && $same_capabilities && '' === $candidate_project && '' !== $incoming_project ) {
 				foreach ( $stored as $index => $stored_candidate ) {
 					if ( is_array( $stored_candidate ) && (string) ( $stored_candidate['key_id'] ?? '' ) === (string) $credential['key_id'] ) {
@@ -284,7 +302,9 @@ function factory_agent_signed_auth_store_credential( array $credential ) {
 
 			return factory_agent_signed_auth_error( 'agent_auth_bootstrap_conflict', 409 );
 		}
+	}
 
+	if ( ! empty( $active ) ) {
 		return factory_agent_signed_auth_error( 'agent_auth_bootstrap_conflict', 409 );
 	}
 
@@ -297,6 +317,145 @@ function factory_agent_signed_auth_store_credential( array $credential ) {
 		'code'       => 'agent_auth_bootstrap_created',
 		'credential' => factory_agent_signed_auth_sanitize_credential_metadata( $credential ),
 	];
+}
+
+function factory_agent_signed_auth_capabilities_subset( array $candidate, array $allowed ): bool {
+	foreach ( $candidate as $capability ) {
+		if ( ! in_array( $capability, $allowed, true ) ) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+function factory_agent_signed_auth_active_project_credentials( string $project_slug ): array {
+	return array_values(
+		array_filter(
+			factory_agent_signed_auth_get_stored_credentials(),
+			static function ( $candidate ) use ( $project_slug ): bool {
+				return is_array( $candidate )
+					&& 'active' === ( $candidate['status'] ?? '' )
+					&& (string) ( $candidate['project_slug'] ?? '' ) === $project_slug;
+			}
+		)
+	);
+}
+
+function factory_agent_signed_auth_sanitized_active_keys( string $project_slug ): array {
+	return array_values(
+		array_map(
+			'factory_agent_signed_auth_sanitize_credential_metadata',
+			factory_agent_signed_auth_active_project_credentials( $project_slug )
+		)
+	);
+}
+
+function factory_agent_signed_auth_register_rotation_credential( array $credential, array $auth_context ) {
+	$validation = factory_agent_signed_auth_validate_credential_record( $credential );
+	if ( is_wp_error( $validation ) ) {
+		return $validation;
+	}
+
+	$project_slug = (string) ( $auth_context['project_slug'] ?? '' );
+	if ( '' === $project_slug || $project_slug !== (string) ( $credential['project_slug'] ?? '' ) ) {
+		return factory_agent_signed_auth_error( 'agent_auth_rotation_project_mismatch', 403 );
+	}
+
+	$current = factory_agent_signed_auth_resolve_credential( (string) ( $auth_context['key_id'] ?? '' ) );
+	if ( ! is_array( $current ) || 'active' !== ( $current['status'] ?? '' ) || (string) ( $current['project_slug'] ?? '' ) !== $project_slug ) {
+		return factory_agent_signed_auth_error( 'agent_auth_rotation_current_key_invalid', 403 );
+	}
+
+	if ( (string) ( $credential['key_id'] ?? '' ) === (string) ( $current['key_id'] ?? '' ) ) {
+		return factory_agent_signed_auth_error( 'agent_auth_rotation_invalid', 400 );
+	}
+
+	$current_capabilities = is_array( $current['capabilities'] ?? null ) ? array_values( $current['capabilities'] ) : [];
+	$new_capabilities = is_array( $credential['capabilities'] ?? null ) ? array_values( $credential['capabilities'] ) : [];
+	if ( ! factory_agent_signed_auth_capabilities_subset( $new_capabilities, $current_capabilities ) ) {
+		return factory_agent_signed_auth_error( 'agent_auth_rotation_capability_expansion_denied', 403 );
+	}
+
+	$stored = factory_agent_signed_auth_get_stored_credentials();
+	foreach ( $stored as $candidate ) {
+		if ( ! is_array( $candidate ) || (string) ( $candidate['key_id'] ?? '' ) !== (string) $credential['key_id'] ) {
+			continue;
+		}
+
+		$same_secret = hash_equals( (string) ( $candidate['signing_secret'] ?? '' ), (string) $credential['signing_secret'] );
+		$same_capabilities = array_values( $candidate['capabilities'] ?? [] ) === $new_capabilities;
+		$same_project = (string) ( $candidate['project_slug'] ?? '' ) === $project_slug;
+		if ( $same_secret && $same_capabilities && $same_project && 'active' === ( $candidate['status'] ?? '' ) ) {
+			return [
+				'status'      => 'ok',
+				'code'        => 'agent_auth_rotation_already_registered',
+				'credential'  => factory_agent_signed_auth_sanitize_credential_metadata( $candidate ),
+				'active_keys' => factory_agent_signed_auth_sanitized_active_keys( $project_slug ),
+			];
+		}
+
+		return factory_agent_signed_auth_error( 'agent_auth_rotation_conflict', 409 );
+	}
+
+	if ( count( factory_agent_signed_auth_active_project_credentials( $project_slug ) ) >= 2 ) {
+		return factory_agent_signed_auth_error( 'agent_auth_rotation_too_many_active_keys', 409 );
+	}
+
+	$credential['status'] = 'active';
+	$stored[] = $credential;
+	update_option( FACTORY_AGENT_SIGNED_AUTH_OPTION, $stored, false );
+
+	return [
+		'status'      => 'ok',
+		'code'        => 'agent_auth_rotation_registered',
+		'credential'  => factory_agent_signed_auth_sanitize_credential_metadata( $credential ),
+		'active_keys' => factory_agent_signed_auth_sanitized_active_keys( $project_slug ),
+	];
+}
+
+function factory_agent_signed_auth_revoke_key( string $key_id, array $auth_context ) {
+	$key_id = sanitize_text_field( $key_id );
+	if ( '' === $key_id ) {
+		return factory_agent_signed_auth_error( 'agent_auth_revoke_invalid', 400 );
+	}
+
+	$project_slug = (string) ( $auth_context['project_slug'] ?? '' );
+	if ( '' === $project_slug ) {
+		return factory_agent_signed_auth_error( 'agent_auth_revoke_project_required', 403 );
+	}
+
+	$stored = factory_agent_signed_auth_get_stored_credentials();
+	foreach ( $stored as $index => $candidate ) {
+		if ( ! is_array( $candidate ) || (string) ( $candidate['key_id'] ?? '' ) !== $key_id ) {
+			continue;
+		}
+		if ( (string) ( $candidate['project_slug'] ?? '' ) !== $project_slug ) {
+			return factory_agent_signed_auth_error( 'agent_auth_revoke_project_mismatch', 403 );
+		}
+
+		if ( 'revoked' === ( $candidate['status'] ?? '' ) || ! empty( $candidate['revoked_at'] ) ) {
+			return [
+				'status'      => 'ok',
+				'code'        => 'agent_auth_revoke_already_revoked',
+				'credential'  => factory_agent_signed_auth_sanitize_credential_metadata( $candidate ),
+				'active_keys' => factory_agent_signed_auth_sanitized_active_keys( $project_slug ),
+			];
+		}
+
+		$stored[ $index ]['status'] = 'revoked';
+		$stored[ $index ]['revoked_at'] = gmdate( 'Y-m-d\TH:i:s\Z' );
+		update_option( FACTORY_AGENT_SIGNED_AUTH_OPTION, $stored, false );
+
+		return [
+			'status'      => 'ok',
+			'code'        => 'agent_auth_revoke_completed',
+			'credential'  => factory_agent_signed_auth_sanitize_credential_metadata( $stored[ $index ] ),
+			'active_keys' => factory_agent_signed_auth_sanitized_active_keys( $project_slug ),
+		];
+	}
+
+	return factory_agent_signed_auth_error( 'agent_auth_revoke_key_unknown', 404 );
 }
 
 function factory_agent_signed_auth_error( string $code, int $status = 401 ): WP_Error {
