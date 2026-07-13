@@ -1,6 +1,9 @@
 "use strict";
 
 const http = require("http");
+const {
+  createSignedAgentHeaders
+} = require("./agent-signed-auth");
 
 function requestJson(targetUrl, options) {
   return new Promise((resolve, reject) => {
@@ -108,11 +111,43 @@ async function fetchJsonWithCookie(targetUrl, cookieHeader, restNonce, options) 
   return response;
 }
 
+async function fetchJsonWithSignedAuth(targetUrl, credential, options) {
+  const safeOptions = options || {};
+  const target = new URL(targetUrl);
+  const method = safeOptions.method || "GET";
+  const body = safeOptions.body || "";
+  const signed = createSignedAgentHeaders({
+    credential,
+    method,
+    path: target.pathname,
+    query: target.search,
+    body,
+    timestamp: safeOptions.timestamp,
+    requestId: safeOptions.requestId,
+    clock: safeOptions.clock,
+    requestIdGenerator: safeOptions.requestIdGenerator
+  });
+  const headers = Object.assign({}, safeOptions.headers || {}, signed.headers);
+  const response = await requestJson(targetUrl, Object.assign({}, safeOptions, { method, body, headers }));
+
+  if ((response.statusCode < 200 || response.statusCode >= 300) || !response.json) {
+    throw createAgentRequestError(targetUrl, response);
+  }
+
+  return Object.assign({}, response, {
+    signedAuth: {
+      requestId: signed.requestId,
+      bodyHash: signed.bodyHash
+    }
+  });
+}
+
 module.exports = {
   createAgentRequestError,
   createBasicAuthHeader,
   fetchJsonWithBasicAuth,
   fetchJsonWithCookie,
+  fetchJsonWithSignedAuth,
   requestJson,
   waitForUrl
 };

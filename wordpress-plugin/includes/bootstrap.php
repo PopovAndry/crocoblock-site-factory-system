@@ -23,6 +23,7 @@ require_once __DIR__ . '/utils/ownership.php';
 require_once __DIR__ . '/utils/run-manifest.php';
 require_once __DIR__ . '/utils/run-registry.php';
 require_once __DIR__ . '/utils/run-storage.php';
+require_once __DIR__ . '/security/signed-auth.php';
 require_once __DIR__ . '/blueprint/blueprint-normalizer.php';
 require_once __DIR__ . '/blueprint/blueprint-validator.php';
 require_once __DIR__ . '/blueprint/blueprint-preset-manager.php';
