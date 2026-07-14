@@ -8,6 +8,7 @@ const FACTORY_AGENT_SIGNED_AUTH_VERSION = 'factory-agent-hmac-v1';
 const FACTORY_AGENT_SIGNED_AUTH_FRESHNESS_SECONDS = 300;
 const FACTORY_AGENT_SIGNED_AUTH_CLOCK_SKEW_SECONDS = 30;
 const FACTORY_AGENT_SIGNED_AUTH_OPTION = 'factory_agent_signed_auth_credentials';
+const FACTORY_AGENT_SIGNED_AUTH_MAX_BODY_BYTES = 65536;
 
 function factory_agent_signed_auth_headers(): array {
 	return [
@@ -469,6 +470,89 @@ function factory_agent_signed_auth_error( string $code, int $status = 401 ): WP_
 	);
 }
 
+function factory_agent_signed_auth_request_limit_error( string $code, int $status, array $data = [] ): WP_Error {
+	return new WP_Error(
+		$code,
+		'Signed Launcher request rejected before Agent business logic.',
+		array_merge(
+			[
+				'status' => $status,
+				'code'   => $code,
+			],
+			$data
+		)
+	);
+}
+
+function factory_agent_signed_auth_is_json_content_type( string $content_type ): bool {
+	$content_type = strtolower( trim( explode( ';', $content_type, 2 )[0] ) );
+	return 'application/json' === $content_type;
+}
+
+function factory_agent_signed_auth_validate_request_limits( WP_REST_Request $request ) {
+	$method = factory_agent_signed_auth_normalize_method( $request->get_method() );
+	$body = (string) $request->get_body();
+
+	if ( strlen( $body ) > FACTORY_AGENT_SIGNED_AUTH_MAX_BODY_BYTES ) {
+		return factory_agent_signed_auth_request_limit_error( 'agent_request_body_too_large', 413 );
+	}
+
+	if ( in_array( $method, [ 'POST', 'PUT', 'PATCH' ], true ) && '' !== $body ) {
+		$content_type = (string) $request->get_header( 'content-type' );
+		if ( ! factory_agent_signed_auth_is_json_content_type( $content_type ) ) {
+			return factory_agent_signed_auth_request_limit_error( 'agent_unsupported_media_type', 415 );
+		}
+	}
+
+	return true;
+}
+
+function factory_agent_signed_auth_rate_limit_for_capability( string $capability ): array {
+	if ( in_array( $capability, [ 'auth.rotate', 'auth.revoke' ], true ) ) {
+		return [ 'class' => 'credential_rotation', 'limit' => 10 ];
+	}
+
+	if ( in_array( $capability, [ 'generate.apply', 'state.apply', 'state.rollback', 'proof.create' ], true ) ) {
+		return [ 'class' => 'mutation', 'limit' => 30 ];
+	}
+
+	if ( in_array( $capability, [ 'ai.plan', 'ai.estimate', 'generate.plan' ], true ) ) {
+		return [ 'class' => 'planning', 'limit' => 120 ];
+	}
+
+	return [ 'class' => 'read', 'limit' => 600 ];
+}
+
+function factory_agent_signed_auth_rate_option_name( string $key_id, string $class, int $window ): string {
+	return 'factory_agent_rate_' . hash( 'sha256', $key_id . "\n" . $class . "\n" . $window );
+}
+
+function factory_agent_signed_auth_rate_limit_claim( string $key_id, string $capability, int $now ) {
+	$config = factory_agent_signed_auth_rate_limit_for_capability( $capability );
+	$window = intdiv( $now, 60 );
+	$option = factory_agent_signed_auth_rate_option_name( $key_id, $config['class'], $window );
+	$current = (int) get_option( $option, 0 );
+
+	if ( $current >= (int) $config['limit'] ) {
+		return factory_agent_signed_auth_request_limit_error(
+			'agent_rate_limit_exceeded',
+			429,
+			[
+				'retry_after' => max( 1, 60 - ( $now % 60 ) ),
+				'rate_class'  => $config['class'],
+			]
+		);
+	}
+
+	if ( 0 === $current ) {
+		add_option( $option, '1', '', 'no' );
+		return true;
+	}
+
+	update_option( $option, (string) ( $current + 1 ), false );
+	return true;
+}
+
 function factory_agent_signed_auth_header_value( WP_REST_Request $request, string $header ): array {
 	$headers = $request->get_headers();
 	$key = strtolower( $header );
@@ -671,8 +755,21 @@ function factory_agent_signed_auth_verify( WP_REST_Request $request, ?string $re
 }
 
 function factory_rest_require_signed_launcher( WP_REST_Request $request ) {
+	$limits = factory_agent_signed_auth_validate_request_limits( $request );
+	if ( is_wp_error( $limits ) ) {
+		return $limits;
+	}
+
 	$auth = factory_agent_signed_auth_verify( $request );
 	if ( ! is_wp_error( $auth ) ) {
+		$rate = factory_agent_signed_auth_rate_limit_claim(
+			(string) ( $auth['key_id'] ?? '' ),
+			(string) ( $auth['capability'] ?? '' ),
+			time()
+		);
+		if ( is_wp_error( $rate ) ) {
+			return $rate;
+		}
 		$request->set_param( '_factory_signed_auth_context', $auth );
 		return true;
 	}

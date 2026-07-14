@@ -376,3 +376,19 @@ test("PHP Agent bootstrap store is idempotent and conflict-safe without returnin
   assert.equal(parsed.migration_contains_secret, false);
   assert.equal(parsed.rotation_contains_secret, false);
 });
+
+test("PHP Agent request limits reject oversized, wrong content type, and excess mutation requests", () => {
+  const php = phpBinary();
+  assert.ok(php, "PHP binary is required for Agent request limit behavior test");
+  const fixture = path.resolve(__dirname, "php-signed-auth-limits.php");
+  const result = spawnSync(php, [fixture], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+
+  assert.equal(parsed.json_content_type_code, "ok");
+  assert.equal(parsed.wrong_content_type_code, "agent_unsupported_media_type");
+  assert.equal(parsed.oversized_body_code, "agent_request_body_too_large");
+  assert.equal(parsed.rate_limited_code, "agent_rate_limit_exceeded");
+  assert.equal(parsed.rate_limited_status, 429);
+  assert.equal(parsed.rate_limited_retry_after_present, true);
+});
