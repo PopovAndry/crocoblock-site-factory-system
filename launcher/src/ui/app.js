@@ -212,9 +212,17 @@
   let projectsCache = [];
   let lastSetupPayload = null;
   let setupActionInFlight = false;
+  let dependencyInstallPlans = {};
   let preferredSelectedSlug = "";
   let loadProjectsRequestId = 0;
   let loadSetupStatusRequestId = 0;
+  let setupView = {
+    slug: "",
+    requestId: 0,
+    loading: false,
+    payload: null,
+    error: null
+  };
   let generatePreviewState = null;
   let generationActionInFlight = false;
   let generationStatusPollTimer = null;
@@ -328,6 +336,47 @@
 
   function setSetupEmpty(message) {
     setupStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
+  function isActiveSetupSelection(slug, requestId) {
+    return String(setupView.slug || "") === String(slug || "")
+      && Number(setupView.requestId) === Number(requestId)
+      && String(setupProjectSlug.value || "").trim() === String(slug || "");
+  }
+
+  function renderSetupView() {
+    setupStatus.setAttribute("data-project-slug", setupView.slug || "");
+    setupStatus.setAttribute("data-request-id", String(setupView.requestId || 0));
+    if (!setupView.slug) {
+      setSetupEmpty("Select a project to view guided setup.");
+      return;
+    }
+    if (setupView.loading && !setupView.payload) {
+      setSetupEmpty("Loading setup status for " + setupView.slug + "...");
+      return;
+    }
+    if (setupView.error && !setupView.payload) {
+      setSetupEmpty("Unable to load setup status: " + setupView.error);
+      return;
+    }
+    if (setupView.payload) {
+      renderSetupStatus(setupView.payload);
+      return;
+    }
+    setSetupEmpty("Select a project to view guided setup.");
+  }
+
+  function resetSetupView(slug) {
+    loadSetupStatusRequestId += 1;
+    setupView = {
+      slug: String(slug || "").trim(),
+      requestId: loadSetupStatusRequestId,
+      loading: Boolean(slug),
+      payload: null,
+      error: null
+    };
+    renderSetupView();
+    return setupView.requestId;
   }
 
   function setManagedStateEmpty(message) {
@@ -651,6 +700,11 @@
   }
 
   function renderSetupStatus(payload) {
+    const previousSlug = lastSetupPayload && lastSetupPayload.project ? lastSetupPayload.project.slug : null;
+    const nextSlug = payload && payload.project ? payload.project.slug : null;
+    if (previousSlug && nextSlug && String(previousSlug) !== String(nextSlug)) {
+      dependencyInstallPlans = {};
+    }
     lastSetupPayload = payload;
 
     if (!payload || !payload.project || !payload.setup) {
@@ -670,8 +724,21 @@
       .map((row) => row.key);
     const installableRows = dependencyRows.filter((row) => row.source_available && !row.active);
     const dependencyRowsMarkup = dependencyRows.map((row) => {
+      const rowPlan = dependencyInstallPlans[row.key] || null;
       const disabled = setupMutationBlocked || !setup.agent || setup.agent.status !== "ready" || !row.source_available || row.active;
       const installAttributes = " data-dependency=\"" + escapeHtml(row.key) + "\"";
+      const confirmId = "dependency-confirm-" + String(row.key || "").replace(/[^a-z0-9-]/g, "-");
+      const planMarkup = rowPlan && rowPlan.plan
+        ? [
+          "  <p class=\"project-note\">Managed package verified: " + escapeHtml(rowPlan.plan.package && rowPlan.plan.package.product ? rowPlan.plan.package.product.version : "version unavailable") + " (" + escapeHtml(String(rowPlan.plan.package && rowPlan.plan.package.sha256 || "").slice(0, 12)) + "...)</p>",
+          "  <label class=\"setup-confirm\"><input type=\"checkbox\" id=\"" + escapeHtml(confirmId) + "\" data-dependency-confirm=\"" + escapeHtml(row.key) + "\"> Install this verified package into this WordPress project.</label>"
+        ].join("\n")
+        : "";
+      const installButton = row.active
+        ? setupActionButton("Installed", "install-dependency", true, installAttributes)
+        : rowPlan && rowPlan.plan
+          ? setupActionButton("Install Product", "install-dependency", disabled, installAttributes)
+          : setupActionButton("Preview Install", "preview-dependency", disabled, installAttributes);
       return [
         "<article class=\"setup-step-card\">",
         "  <div class=\"setup-step-card__header\">",
@@ -685,7 +752,8 @@
         "    <div><dt>Active</dt><dd>" + escapeHtml(String(row.active)) + "</dd></div>",
         "  </dl>",
         row.notes ? "  <p class=\"project-note\">" + escapeHtml(row.notes) + "</p>" : "",
-        "  <div class=\"setup-actions\">" + setupActionButton(row.active ? "Installed" : "Install", "install-dependency", disabled, installAttributes) + "</div>",
+        planMarkup,
+        "  <div class=\"setup-actions\">" + installButton + "</div>",
         "</article>"
       ].join("\n");
     }).join("\n");
@@ -755,11 +823,11 @@
 
   function refreshSetupMutationAvailability() {
     if (
-      lastSetupPayload
-      && lastSetupPayload.project
-      && String(lastSetupPayload.project.slug || "") === String(generationView.slug || "")
+      setupView.payload
+      && setupView.payload.project
+      && String(setupView.slug || "") === String(generationView.slug || "")
     ) {
-      renderSetupStatus(lastSetupPayload);
+      renderSetupView();
     }
   }
 
@@ -1869,25 +1937,45 @@
     ].join("");
   }
 
-  async function loadSetupStatus(slug) {
+  async function loadSetupStatus(slug, options) {
     const selectedSlug = String(slug || "").trim();
     if (!selectedSlug) {
-      setSetupEmpty("Select a project to view guided setup.");
+      setupView = {
+        slug: "",
+        requestId: 0,
+        loading: false,
+        payload: null,
+        error: null
+      };
+      renderSetupView();
       return;
     }
 
-    const requestId = ++loadSetupStatusRequestId;
+    const requestId = options && options.requestId ? options.requestId : ++loadSetupStatusRequestId;
+    setupView.slug = selectedSlug;
+    setupView.requestId = requestId;
+    if (!setupView.payload || String(setupView.payload.project && setupView.payload.project.slug || "") !== selectedSlug) {
+      setupView.payload = null;
+    }
+    setupView.error = null;
+    setupView.loading = true;
+    renderSetupView();
     const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/setup");
     const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Unable to load setup status.");
-    }
-
-    if (requestId !== loadSetupStatusRequestId) {
+    if (!isActiveSetupSelection(selectedSlug, requestId)) {
       return;
     }
+    if (!response.ok) {
+      setupView.error = payload.error || "Unable to load setup status.";
+      setupView.loading = false;
+      renderSetupView();
+      throw new Error(setupView.error);
+    }
 
-    renderSetupStatus(payload);
+    setupView.payload = payload;
+    setupView.error = null;
+    setupView.loading = false;
+    renderSetupView();
   }
 
   async function runSetupAction(action, dependencyKey) {
@@ -1899,7 +1987,8 @@
     setupActionInFlight = true;
     try {
       if (action === "refresh") {
-        await loadSetupStatus(slug);
+        const setupRequestId = resetSetupView(slug);
+        await loadSetupStatus(slug, { requestId: setupRequestId });
         return;
       }
 
@@ -1909,13 +1998,28 @@
           : [];
         for (const row of rows) {
           if (row.source_available && !row.active) {
-            const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/install-dependency", {
+            const planResponse = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/dependencies/plan", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({ dependency: row.key })
+            });
+            const planResult = await planResponse.json();
+            if (!planResponse.ok) {
+              showResult(setupResult, planResult, true);
+              return;
+            }
+            const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/dependencies/install", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
                 "Idempotency-Key": createRequestIdempotencyKey("setup-install-required-" + row.key)
               },
-              body: JSON.stringify({ dependency: row.key })
+              body: JSON.stringify({
+                plan_id: planResult.plan && planResult.plan.plan_id,
+                confirm_install: true
+              })
             });
             const result = await response.json();
             if (!response.ok) {
@@ -1939,9 +2043,25 @@
       } else if (action === "install-agent") {
         endpoint = "/api/projects/" + encodeURIComponent(slug) + "/install-agent";
         successTitle = "Site Factory Agent installed.";
-      } else if (action === "install-dependency") {
-        endpoint = "/api/projects/" + encodeURIComponent(slug) + "/install-dependency";
+      } else if (action === "preview-dependency") {
+        endpoint = "/api/projects/" + encodeURIComponent(slug) + "/dependencies/plan";
         payload = { dependency: dependencyKey };
+        successTitle = "Managed package verified.";
+      } else if (action === "install-dependency") {
+        const plan = dependencyInstallPlans[dependencyKey] && dependencyInstallPlans[dependencyKey].plan;
+        const confirm = Array.from(document.querySelectorAll("[data-dependency-confirm]"))
+          .find((element) => String(element.getAttribute("data-dependency-confirm") || "") === String(dependencyKey || ""));
+        if (!plan || !plan.plan_id) {
+          throw new Error("Preview this managed package before installing it.");
+        }
+        if (!confirm || !confirm.checked) {
+          throw new Error("Confirm that this verified package should be installed.");
+        }
+        endpoint = "/api/projects/" + encodeURIComponent(slug) + "/dependencies/install";
+        payload = {
+          plan_id: plan.plan_id,
+          confirm_install: true
+        };
         successTitle = "Approved dependency installed.";
       } else {
         throw new Error("Unsupported setup action: " + action);
@@ -1961,6 +2081,15 @@
         return;
       }
 
+      if (action === "preview-dependency" && result.plan) {
+        dependencyInstallPlans[dependencyKey] = {
+          plan: result.plan
+        };
+        renderSetupView();
+      }
+      if (action === "install-dependency") {
+        delete dependencyInstallPlans[dependencyKey];
+      }
       renderSetupResult(result, successTitle);
       await loadProjects();
       await loadProjectOperations(slug, { requestId: generationView.requestId }).catch(() => {});
@@ -1968,7 +2097,8 @@
       showResult(setupResult, { error: error.message }, true);
     } finally {
       setupActionInFlight = false;
-      await loadSetupStatus(setupProjectSlug.value).catch(() => {});
+      const setupRequestId = resetSetupView(setupProjectSlug.value);
+      await loadSetupStatus(setupProjectSlug.value, { requestId: setupRequestId }).catch(() => {});
     }
   }
 
@@ -2210,7 +2340,8 @@
     }
     const setupSlugSnapshot = String(setupProjectSlug.value || "").trim();
     const generateSlugSnapshot = String(generateProjectSlug.value || "").trim();
-    await loadSetupStatus(setupSlugSnapshot);
+    const setupRequestId = resetSetupView(setupSlugSnapshot);
+    await loadSetupStatus(setupSlugSnapshot, { requestId: setupRequestId });
     if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
       return;
     }
@@ -2253,13 +2384,13 @@
 
   setupProjectSlug.addEventListener("change", () => {
     loadProjectsRequestId += 1;
-    loadSetupStatusRequestId += 1;
     preferredSelectedSlug = setupProjectSlug.value;
     planProjectSlug.value = setupProjectSlug.value;
     generateProjectSlug.value = setupProjectSlug.value;
+    const setupRequestId = resetSetupView(setupProjectSlug.value);
     const stateRequestId = resetStateChangeView(setupProjectSlug.value);
     Promise.all([
-      loadSetupStatus(setupProjectSlug.value),
+      loadSetupStatus(setupProjectSlug.value, { requestId: setupRequestId }),
       loadGenerationViewForSelection(setupProjectSlug.value),
       loadManagedState(setupProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(setupProjectSlug.value)
@@ -2270,13 +2401,13 @@
 
   planProjectSlug.addEventListener("change", () => {
     loadProjectsRequestId += 1;
-    loadSetupStatusRequestId += 1;
     preferredSelectedSlug = planProjectSlug.value;
     setupProjectSlug.value = planProjectSlug.value;
     generateProjectSlug.value = planProjectSlug.value;
+    const setupRequestId = resetSetupView(planProjectSlug.value);
     const stateRequestId = resetStateChangeView(planProjectSlug.value);
     Promise.all([
-      loadSetupStatus(planProjectSlug.value),
+      loadSetupStatus(planProjectSlug.value, { requestId: setupRequestId }),
       loadGenerationViewForSelection(planProjectSlug.value),
       loadManagedState(planProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(planProjectSlug.value)
@@ -2286,13 +2417,13 @@
   });
   generateProjectSlug.addEventListener("change", () => {
     loadProjectsRequestId += 1;
-    loadSetupStatusRequestId += 1;
     preferredSelectedSlug = generateProjectSlug.value;
     setupProjectSlug.value = generateProjectSlug.value;
     planProjectSlug.value = generateProjectSlug.value;
+    const setupRequestId = resetSetupView(generateProjectSlug.value);
     const stateRequestId = resetStateChangeView(generateProjectSlug.value);
     Promise.all([
-      loadSetupStatus(generateProjectSlug.value),
+      loadSetupStatus(generateProjectSlug.value, { requestId: setupRequestId }),
       loadGenerationViewForSelection(generateProjectSlug.value),
       loadManagedState(generateProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(generateProjectSlug.value)
@@ -2345,13 +2476,13 @@
       createForm.elements.port.value = "8120";
       preferredSelectedSlug = result.project && result.project.slug ? result.project.slug : "";
       loadProjectsRequestId += 1;
-      loadSetupStatusRequestId += 1;
       await loadProjects();
       if (result.project && result.project.slug) {
         setupProjectSlug.value = result.project.slug;
         planProjectSlug.value = result.project.slug;
         generateProjectSlug.value = result.project.slug;
-        await loadSetupStatus(result.project.slug);
+        const setupRequestId = resetSetupView(result.project.slug);
+        await loadSetupStatus(result.project.slug, { requestId: setupRequestId });
         await loadGenerationViewForSelection(result.project.slug);
       }
     } finally {

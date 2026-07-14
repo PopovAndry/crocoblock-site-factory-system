@@ -213,7 +213,10 @@ async function ensureWordPressFiles(projectState, proofStem) {
 
 async function ensureWordPressInstalled(projectState, proofStem, warnings) {
   const isInstalled = await runWpCli(projectState.runtimePath, proofStem, [
-    "core", "is-installed", "--path=/var/www/html", "--allow-root"
+    "core", "is-installed",
+    "--url=" + projectState.project.wp_url,
+    "--path=/var/www/html",
+    "--allow-root"
   ], {
     logSuffix: "wp-core-is-installed",
     ignoreExitCode: true

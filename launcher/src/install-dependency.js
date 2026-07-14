@@ -1,11 +1,9 @@
 "use strict";
 
-const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const {
   assertSafeRuntimePath,
-  ensureDirectory,
   readProjectBySlug,
   resolveProjectsRoot,
   saveProjectRecord,
@@ -14,89 +12,17 @@ const {
 const { runCommand } = require("./runtime-tools");
 const { waitForUrl } = require("./agent-client");
 const { buildDependencyStateRecord, fetchDependencyStatus } = require("./dependencies");
+const { resolveDependencyDefinition } = require("./dependency-catalog");
+const {
+  createManagedDependencyInstallPlan,
+  readManagedDependencyInstallPlan,
+  resolveCachePackagePath
+} = require("./managed-package-cache");
 
 const DOCKER_TIMEOUT_MS = 180000;
 
-const SUPPORTED_DEPENDENCIES = {
-  "kava": {
-    slug: "kava",
-    type: "theme",
-    wp_slug: "kava"
-  },
-  "jet-engine": {
-    slug: "jet-engine",
-    type: "plugin",
-    wp_slug: "jet-engine"
-  },
-  "jet-smart-filters": {
-    slug: "jet-smart-filters",
-    type: "plugin",
-    wp_slug: "jet-smart-filters"
-  }
-};
-
 function timestampCompact() {
   return new Date().toISOString().replace(/[:.]/g, "-");
-}
-
-function isAbsoluteZipPath(zipPath) {
-  return path.isAbsolute(zipPath) && !/^https?:\/\//i.test(zipPath);
-}
-
-function resolveDependencyDefinition(slug) {
-  const key = String(slug || "").trim().toLowerCase();
-  const dependency = SUPPORTED_DEPENDENCIES[key];
-
-  if (!dependency) {
-    throw new Error(
-      "Unsupported dependency. Allowed values: " + Object.keys(SUPPORTED_DEPENDENCIES).join(", ")
-    );
-  }
-
-  return dependency;
-}
-
-function validateZipSourcePath(zipPath) {
-  const resolvedZipPath = path.resolve(String(zipPath || ""));
-
-  if (!isAbsoluteZipPath(resolvedZipPath)) {
-    throw new Error("ZIP path must be an absolute local filesystem path.");
-  }
-
-  if (path.extname(resolvedZipPath).toLowerCase() !== ".zip") {
-    throw new Error("ZIP path must point to a .zip file.");
-  }
-
-  if (!fs.existsSync(resolvedZipPath)) {
-    throw new Error("ZIP file not found: " + resolvedZipPath);
-  }
-
-  const stat = fs.statSync(resolvedZipPath);
-  if (!stat.isFile()) {
-    throw new Error("ZIP path is not a file: " + resolvedZipPath);
-  }
-
-  return resolvedZipPath;
-}
-
-function copyZipIntoRuntime(runtimePath, dependency, sourceZipPath) {
-  const zipsRoot = path.join(runtimePath, "dependency-zips");
-  const destinationName = dependency.slug + "-" + path.basename(sourceZipPath);
-  const destinationPath = path.join(zipsRoot, destinationName);
-
-  ensureDirectory(zipsRoot);
-
-  if (!destinationPath.startsWith(zipsRoot + path.sep)) {
-    throw new Error("Dependency ZIP destination escaped the runtime dependency-zips directory.");
-  }
-
-  fs.copyFileSync(sourceZipPath, destinationPath);
-
-  return {
-    zipsRoot,
-    destinationPath,
-    containerPath: "/dependency-zips/" + destinationName
-  };
 }
 
 async function runDockerCompose(runtimePath, proofStem, args, options) {
@@ -214,11 +140,11 @@ async function installDependency(options) {
   const projectState = readProjectBySlug(options.slug, projectsRoot);
   projectState.projectsRoot = projectsRoot;
   const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
-  const dependency = resolveDependencyDefinition(options.dependency);
-  const zipSourcePath = validateZipSourcePath(options.zip);
-  const proofId = "dependency-install-" + dependency.slug + "-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
-  const createdAt = new Date().toISOString();
-  const warnings = [];
+  if (options.zip || options.zipPath || options.sourcePath) {
+    const error = new Error("Direct dependency ZIP paths are not accepted. Create a managed dependency install plan first.");
+    error.code = "direct_dependency_zip_not_allowed";
+    throw error;
+  }
 
   if ((projectState.project.runtime && projectState.project.runtime.status) !== "provisioned") {
     throw new Error("Launcher project must be provisioned before dependency install.");
@@ -228,15 +154,37 @@ async function installDependency(options) {
     throw new Error("Site Factory Agent must be installed before dependency install.");
   }
 
+  const managedPlanResult = options.planId
+    ? readManagedDependencyInstallPlan({
+      slug: options.slug,
+      planId: options.planId,
+      projectsRoot
+    })
+    : createManagedDependencyInstallPlan({
+      slug: options.slug,
+      dependency: options.dependency,
+      projectsRoot
+    });
+  const dependency = resolveDependencyDefinition(managedPlanResult.plan.dependency_key);
+  const cachePackagePath = resolveCachePackagePath(
+    projectsRoot,
+    managedPlanResult.plan.cache_ref,
+    managedPlanResult.plan.package
+  );
+  const dependencyZipsPath = path.dirname(cachePackagePath);
+  const containerZipPath = "/dependency-zips/" + path.basename(cachePackagePath);
+  const proofId = "dependency-install-" + dependency.slug + "-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
+  const createdAt = new Date().toISOString();
+  const warnings = [];
+
   await waitForUrl(projectState.project.wp_url);
 
-  const copiedZip = copyZipIntoRuntime(safeRuntimePath, dependency, zipSourcePath);
   const installStatus = await installOrActivateDependency(
     safeRuntimePath,
     proofId,
     dependency,
-    copiedZip.containerPath,
-    copiedZip.zipsRoot,
+    containerZipPath,
+    dependencyZipsPath,
     warnings
   );
 
@@ -248,17 +196,20 @@ async function installDependency(options) {
     proof_id: proofId,
     project_id: projectState.project.project_id,
     slug: projectState.project.slug,
+    dependency_install_plan_id: managedPlanResult.plan.plan_id,
     dependency_slug: dependency.slug,
     dependency_type: dependency.type,
     wp_slug: dependency.wp_slug,
-    zip_source_path: zipSourcePath,
-    zip_copied_path: copiedZip.destinationPath,
+    provider: managedPlanResult.plan.provider,
+    source: managedPlanResult.plan.source,
+    package: managedPlanResult.plan.package,
+    cache_ref: managedPlanResult.plan.cache_ref,
     installed: installStatus.installed,
     active: installStatus.active,
     dependency_state_after: buildDependencyStateRecord(payload, summary, proofId, createdAt),
     blockers_after: summary.blockers,
     can_generate_after: summary.can_generate,
-    legal_source: "user_provided_zip",
+    legal_source: "managed_trusted_catalog",
     applies_changes: true,
     mutation_scope: "launcher_project_runtime_only",
     warnings,

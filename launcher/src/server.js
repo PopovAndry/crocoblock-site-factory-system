@@ -23,7 +23,8 @@ const { provisionProject } = require("./provision");
 const { installAgent } = require("./install-agent");
 const { rotateAgentAuth, revokeAgentAuth } = require("./agent-auth-lifecycle");
 const { installDependency } = require("./install-dependency");
-const { listApprovedDependencySources, resolveApprovedDependencySource } = require("./dependency-sources");
+const { listApprovedDependencySources } = require("./dependency-sources");
+const { createManagedDependencyInstallPlan } = require("./managed-package-cache");
 const { getSetupStatus } = require("./setup");
 const { planProject } = require("./plan");
 const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
@@ -477,6 +478,33 @@ function buildOperationResponse(result, payload) {
     proof_ref: operation && operation.proof_ref ? operation.proof_ref : null,
     idempotent_replay: result.idempotentReplay === true
   });
+}
+
+function assertNoClientPackageSource(payload) {
+  const forbiddenFields = [
+    "zip",
+    "zip_path",
+    "zipPath",
+    "source_path",
+    "sourcePath",
+    "path",
+    "url",
+    "checksum",
+    "sha256",
+    "cache_path",
+    "cachePath",
+    "absolutePath"
+  ];
+
+  for (const field of forbiddenFields) {
+    if (Object.prototype.hasOwnProperty.call(payload || {}, field)) {
+      throw createStructuredError(
+        "Dependency package sources are resolved by the trusted Launcher catalog only.",
+        "client_dependency_source_not_allowed",
+        400
+      );
+    }
+  }
 }
 
 function planProofPathForRun(projectState, runId) {
@@ -1102,15 +1130,35 @@ function createLauncherServer(options) {
         return;
       }
 
-      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname)) {
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/dependencies\/plan$/.test(requestUrl.pathname)) {
         const payload = await readJsonPayload(request);
+        assertNoClientPackageSource(payload);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
-        const approvedSource = resolveApprovedDependencySource(payload.dependency);
+        const result = createManagedDependencyInstallPlan({
+          slug,
+          dependency: payload.dependency,
+          projectsRoot
+        });
 
-        if (!approvedSource.exists) {
-          const missingError = new Error("Approved dependency ZIP is missing for " + approvedSource.key + ".");
-          missingError.code = "approved_dependency_zip_missing";
-          throw missingError;
+        sendJson(response, 200, {
+          ok: true,
+          status: "planned",
+          project: summarizeProjectForSite(result.project),
+          dependency: result.dependency.slug,
+          plan: result.summary
+        });
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/dependencies\/install$/.test(requestUrl.pathname)) {
+        const payload = await readJsonPayload(request);
+        assertNoClientPackageSource(payload);
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        if (payload.confirm_install !== true) {
+          throw createStructuredError("Dependency install requires explicit confirmation.", "dependency_install_confirmation_required", 400);
+        }
+        if (!payload.plan_id) {
+          throw createStructuredError("Dependency install requires a managed install plan.", "dependency_install_plan_required", 400);
         }
 
         const operationResult = await runProjectOperation({
@@ -1121,16 +1169,15 @@ function createLauncherServer(options) {
           fingerprintInput: {
             project_slug: slug,
             operation_type: "install_dependency",
-            dependency_key: approvedSource.key
+            plan_id: payload.plan_id
           },
           metadata: {
-            dependency_key: approvedSource.key
+            plan_id: payload.plan_id
           },
           execute: async () => {
             const result = await installDependency({
               slug,
-              dependency: payload.dependency,
-              zip: approvedSource.absolutePath,
+              planId: payload.plan_id,
               projectsRoot
             });
             return {
@@ -1138,7 +1185,72 @@ function createLauncherServer(options) {
               proofRef: result.proofPath,
               resultSummary: {
                 status: "ok",
-                dependency_key: result.dependency && result.dependency.slug || approvedSource.key,
+                dependency_key: result.dependency && result.dependency.slug || null,
+                plan_id: payload.plan_id,
+                installed: result.proof && result.proof.installed === true,
+                active: result.proof && result.proof.active === true,
+                can_generate_after: result.proof && result.proof.can_generate_after === true
+              }
+            };
+          }
+        });
+        if (operationResult.idempotentReplay) {
+          sendJson(response, 200, buildOperationResponse(operationResult, {
+            ok: true,
+            status: "replayed"
+          }));
+          return;
+        }
+        const result = operationResult.result;
+
+        sendJson(response, 200, buildOperationResponse(operationResult, {
+          ok: true,
+          project: summarizeProjectForSite(result.project),
+          dependency: result.dependency.slug,
+          proof: result.proof,
+          proof_path: result.proofPath
+        }));
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname)) {
+        const payload = await readJsonPayload(request);
+        assertNoClientPackageSource(payload);
+        const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
+        const planResult = createManagedDependencyInstallPlan({
+          slug,
+          dependency: payload.dependency,
+          projectsRoot
+        });
+
+        const operationResult = await runProjectOperation({
+          slug,
+          projectsRoot,
+          operationType: "install_dependency",
+          idempotencyKey: getRequestIdempotencyKey(request),
+          fingerprintInput: {
+            project_slug: slug,
+            operation_type: "install_dependency",
+            dependency_key: planResult.dependency.slug,
+            plan_id: planResult.plan.plan_id
+          },
+          metadata: {
+            dependency_key: planResult.dependency.slug,
+            plan_id: planResult.plan.plan_id
+          },
+          execute: async () => {
+            const result = await installDependency({
+              slug,
+              planId: planResult.plan.plan_id,
+              projectsRoot
+            });
+            return {
+              result,
+              proofRef: result.proofPath,
+              resultSummary: {
+                status: "ok",
+                dependency_key: result.dependency && result.dependency.slug || planResult.dependency.slug,
+                plan_id: planResult.plan.plan_id,
                 installed: result.proof && result.proof.installed === true,
                 active: result.proof && result.proof.active === true,
                 can_generate_after: result.proof && result.proof.can_generate_after === true
@@ -1889,6 +2001,8 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/agent-auth\/rotate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/agent-auth\/revoke$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/dependencies\/plan$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/dependencies\/install$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/install-dependency$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname) ||

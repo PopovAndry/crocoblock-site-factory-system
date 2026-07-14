@@ -72,6 +72,7 @@ Start with:
 - [release-checklist.md](release-checklist.md)
 - [evaluator-script.md](evaluator-script.md)
 - [alpha-v0.1-release-notes.md](alpha-v0.1-release-notes.md)
+- [managed-dependency-cache.md](managed-dependency-cache.md)
 - [live-ai-safe-apply-demo-script.md](live-ai-safe-apply-demo-script.md)
 - [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md)
 - [demo-script.md](demo-script.md)
@@ -87,10 +88,11 @@ Start with:
 3. Read [evaluator-script.md](evaluator-script.md) for the final read-only evaluator walkthrough.
 4. Read [alpha-v0.1-release-notes.md](alpha-v0.1-release-notes.md) for the alpha release summary and scope.
 5. Read [live-ai-safe-apply-proof-pack.md](live-ai-safe-apply-proof-pack.md) for the current proof chain and reviewer notes.
-6. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
-7. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
-8. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
-9. Read [project-operation-coordinator.md](../architecture/project-operation-coordinator.md) for the project-wide mutation lock and idempotency model.
+6. Read [managed-dependency-cache.md](managed-dependency-cache.md) for the package trust boundary used by dependency onboarding.
+7. Read [proof-pack.md](proof-pack.md) for the earlier alpha baseline artifacts.
+8. Read [known-limitations.md](known-limitations.md) to understand what is still intentionally incomplete.
+9. Read [next-steps.md](next-steps.md) for the recommended sequence after this alpha.
+10. Read [project-operation-coordinator.md](../architecture/project-operation-coordinator.md) for the project-wide mutation lock and idempotency model.
 
 ## One-command Read-only Smoke
 

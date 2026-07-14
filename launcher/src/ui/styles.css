@@ -389,6 +389,15 @@ body {
   margin-top: 14px;
 }
 
+.setup-confirm {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
 .generate-action-row {
   display: flex;
   flex-wrap: wrap;

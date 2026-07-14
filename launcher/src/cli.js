@@ -86,7 +86,7 @@ function printUsage() {
     "  node launcher/src/cli.js install-agent --slug kyiv-realty [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js plan --slug kyiv-realty --prompt \"Create a real estate site for Kyiv apartments\" [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js dependencies --slug kyiv-realty [--projects-root \"C:\\sf-factory-projects\"]",
-    "  node launcher/src/cli.js install-dependency --slug kyiv-realty --dependency jet-engine --zip \"C:\\sf-vendor\\jet-engine.zip\" [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
+    "  node launcher/src/cli.js install-dependency --slug kyiv-realty --dependency jet-engine [--idempotency-key <key>] [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty status [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --mode mock --model-profile balanced [--projects-root \"C:\\sf-factory-projects\"]",
     "  node launcher/src/cli.js ai --slug kyiv-realty configure --provider openai --model-profile balanced --key-env FACTORY_OPENAI_API_KEY [--projects-root \"C:\\sf-factory-projects\"]",
@@ -311,8 +311,8 @@ async function runInstallDependency(flags) {
     throw new Error("install-dependency requires --dependency <dependency-slug>.");
   }
 
-  if (!flags.zip) {
-    throw new Error("install-dependency requires --zip \"<absolute-zip-path>\".");
+  if (flags.zip) {
+    throw new Error("install-dependency no longer accepts --zip. Packages are resolved from the managed trusted catalog.");
   }
 
   const operationResult = await runCoordinatedCliOperation(
@@ -331,7 +331,6 @@ async function runInstallDependency(flags) {
       const result = await installDependency({
         slug: flags.slug,
         dependency: flags.dependency,
-        zip: flags.zip,
         projectsRoot: flags["projects-root"]
       });
       return {
