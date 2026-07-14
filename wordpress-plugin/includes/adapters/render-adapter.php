@@ -132,6 +132,10 @@ class Factory_Render_Adapter {
 			$styles[] = '.factory-generated-properties-page .entry-title,.factory-generated-properties-page .page-title,.factory-generated-properties-page .post-title,.factory-generated-properties-page .page-header,.factory-generated-properties-page .entry-header,.factory-generated-properties-page .site-main > h1,.factory-generated-properties-page main > h1{display:none!important;}';
 		}
 
+		if ( $this->is_generated_home_page_request() ) {
+			$styles[] = '.factory-generated-home-page .entry-title,.factory-generated-home-page .page-title,.factory-generated-home-page .post-title,.factory-generated-home-page .page-header,.factory-generated-home-page .entry-header,.factory-generated-home-page .site-main > h1,.factory-generated-home-page main > h1{display:none!important;}';
+		}
+
 		if ( $this->is_generated_home_page_request() || $this->is_generated_archive_page_request() || $this->is_generated_contact_page_request() || is_singular( 'property' ) ) {
 			$styles[] = '.factory-generated-home-page .site-title,.factory-generated-home-page .site-title a,.factory-generated-home-page .site-logo,.factory-generated-home-page .site-logo a,.factory-generated-home-page .site-logo__link,.factory-generated-home-page .site-branding a,.factory-generated-home-page .custom-logo-link,.factory-generated-properties-page .site-title,.factory-generated-properties-page .site-title a,.factory-generated-properties-page .site-logo,.factory-generated-properties-page .site-logo a,.factory-generated-properties-page .site-logo__link,.factory-generated-properties-page .site-branding a,.factory-generated-properties-page .custom-logo-link,.factory-generated-contact-page .site-title,.factory-generated-contact-page .site-title a,.factory-generated-contact-page .site-logo,.factory-generated-contact-page .site-logo a,.factory-generated-contact-page .site-logo__link,.factory-generated-contact-page .site-branding a,.factory-generated-contact-page .custom-logo-link,.factory-generated-property-single-page .site-title,.factory-generated-property-single-page .site-title a,.factory-generated-property-single-page .site-logo,.factory-generated-property-single-page .site-logo a,.factory-generated-property-single-page .site-logo__link,.factory-generated-property-single-page .site-branding a,.factory-generated-property-single-page .custom-logo-link{color:' . $primary . '!important;}';
 			$styles[] = '.factory-generated-home-page .main-navigation a,.factory-generated-home-page .menu a,.factory-generated-home-page nav a,.factory-generated-properties-page .main-navigation a,.factory-generated-properties-page .menu a,.factory-generated-properties-page nav a,.factory-generated-contact-page .main-navigation a,.factory-generated-contact-page .menu a,.factory-generated-contact-page nav a,.factory-generated-property-single-page .main-navigation a,.factory-generated-property-single-page .menu a,.factory-generated-property-single-page nav a{color:' . $primary . '!important;}';
@@ -153,6 +157,7 @@ class Factory_Render_Adapter {
 
 	public function apply( array $blueprint ): void {
 		$this->execution_results = [];
+		$this->sync_public_site_brand( $blueprint );
 
 		foreach ( $blueprint['listings'] ?? [] as $listing ) {
 			$result = $this->upsert_listing_page( $listing );
@@ -191,6 +196,7 @@ class Factory_Render_Adapter {
 
 	public function apply_safe_field_refresh( array $blueprint, array $page_keys = [ 'home', 'native_filters', 'contact' ], bool $sync_front_page = true ): array {
 		$this->execution_results = [];
+		$this->sync_public_site_brand( $blueprint );
 
 		foreach ( $page_keys as $page_key ) {
 			if ( ! is_string( $page_key ) || '' === trim( $page_key ) ) {
@@ -213,6 +219,12 @@ class Factory_Render_Adapter {
 		}
 
 		return $this->execution_results;
+	}
+
+	private function sync_public_site_brand( array $blueprint ): void {
+		if ( function_exists( 'factory_sync_public_site_identity' ) ) {
+			factory_sync_public_site_identity( $blueprint );
+		}
 	}
 
 	public function get_execution_results(): array {
@@ -2965,6 +2977,9 @@ class Factory_Render_Adapter {
 		$home         = $this->get_configured_page( $blueprint, 'home' );
 		$sections     = is_array( $home['sections'] ?? null ) ? $home['sections'] : [];
 		$style_tokens = $this->get_site_style_tokens( $blueprint );
+		$brand        = function_exists( 'factory_rest_get_real_estate_public_brand' )
+			? factory_rest_get_real_estate_public_brand( $blueprint )
+			: (string) ( $home['title'] ?? 'Kyiv Turquoise Realty' );
 		$primary      = $style_tokens['primary'];
 		$accent       = $style_tokens['accent'];
 		$background   = $style_tokens['background'];
@@ -2973,8 +2988,7 @@ class Factory_Render_Adapter {
 		$muted        = $style_tokens['muted'];
 		$border       = $style_tokens['border'];
 		$hero_image   = plugins_url( '../../assets/real-estate/hero/kyiv-panorama.png', __FILE__ );
-		$html         = '<style>body.front-page .entry-title, body.front-page .page-title, body.home .entry-title, body.home .page-title { display: none !important; }</style>';
-		$html        .= '<div class="factory-home-page" style="background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $text ) . '; margin: -40px 0 0;">';
+		$html         = '<div class="factory-home-page" style="background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $text ) . '; margin: -40px 0 0;">';
 
 		foreach ( $sections as $section ) {
 			if ( ! is_array( $section ) ) {
@@ -2991,6 +3005,7 @@ class Factory_Render_Adapter {
 				$hero_variant = sanitize_key( (string) ( $section['variant'] ?? 'image_left_scrim' ) );
 				$html        .= $this->render_home_hero_section(
 					$hero_variant,
+					(string) $brand,
 					(string) $title,
 					(string) $subtitle,
 					(string) $cta_label,
@@ -3037,6 +3052,7 @@ class Factory_Render_Adapter {
 
 	private function render_home_hero_section(
 		string $hero_variant,
+		string $brand,
 		string $title,
 		string $subtitle,
 		string $cta_label,
@@ -3057,7 +3073,7 @@ class Factory_Render_Adapter {
 			$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: radial-gradient(circle at 50% 38%, rgba(15, 23, 42, 0.18) 0%, rgba(15, 23, 42, 0.42) 28%, rgba(15, 23, 42, 0.16) 58%, rgba(15, 23, 42, 0.02) 100%);"></div>';
 			$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
 			$html .= '<div style="max-width: 760px; margin: 0 auto; text-align: center;">';
-			$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">Kyiv Turquoise Realty</span>';
+			$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">' . esc_html( $brand ) . '</span>';
 			$html .= '<h1 style="font-size: clamp(40px, 5.2vw, 70px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
 			$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.94); margin: 0 auto 28px; max-width: 620px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';
 			$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: ' . esc_attr( $button ) . '; color: ' . esc_attr( $button_text ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';
@@ -3071,7 +3087,7 @@ class Factory_Render_Adapter {
 		$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5, 30, 28, 0.55) 0%, rgba(7, 47, 43, 0.38) 32%, rgba(15, 118, 110, 0.1) 58%, rgba(15, 118, 110, 0) 100%);"></div>';
 		$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
 		$html .= '<div style="max-width: 700px;">';
-		$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">Kyiv Turquoise Realty</span>';
+		$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">' . esc_html( $brand ) . '</span>';
 		$html .= '<h1 style="font-size: clamp(38px, 5vw, 68px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
 		$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.92); margin: 0 0 28px; max-width: 640px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';
 		$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; border-radius: 999px; background: ' . esc_attr( $button ) . '; color: ' . esc_attr( $button_text ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';

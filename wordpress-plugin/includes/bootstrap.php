@@ -110,6 +110,7 @@ function factory_apply_blueprint( array $blueprint ): array {
 	$execution = [];
 
 	update_option( FACTORY_BLUEPRINT_OPTION, $blueprint );
+	factory_sync_public_site_identity( $blueprint );
 
 	$permalink = $blueprint['site']['permalink'] ?? '/%postname%/';
 	update_option( 'permalink_structure', $permalink );
@@ -126,6 +127,14 @@ function factory_apply_blueprint( array $blueprint ): array {
 	flush_rewrite_rules();
 
 	return $execution;
+}
+
+function factory_sync_public_site_identity( array $blueprint ): void {
+	$site_name = is_string( $blueprint['site']['name'] ?? null ) ? trim( $blueprint['site']['name'] ) : '';
+
+	if ( '' !== $site_name ) {
+		update_option( 'blogname', $site_name );
+	}
 }
 
 function factory_validate_blueprint_state( array $blueprint, bool $cli_output = true ): array {

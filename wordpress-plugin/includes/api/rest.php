@@ -697,17 +697,24 @@ function factory_register_rest_routes(): void {
         $home         = is_array( $blueprint['pages']['home'] ?? null ) ? $blueprint['pages']['home'] : [];
         $contact      = is_array( $blueprint['pages']['contact'] ?? null ) ? $blueprint['pages']['contact'] : [];
         $hero_section = factory_rest_find_real_estate_home_section( $home, 'hero' );
+        $brand        = factory_rest_get_real_estate_public_brand( $blueprint );
 
         return [
             'agency_name'   => (string) ( $blueprint['site']['name'] ?? $home['title'] ?? 'Kyiv Turquoise Realty' ),
             'hero_title'    => (string) ( $hero_section['title'] ?? 'Find Your Place in Kyiv' ),
             'hero_subtitle' => (string) ( $hero_section['subtitle'] ?? 'Explore apartments, houses, and commercial spaces across Kyiv.' ),
             'hero_cta_text' => (string) ( $hero_section['cta_label'] ?? 'Browse properties' ),
-            'contact_title' => (string) ( $contact['title'] ?? 'Contact Kyiv Turquoise Realty' ),
+            'contact_title' => (string) ( $contact['title'] ?? factory_rest_build_real_estate_contact_title( $brand ) ),
             'contact_intro' => (string) ( $contact['text'] ?? 'Schedule a viewing or request more details about properties in Kyiv.' ),
             'phone'         => (string) ( $contact['phone'] ?? '+380 44 000 0000' ),
             'email'         => (string) ( $contact['email'] ?? $blueprint['site']['forms']['request_viewing']['fallback_email'] ?? 'hello@example.com' ),
         ];
+    }
+
+    function factory_rest_build_real_estate_contact_title( string $brand ): string {
+        $brand = trim( $brand );
+
+        return '' !== $brand ? 'Contact ' . $brand : 'Contact Kyiv Turquoise Realty';
     }
 
     function factory_rest_get_real_estate_public_brand( array $blueprint ): string {
@@ -717,14 +724,13 @@ function factory_register_rest_routes(): void {
             return $site_name;
         }
 
-        $defaults = factory_rest_get_real_estate_variable_defaults( $blueprint );
-        $brand    = is_string( $defaults['agency_name'] ?? null ) ? trim( $defaults['agency_name'] ) : '';
+        $home  = is_array( $blueprint['pages']['home'] ?? null ) ? $blueprint['pages']['home'] : [];
+        $brand = is_string( $home['title'] ?? null ) ? trim( $home['title'] ) : '';
 
         if ( '' !== $brand ) {
             return $brand;
         }
 
-        $home       = is_array( $blueprint['pages']['home'] ?? null ) ? $blueprint['pages']['home'] : [];
         $home_title = is_string( $home['title'] ?? null ) ? trim( $home['title'] ) : '';
 
         return '' !== $home_title ? $home_title : 'Kyiv Turquoise Realty';
@@ -751,6 +757,10 @@ function factory_register_rest_routes(): void {
         if ( isset( $variables['agency_name'] ) ) {
             $blueprint['site']['name'] = $variables['agency_name'];
             $blueprint['pages']['home']['title'] = $variables['agency_name'];
+
+            if ( ! isset( $variables['contact_title'] ) ) {
+                $blueprint['pages']['contact']['title'] = factory_rest_build_real_estate_contact_title( (string) $variables['agency_name'] );
+            }
         }
 
         foreach ( $blueprint['pages']['home']['sections'] ?? [] as $index => $section ) {

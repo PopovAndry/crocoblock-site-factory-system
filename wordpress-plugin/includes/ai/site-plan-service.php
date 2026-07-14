@@ -565,6 +565,9 @@ function factory_ai_site_plan_clamp_text( $value, int $max ): string {
 }
 
 function factory_ai_site_plan_clean_business_name( string $value ): string {
+	$value = preg_replace( '/^(?:please\s+)?(?:create|build|generate|make|use|launch|start)\s+(?:the\s+)?(?:canonical\s+)?/i', '', $value );
+	$value = preg_replace( '/^(?:the\s+)?canonical\s+/i', '', $value );
+	$value = preg_replace( '/\s+(?:website|site|demo)\b.*$/i', '', $value );
 	$value = preg_replace( '/\s+(with|in|for|that|and)\s+.*$/i', '', $value );
 	$value = trim( sanitize_text_field( $value ), " \t\n\r\0\x0B.,;:" );
 

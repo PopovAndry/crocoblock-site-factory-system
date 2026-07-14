@@ -10,6 +10,7 @@ const presetPath = path.join(repoRoot, "wordpress-plugin", "presets", "real-esta
 const renderAdapterPath = path.join(repoRoot, "wordpress-plugin", "includes", "adapters", "render-adapter.php");
 const singleAdapterPath = path.join(repoRoot, "wordpress-plugin", "includes", "adapters", "single-adapter.php");
 const restApiPath = path.join(repoRoot, "wordpress-plugin", "includes", "api", "rest.php");
+const bootstrapPath = path.join(repoRoot, "wordpress-plugin", "includes", "bootstrap.php");
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf8");
@@ -51,4 +52,21 @@ test("real estate public fallbacks stay aligned to the Kyiv story", () => {
   assert.match(restApi, /'contact_intro'\s*=>\s*\(string\)\s*\(\s*\$contact\['text'\]\s*\?\?\s*'Schedule a viewing or request more details about properties in Kyiv\.'\s*\)/);
   assert.ok(restApi.includes("function factory_rest_get_real_estate_public_brand( array $blueprint ): string"));
   assert.ok(restApi.includes("function factory_rest_get_real_estate_footer_description( array $blueprint ): string"));
+  assert.ok(restApi.includes("function factory_rest_build_real_estate_contact_title( string $brand ): string"));
+});
+
+test("real estate home renderer keeps theme page titles out of the public body content", () => {
+  const renderAdapter = readText(renderAdapterPath);
+
+  assert.ok(renderAdapter.includes(".factory-generated-home-page .entry-title"));
+  assert.ok(!renderAdapter.includes("$html         = '<style>body.front-page .entry-title"));
+  assert.ok(renderAdapter.includes("factory_rest_get_real_estate_public_brand( $blueprint )"));
+  assert.ok(renderAdapter.includes("string $brand,"));
+});
+
+test("public site identity sync prefers the generated agency brand over the Factory project display name", () => {
+  const bootstrap = readText(bootstrapPath);
+
+  assert.ok(bootstrap.includes("factory_sync_public_site_identity( $blueprint );"));
+  assert.ok(bootstrap.includes("update_option( 'blogname', $site_name );"));
 });

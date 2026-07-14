@@ -10,6 +10,7 @@ function factory_ai_interpret_prompt_local( string $prompt, array $current_conte
 
 	$city     = factory_ai_interpreter_detect_city( $prompt );
 	$business = factory_ai_interpreter_detect_business_name( $prompt, $city );
+	$canonical_request = factory_ai_interpreter_is_canonical_request( $prompt );
 	$vertical = factory_ai_interpreter_detect_vertical( $lower );
 	$features = factory_ai_interpreter_requested_features( $lower );
 	$unsupported = factory_ai_interpreter_unsupported_requests( $lower );
@@ -27,8 +28,15 @@ function factory_ai_interpret_prompt_local( string $prompt, array $current_conte
 		$city      = 'Kyiv';
 	}
 
-	$hero_subtitle = sprintf( 'Find apartments, houses, and commercial spaces in %s', $city );
-	$hero_cta_text = false !== strpos( $lower, 'featured' ) ? 'View featured homes' : factory_ai_interpreter_context_value( $current_context, 'preset_variables', 'hero_cta_text', 'Browse properties' );
+	$hero_title = $canonical_request
+		? factory_ai_interpreter_build_canonical_hero_title( $city )
+		: $business;
+	$hero_subtitle = $canonical_request
+		? factory_ai_interpreter_build_canonical_hero_subtitle( $city )
+		: sprintf( 'Find apartments, houses, and commercial spaces in %s', $city );
+	$hero_cta_text = $canonical_request
+		? 'Browse properties'
+		: ( false !== strpos( $lower, 'featured' ) ? 'View featured homes' : factory_ai_interpreter_context_value( $current_context, 'preset_variables', 'hero_cta_text', 'Browse properties' ) );
 	$contact_intro = sprintf( 'Schedule a viewing or request more details about %s properties.', $city );
 	$phone = '' !== $phone ? $phone : factory_ai_interpreter_context_value( $current_context, 'preset_variables', 'phone', '' );
 	$email = '' !== $email ? $email : factory_ai_interpreter_context_value( $current_context, 'preset_variables', 'email', '' );
@@ -42,7 +50,7 @@ function factory_ai_interpret_prompt_local( string $prompt, array $current_conte
 		'recommended_preset'               => 'real-estate',
 		'preset_variables'                 => [
 			'agency_name'   => $business,
-			'hero_title'    => $business,
+			'hero_title'    => $hero_title,
 			'hero_subtitle' => $hero_subtitle,
 			'hero_cta_text' => $hero_cta_text,
 			'contact_title' => 'Contact ' . $business,
@@ -123,10 +131,29 @@ function factory_ai_interpreter_detect_business_name( string $prompt, string $ci
 }
 
 function factory_ai_interpreter_clean_business_name( string $value ): string {
+	$value = preg_replace( '/^(?:please\s+)?(?:create|build|generate|make|use|launch|start)\s+(?:the\s+)?(?:canonical\s+)?/i', '', $value );
+	$value = preg_replace( '/^(?:the\s+)?canonical\s+/i', '', $value );
+	$value = preg_replace( '/\s+(?:website|site|demo)\b.*$/i', '', $value );
 	$value = preg_replace( '/\s+(with|in|for|that|and)\s+.*$/i', '', $value );
 	$value = trim( sanitize_text_field( $value ), " \t\n\r\0\x0B.,;:" );
 
 	return factory_ai_clamp_prompt_string( $value, 80 );
+}
+
+function factory_ai_interpreter_is_canonical_request( string $prompt ): bool {
+	return (bool) preg_match( '/\bcanonical\b/i', $prompt );
+}
+
+function factory_ai_interpreter_build_canonical_hero_title( string $city ): string {
+	$city = '' !== trim( $city ) ? $city : 'Kyiv';
+
+	return factory_ai_clamp_prompt_string( sprintf( 'Find Your Place in %s', $city ), 120 );
+}
+
+function factory_ai_interpreter_build_canonical_hero_subtitle( string $city ): string {
+	$city = '' !== trim( $city ) ? $city : 'Kyiv';
+
+	return factory_ai_clamp_prompt_string( sprintf( 'Explore apartments, houses, and commercial spaces across %s.', $city ), 240 );
 }
 
 function factory_ai_interpreter_detect_enum( string $lower, array $allowed, string $fallback ): string {

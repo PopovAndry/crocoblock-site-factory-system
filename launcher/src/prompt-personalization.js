@@ -1,11 +1,16 @@
 "use strict";
 
 const APPLY_FIELD_ORDER = ["agency_name", "hero_title", "hero_subtitle", "hero_cta_text"];
+const INSTRUCTION_PREFIX_PATTERN = /^(?:please\s+)?(?:create|build|generate|make|use|launch|start)\s+(?:the\s+)?(?:canonical\s+)?/i;
+const QUOTED_VALUE_PATTERNS = [
+  /(?:agency|brand|company|name)\s*["“]([^"”]{2,80})["”]/iu,
+  /["“]([^"”]{2,80})["”]\s+(?:real estate|realty|properties|agency|website|site)\b/i
+];
 const CITY_DEFINITIONS = [
-  { value: "Kyiv", patterns: [/\bkyiv\b/i, /\bкиїв(?:а|у|і|ом)?\b/i, /\bкиев(?:а|у|е|ом)?\b/i] },
-  { value: "Odesa", patterns: [/\bodesa\b/i, /\bodessa\b/i, /\bодеса\b/i, /\bодес(?:а|у|і|ой)?\b/i] },
-  { value: "Lviv", patterns: [/\blviv\b/i, /\bльвів(?:а|у|і|ом)?\b/i, /\bльвов(?:а|у|е|ом)?\b/i] },
-  { value: "Mykolaiv", patterns: [/\bmykolaiv\b/i, /\bnikolaev\b/i, /\bмиколаїв(?:а|у|і|ом)?\b/i, /\bниколаев(?:а|у|е|ом)?\b/i] }
+  { value: "Kyiv", patterns: [/\bkyiv\b/i, /\bРєРёС—РІ(?:Р°|Сѓ|С–|РѕРј)?\b/i, /\bРєРёРµРІ(?:Р°|Сѓ|Рµ|РѕРј)?\b/i] },
+  { value: "Odesa", patterns: [/\bodesa\b/i, /\bodessa\b/i, /\bРѕРґРµСЃР°\b/i, /\bРѕРґРµСЃ(?:Р°|Сѓ|С–|РѕР№)?\b/i] },
+  { value: "Lviv", patterns: [/\blviv\b/i, /\bР»СЊРІС–РІ(?:Р°|Сѓ|С–|РѕРј)?\b/i, /\bР»СЊРІРѕРІ(?:Р°|Сѓ|Рµ|РѕРј)?\b/i] },
+  { value: "Mykolaiv", patterns: [/\bmykolaiv\b/i, /\bnikolaev\b/i, /\bРјРёРєРѕР»Р°С—РІ(?:Р°|Сѓ|С–|РѕРј)?\b/i, /\bРЅРёРєРѕР»Р°РµРІ(?:Р°|Сѓ|Рµ|РѕРј)?\b/i] }
 ];
 
 function clampText(value, max) {
@@ -37,21 +42,52 @@ function cleanAgencyName(value) {
   return clampText(
     String(value || "")
       .replace(/^[\s"'`]+|[\s"'`]+$/g, "")
-      .replace(/\s+(?:для|for|in|with|та|and)\b.*$/i, "")
+      .replace(INSTRUCTION_PREFIX_PATTERN, "")
+      .replace(/^(?:the\s+)?canonical\s+/i, "")
+      .replace(/\s+(?:website|site|demo)\b.*$/i, "")
+      .replace(/\s+(?:РґР»СЏ|for|in|with|С‚Р°|and)\b.*$/i, "")
       .replace(/[.,;:]+$/g, "")
       .trim(),
     80
   );
 }
 
+function isCanonicalPresetRequest(prompt) {
+  return /\bcanonical\b/i.test(String(prompt || ""));
+}
+
+function buildCanonicalHeroTitle(city) {
+  return clampText("Find Your Place in " + city, 120);
+}
+
+function buildCanonicalHeroSubtitle(city) {
+  return clampText("Explore apartments, houses, and commercial spaces across " + city + ".", 240);
+}
+
+function buildCanonicalHeroCtaText() {
+  return "Browse properties";
+}
+
 function detectAgencyName(prompt, city) {
+  const sourcePrompt = String(prompt || "");
+
+  for (const pattern of QUOTED_VALUE_PATTERNS) {
+    const match = sourcePrompt.match(pattern);
+    if (match && match[1]) {
+      const cleaned = cleanAgencyName(match[1]);
+      if (cleaned) {
+        return cleaned;
+      }
+    }
+  }
+
   const patterns = [
-    /(?:агентство|agency|brand|company|назва)\s+([A-ZА-ЯІЇЄҐ][A-ZА-ЯІЇЄҐA-Za-z0-9 &'’`.-]{2,80})/iu,
-    /([A-Z][A-Za-z0-9 &'’`.-]{2,80})\s+(?:agency|realty|properties|real estate)/i
+    /(?:agency|brand|company|name)\s+([\p{Lu}][\p{L}0-9 &'’`.-]{2,80})/iu,
+    /([\p{Lu}][\p{L}0-9 &'’`.-]{2,80})\s+(?:agency|realty|properties|real estate)/iu
   ];
 
   for (const pattern of patterns) {
-    const match = prompt.match(pattern);
+    const match = sourcePrompt.match(pattern);
     if (match && match[1]) {
       const cleaned = cleanAgencyName(match[1]);
       if (cleaned) {
@@ -68,21 +104,21 @@ function detectAgencyName(prompt, city) {
 }
 
 function detectToneAndStyle(lowerPrompt) {
-  if (/(преміаль|premium|luxury|люкс)/i.test(lowerPrompt)) {
+  if (/(РїСЂРµРјС–Р°Р»СЊ|premium|luxury|Р»СЋРєСЃ)/i.test(lowerPrompt)) {
     return {
       tone: "premium",
       style_slug: "slate"
     };
   }
 
-  if (/(сімей|family|friendly|тепл)/i.test(lowerPrompt)) {
+  if (/(СЃС–РјРµР№|family|friendly|С‚РµРїР»)/i.test(lowerPrompt)) {
     return {
       tone: "warm",
       style_slug: "beige"
     };
   }
 
-  if (/(modern|сучасн)/i.test(lowerPrompt)) {
+  if (/(modern|СЃСѓС‡Р°СЃРЅ)/i.test(lowerPrompt)) {
     return {
       tone: "modern",
       style_slug: "slate"
@@ -97,9 +133,9 @@ function detectToneAndStyle(lowerPrompt) {
 
 function detectFocus(lowerPrompt) {
   return {
-    apartments: /(квартир|apartments?)/i.test(lowerPrompt),
-    houses: /(будин|houses?)/i.test(lowerPrompt),
-    nearMetro: /(біля метро|near metro|metro)/i.test(lowerPrompt)
+    apartments: /(РєРІР°СЂС‚РёСЂ|apartments?)/i.test(lowerPrompt),
+    houses: /(Р±СѓРґРёРЅ|houses?)/i.test(lowerPrompt),
+    nearMetro: /(Р±С–Р»СЏ РјРµС‚СЂРѕ|near metro|metro)/i.test(lowerPrompt)
   };
 }
 
@@ -154,12 +190,13 @@ function derivePromptPersonalization(prompt) {
   const agencyName = detectAgencyName(sourcePrompt, city);
   const designProfile = detectToneAndStyle(lowerPrompt);
   const focus = detectFocus(lowerPrompt);
+  const canonicalRequest = isCanonicalPresetRequest(sourcePrompt);
   const fields = {
     agency_name: clampText(agencyName, 80),
     city: clampText(city, 80),
-    hero_title: buildHeroTitle(agencyName, city, designProfile.tone),
-    hero_subtitle: buildHeroSubtitle(city, focus, designProfile.tone),
-    hero_cta_text: buildHeroCtaText(city, focus)
+    hero_title: canonicalRequest ? buildCanonicalHeroTitle(city) : buildHeroTitle(agencyName, city, designProfile.tone),
+    hero_subtitle: canonicalRequest ? buildCanonicalHeroSubtitle(city) : buildHeroSubtitle(city, focus, designProfile.tone),
+    hero_cta_text: canonicalRequest ? buildCanonicalHeroCtaText() : buildHeroCtaText(city, focus)
   };
   const warnings = [];
 
