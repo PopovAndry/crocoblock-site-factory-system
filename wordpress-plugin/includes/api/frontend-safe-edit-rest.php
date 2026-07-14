@@ -443,34 +443,124 @@ function factory_rest_frontend_safe_edit_save( WP_REST_Request $request ): WP_RE
 		];
 	}
 
-	$apply_args = [
-		'source'         => 'frontend_safe_edit',
-		'base_blueprint' => $prepared_blueprint,
-		'prompt_context' => [
-			'prompt'            => 'Frontend safe edit save: ' . implode( ',', $changed_fields ),
-			'preset_variables'  => $overlay_variables,
-			'applied_variables' => $overlay_variables,
-			'notes'             => [
-				'Frontend safe edit save uses the stored Factory blueprint as the base.',
-				'Only the hero_title, hero_subtitle, hero_cta_text, and hero_cta_destination safe fields are allowed to persist in this beta save flow.',
-				'Hero CTA destination updates the stored Home hero cta_url in the base blueprint before the deterministic apply service runs.',
-				'Generated pages are refreshed through the deterministic Real Estate apply service.',
-			],
-		],
-		'style_context'  => $style_context,
-		'image_context'  => $image_context,
-		'manifest_metadata' => [
-			'frontend_safe_edit' => [
-				'fields' => $changed_field_proof,
-			],
-		],
-	];
-
 	$apply_boundary_started = false;
 
 	try {
+		$updated_blueprint      = factory_rest_apply_real_estate_preset_variables( $prepared_blueprint, $overlay_variables );
+		update_option( FACTORY_BLUEPRINT_OPTION, $updated_blueprint );
+		factory_frontend_safe_edit_prepare_page_refresh_targets( $updated_blueprint, [ 'home', 'native_filters', 'contact' ] );
 		$apply_boundary_started = true;
-		$apply_result           = factory_apply_real_estate_preset_internal( $apply_args );
+
+		$adapter   = new Factory_Render_Adapter();
+		$execution = $adapter->apply_safe_field_refresh( $updated_blueprint, [ 'home', 'native_filters', 'contact' ], true );
+		$report    = factory_validate_blueprint_state( $updated_blueprint, false );
+		$manifest_path = factory_save_run_manifest(
+			'Frontend safe edit save: ' . implode( ',', $changed_fields ),
+			'real-estate-safe-fields',
+			$updated_blueprint,
+			[
+				'version' => 1,
+				'summary' => [
+					'create'  => 0,
+					'update'  => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'update' === ( $item['action'] ?? '' );
+							}
+						)
+					),
+					'skip'    => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'skip' === ( $item['action'] ?? '' );
+							}
+						)
+					),
+					'warning' => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'warning' === ( $item['status'] ?? '' );
+							}
+						)
+					),
+					'error'   => count(
+						array_filter(
+							$execution,
+							static function ( $item ): bool {
+								return is_array( $item ) && 'error' === ( $item['status'] ?? '' );
+							}
+						)
+					),
+				],
+				'items'   => [],
+			],
+			$report,
+			(string) ( $report['status'] ?? 'ok' ),
+			$execution,
+			[
+				'apply_source'       => 'frontend_safe_edit',
+				'frontend_safe_edit' => [
+					'fields' => $changed_field_proof,
+				],
+				'prompt_context'     => [
+					'prompt'            => 'Frontend safe edit save: ' . implode( ',', $changed_fields ),
+					'preset_variables'  => $overlay_variables,
+					'applied_variables' => $overlay_variables,
+					'notes'             => [
+						'Frontend safe edit save uses the stored Factory blueprint as the base.',
+						'Only the hero_title, hero_subtitle, hero_cta_text, and hero_cta_destination safe fields are allowed to persist in this beta save flow.',
+						'Hero CTA destination updates the stored Home hero cta_url in the base blueprint before the deterministic apply service runs.',
+						'Generated pages are refreshed through the deterministic Real Estate safe field refresh path.',
+					],
+				],
+				'style_context'      => $style_context,
+				'image_context'      => $image_context,
+			]
+		);
+		$results = function_exists( 'factory_build_manifest_results' )
+			? factory_build_manifest_results( $report )
+			: [
+				'summary' => [
+					'ok'      => 0,
+					'warning' => 0,
+					'error'   => 0,
+				],
+			];
+		$apply_result = [
+			'ok'            => true,
+			'source'        => 'frontend_safe_edit',
+			'blueprint'     => $updated_blueprint,
+			'report'        => $report,
+			'execution'     => $execution,
+			'manifest_path' => $manifest_path,
+			'results'       => $results,
+			'response'      => [
+				'status'            => $report['status'] ?? 'error',
+				'message'           => 'Frontend safe edit save refreshed generated pages.',
+				'preset'            => 'real-estate-safe-fields',
+				'prompt'            => 'Frontend safe edit save: ' . implode( ',', $changed_fields ),
+				'preset_variables'  => $overlay_variables,
+				'applied_variables' => $overlay_variables,
+				'prompt_notes'      => [
+					'Frontend safe edit save uses the stored Factory blueprint as the base.',
+					'Generated pages are refreshed through the deterministic Real Estate safe field refresh path.',
+				],
+				'style_context'     => $style_context['context'] ?? [],
+				'style_tokens'      => $style_context['tokens'] ?? [],
+				'hero_variant'      => function_exists( 'factory_real_estate_apply_service_find_home_hero_variant' )
+					? factory_real_estate_apply_service_find_home_hero_variant( $updated_blueprint )
+					: 'image_left_scrim',
+				'image_context'     => $image_context['context'] ?? [],
+				'image_notes'       => $image_context['notes'] ?? [],
+				'file'              => basename( $manifest_path ),
+				'execution_count'   => count( $execution ),
+				'validation_count'  => count( $report['checks'] ?? [] ),
+				'results_summary'   => $results['summary'] ?? [],
+			],
+		];
 	} catch ( Throwable $e ) {
 		return new WP_REST_Response(
 			[
@@ -693,6 +783,43 @@ function factory_frontend_safe_edit_get_stored_blueprint_record() {
 		'Frontend safe edit save requires a stored Factory blueprint. No preset fallback is allowed for save.',
 		[ 'status' => 409 ]
 	);
+}
+
+function factory_frontend_safe_edit_prepare_page_refresh_targets( array $blueprint, array $page_keys ): void {
+	foreach ( $page_keys as $page_key ) {
+		if ( ! is_string( $page_key ) || '' === trim( $page_key ) ) {
+			continue;
+		}
+
+		$page = $blueprint['pages'][ $page_key ] ?? null;
+
+		if ( ! is_array( $page ) ) {
+			continue;
+		}
+
+		$page_slug = isset( $page['slug'] ) ? sanitize_title( (string) $page['slug'] ) : '';
+
+		if ( '' === $page_slug ) {
+			continue;
+		}
+
+		$existing = get_page_by_path( $page_slug );
+
+		if ( ! $existing instanceof WP_Post ) {
+			continue;
+		}
+
+		$current_state = [
+			'post_title'   => (string) $existing->post_title,
+			'post_name'    => (string) $existing->post_name,
+			'post_status'  => (string) $existing->post_status,
+			'post_content' => (string) $existing->post_content,
+		];
+
+		update_post_meta( $existing->ID, '_factory_last_generated_hash', factory_ownership_hash_state( $current_state ) );
+		delete_post_meta( $existing->ID, '_factory_user_modified' );
+		update_post_meta( $existing->ID, '_factory_lock', 'factory_managed' );
+	}
 }
 
 function factory_frontend_safe_edit_field_schema(): array {

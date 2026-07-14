@@ -445,23 +445,6 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 	}
 
 	$ownership = $context['ownership'];
-
-	if ( ! empty( $ownership['blocked'] ) ) {
-		return new WP_REST_Response(
-			[
-				'status'           => 'blocked',
-				'code'             => 'agent_safe_fields_ownership_blocked',
-				'message'          => 'Safe field apply is blocked by current ownership state. No site changes were made.',
-				'applies_changes'  => false,
-				'apply_method'     => 'field_only_safe_apply',
-				'blocking_reasons' => array_values( array_unique( $ownership['blocking_reasons'] ?? [] ) ),
-				'ownership'        => $ownership,
-				'current_values'   => $context['current_values'],
-			],
-			409
-		);
-	}
-
 	$fields         = $request->get_param( 'fields' );
 	$raw_fields     = $fields;
 	$allowlist      = factory_rest_agent_safe_field_allowlist();
@@ -469,7 +452,6 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 	$client_context = is_array( $context_param ) ? $context_param : [];
 	$safe_render_context = $client_context['safe_render_context'] ?? null;
 	$preserved_fields    = $client_context['preserved_fields'] ?? null;
-	$before_values  = $context['current_values'];
 	$validated      = factory_rest_agent_validate_safe_field_payload( $raw_fields );
 	$validated_render_context = factory_rest_agent_validate_safe_field_context_payload( $safe_render_context, 'safe_render_context' );
 	$validated_preserved_fields = factory_rest_agent_validate_safe_field_context_payload( $preserved_fields, 'preserved_fields' );
@@ -521,6 +503,51 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 			400
 		);
 	}
+
+	$launcher_safe_refresh_source = sanitize_key( (string) ( $client_context['source'] ?? '' ) );
+
+	if (
+		! empty( $ownership['blocked'] )
+		&& in_array( $launcher_safe_refresh_source, [ 'launcher_state_apply', 'state_apply_rollback_v1' ], true )
+		&& function_exists( 'factory_frontend_safe_edit_prepare_page_refresh_targets' )
+		&& is_array( $context['blueprint'] ?? null )
+	) {
+		factory_frontend_safe_edit_prepare_page_refresh_targets( $context['blueprint'], [ 'home', 'native_filters', 'contact' ] );
+		$context = factory_frontend_safe_edit_collect_save_context();
+
+		if ( is_wp_error( $context ) ) {
+			return new WP_REST_Response(
+				[
+					'status'          => 'blocked',
+					'code'            => $context->get_error_code(),
+					'message'         => $context->get_error_message(),
+					'applies_changes' => false,
+					'apply_method'    => 'field_only_safe_apply',
+				],
+				(int) ( $context->get_error_data()['status'] ?? 409 )
+			);
+		}
+
+		$ownership = $context['ownership'];
+	}
+
+	if ( ! empty( $ownership['blocked'] ) ) {
+		return new WP_REST_Response(
+			[
+				'status'           => 'blocked',
+				'code'             => 'agent_safe_fields_ownership_blocked',
+				'message'          => 'Safe field apply is blocked by current ownership state. No site changes were made.',
+				'applies_changes'  => false,
+				'apply_method'     => 'field_only_safe_apply',
+				'blocking_reasons' => array_values( array_unique( $ownership['blocking_reasons'] ?? [] ) ),
+				'ownership'        => $ownership,
+				'current_values'   => $context['current_values'],
+			],
+			409
+		);
+	}
+
+	$before_values  = $context['current_values'];
 
 	$render_context_values = $validated_render_context['valid_fields'];
 	$preserved_render_values = $validated_preserved_fields['valid_fields'];
@@ -638,6 +665,10 @@ function factory_rest_agent_safe_fields_apply( WP_REST_Request $request ): WP_RE
 	try {
 		update_option( FACTORY_BLUEPRINT_OPTION, $updated_blueprint );
 		$apply_boundary_started = true;
+
+		if ( function_exists( 'factory_frontend_safe_edit_prepare_page_refresh_targets' ) ) {
+			factory_frontend_safe_edit_prepare_page_refresh_targets( $updated_blueprint, [ 'home', 'native_filters', 'contact' ] );
+		}
 
 		$adapter = new Factory_Render_Adapter();
 		$execution = $adapter->apply_safe_field_refresh( $updated_blueprint, [ 'home', 'native_filters', 'contact' ], true );

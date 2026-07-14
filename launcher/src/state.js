@@ -1339,6 +1339,33 @@ function filterFieldsByKeys(fields, allowedKeys) {
   return next;
 }
 
+function extractExactHomepageHeadline(prompt) {
+  const sourcePrompt = String(prompt || "").trim();
+  if (!sourcePrompt) {
+    return "";
+  }
+
+  const match = sourcePrompt.match(/replace\s+the\s+homepage\s+headline\s+exactly\s+with\s+[\"“”]([^\"“”]{2,200})[\"“”]/i);
+  return match && match[1] ? asString(match[1]) : "";
+}
+
+function buildPromptScopedStateProposal(prompt, currentFields, rawProposedFields) {
+  const exactHeadline = extractExactHomepageHeadline(prompt);
+  if (!exactHeadline) {
+    return rawProposedFields;
+  }
+
+  const current = currentFields && typeof currentFields === "object" ? currentFields : {};
+  const proposed = rawProposedFields && typeof rawProposedFields === "object" ? rawProposedFields : {};
+
+  return {
+    agency_name: asString(current.agency_name) || asString(proposed.agency_name),
+    hero_title: exactHeadline,
+    hero_subtitle: asString(current.hero_subtitle) || asString(proposed.hero_subtitle),
+    hero_cta_text: asString(current.hero_cta_text) || asString(proposed.hero_cta_text)
+  };
+}
+
 function buildStatePlan(state, prompt, options) {
   const createdAt = stateNow();
   const planId = "state-plan-" + timestampCompact() + "-" + crypto.randomBytes(3).toString("hex");
@@ -1363,7 +1390,8 @@ function buildStatePlan(state, prompt, options) {
     ? options.limitFieldKeys
     : null;
   const currentFields = limitFieldKeys ? filterFieldsByKeys(rawCurrentFields, limitFieldKeys) : rawCurrentFields;
-  const proposedFields = limitFieldKeys ? filterFieldsByKeys(rawProposedFields, limitFieldKeys) : rawProposedFields;
+  const promptScopedFields = buildPromptScopedStateProposal(prompt, currentFields, rawProposedFields);
+  const proposedFields = limitFieldKeys ? filterFieldsByKeys(promptScopedFields, limitFieldKeys) : promptScopedFields;
   const allFieldKeys = Array.from(new Set(
     Object.keys(currentFields)
       .concat(Object.keys(proposedFields))
@@ -3193,10 +3221,16 @@ async function rollbackStateApply(options) {
     "state_apply_rollback_v1"
   );
   const rollbackFields = Object.assign({}, rollbackValues);
-  const appliedFields = STATE_APPLY_ALLOWLIST.filter((key) => asString(rollbackValues[key]));
+  const sourceAppliedFields = Array.isArray(applyRecord.applied_fields)
+    ? applyRecord.applied_fields.filter((fieldKey) => STATE_APPLY_ALLOWLIST.includes(fieldKey))
+    : [];
+  const appliedFields = sourceAppliedFields.length
+    ? sourceAppliedFields.slice()
+    : STATE_APPLY_ALLOWLIST.filter((key) => asString(rollbackValues[key]));
   const ignoredFields = Object.keys(previousState.personalization && previousState.personalization.fields || {})
     .filter((key) => !STATE_APPLY_ALLOWLIST.includes(key));
   const preservedProtectedFields = extractProtectedFields(state.user_overrides || {});
+  const sourceApplyMethod = asString(applyRecord.apply_method) || "unknown";
   let enteredMutationBoundary = false;
   let executeData = null;
   let afterCounts = null;
@@ -3205,73 +3239,143 @@ async function rollbackStateApply(options) {
   let refreshResult = null;
 
   try {
-    const preconditions = await validateStateApplyPreconditions(projectState, rollbackId, warnings);
-    const prompt = buildRollbackPrompt(rollbackValues);
-
     homeHtmlBefore = await readHomeHtml(projectState.project.wp_url);
     const runtimeCountsBefore = await readRuntimeCounts(projectState, rollbackId + "-before", warnings);
-    const rerun = await rerunPlanningChain(projectState, prompt, promptPersonalization, rollbackId, warnings);
-    const gate = rerun.results.generate_gate || {};
-    const preflight = rerun.results.generate_preflight || {};
-    const confirmation = rerun.results.generate_confirmation || {};
 
-    if (!toBooleanTrue(gate.can_generate)) {
-      throw new Error("State rollback gate blocked safe personalization rollback.");
-    }
+    if (sourceApplyMethod === "field_only_safe_apply") {
+      const preconditions = await validateFieldOnlyApplyPreconditions(projectState, rollbackId, warnings);
+      const rollbackMutationFields = {};
+      const safeRenderContext = {};
+      const preservedRenderValues = {};
 
-    if (!toBooleanTrue(preflight.preflight_ready)) {
-      throw new Error("State rollback preflight blocked safe personalization rollback.");
-    }
+      for (const fieldKey of STATE_APPLY_ALLOWLIST) {
+        const nextValue = asString(rollbackValues[fieldKey]);
+        if (!nextValue) {
+          continue;
+        }
 
-    if (!toBooleanTrue(confirmation.confirmation_ready)) {
-      throw new Error("State rollback confirmation blocked safe personalization rollback.");
-    }
+        safeRenderContext[fieldKey] = nextValue;
 
-    const previewPayload = {
-      prompt,
-      site_plan: rerun.results.site_plan,
-      blueprint_candidate: rerun.results.blueprint_candidate,
-      preview_diff: rerun.results.preview_diff,
-      generate_gate: gate,
-      generate_preflight: preflight,
-      generate_confirmation: confirmation,
-      execute: false,
-      site_type: "real_estate",
-      vertical: "real_estate",
-      context: rerun.context
-    };
-    const previewResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", previewPayload, rollbackId, warnings);
-    const previewData = previewResponse.json || {};
+        if (appliedFields.includes(fieldKey)) {
+          rollbackMutationFields[fieldKey] = nextValue;
+          continue;
+        }
 
-    if (toBooleanTrue(previewData.applies_changes)) {
-      throw new Error("Rollback preview unexpectedly reported applies_changes=true.");
-    }
+        if (preservedProtectedFields.includes(fieldKey)) {
+          preservedRenderValues[fieldKey] = nextValue;
+        }
+      }
 
-    if (toBooleanTrue(previewData.provider_called)) {
-      throw new Error("Rollback preview unexpectedly reported provider_called=true.");
-    }
+      const executePayload = {
+        fields: rollbackMutationFields,
+        context: {
+          source: "state_apply_rollback_v1",
+          source_apply_id: asString(applyRecord.apply_id) || null,
+          rollback_id: rollbackId,
+          safe_render_context: safeRenderContext,
+          preserved_fields: preservedRenderValues,
+          confirmation: {
+            required: true,
+            confirmed: true,
+            confirmed_fields: appliedFields.slice(),
+            overwritten_protected_fields: appliedFields.slice()
+          }
+        }
+      };
 
-    if (!previewData.confirmation_required_phrase) {
-      throw new Error("Rollback preview did not return a confirmation phrase.");
-    }
+      enteredMutationBoundary = Object.keys(rollbackMutationFields).length > 0;
+      const executeResponse = await postAgentJson(
+        projectState,
+        preconditions.restBase + "/agent/safe-fields/apply",
+        executePayload,
+        rollbackId,
+        warnings
+      );
+      executeData = executeResponse.json || {};
 
-    const executePayload = Object.assign({}, previewPayload, {
-      execute: true,
-      confirmation_phrase: previewData.confirmation_required_phrase
-    });
-    enteredMutationBoundary = true;
-    const executeResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", executePayload, rollbackId, warnings);
-    executeData = executeResponse.json || {};
+      afterCounts = await readRuntimeCounts(projectState, rollbackId + "-after", warnings);
+      homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
 
-    afterCounts = await readRuntimeCounts(projectState, rollbackId + "-after", warnings);
-    homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
+      if (toBooleanTrue(executeData.provider_called)) {
+        throw new Error("Field-only state rollback unexpectedly reported provider_called=true.");
+      }
 
-    const mutationStarted = toBooleanTrue(executeData.applies_changes)
-      || asString(executeData.mutation_status) === "unknown_after_apply_started"
-      || asString(executeData.mutation_status) === "completed";
+      if (asString(executeData.status) === "blocked") {
+        throw new Error("Field-only state rollback was blocked: " + String(executeData.message || executeData.code || "unknown rollback block"));
+      }
 
-    if (!mutationStarted) {
-      throw new Error("State rollback did not enter the mutation boundary: " + String(executeData.message || executeData.code || "unknown rollback error"));
+      const mutationStarted = toBooleanTrue(executeData.applies_changes)
+        || asString(executeData.code) === "agent_safe_fields_no_changes";
+
+      if (!mutationStarted) {
+        throw new Error("Field-only state rollback did not report a completed narrow mutation: " + String(executeData.message || executeData.code || "unknown rollback error"));
+      }
+    } else {
+      const preconditions = await validateStateApplyPreconditions(projectState, rollbackId, warnings);
+      const prompt = buildRollbackPrompt(rollbackValues);
+      const rerun = await rerunPlanningChain(projectState, prompt, promptPersonalization, rollbackId, warnings);
+      const gate = rerun.results.generate_gate || {};
+      const preflight = rerun.results.generate_preflight || {};
+      const confirmation = rerun.results.generate_confirmation || {};
+
+      if (!toBooleanTrue(gate.can_generate)) {
+        throw new Error("State rollback gate blocked safe personalization rollback.");
+      }
+
+      if (!toBooleanTrue(preflight.preflight_ready)) {
+        throw new Error("State rollback preflight blocked safe personalization rollback.");
+      }
+
+      if (!toBooleanTrue(confirmation.confirmation_ready)) {
+        throw new Error("State rollback confirmation blocked safe personalization rollback.");
+      }
+
+      const previewPayload = {
+        prompt,
+        site_plan: rerun.results.site_plan,
+        blueprint_candidate: rerun.results.blueprint_candidate,
+        preview_diff: rerun.results.preview_diff,
+        generate_gate: gate,
+        generate_preflight: preflight,
+        generate_confirmation: confirmation,
+        execute: false,
+        site_type: "real_estate",
+        vertical: "real_estate",
+        context: rerun.context
+      };
+      const previewResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", previewPayload, rollbackId, warnings);
+      const previewData = previewResponse.json || {};
+
+      if (toBooleanTrue(previewData.applies_changes)) {
+        throw new Error("Rollback preview unexpectedly reported applies_changes=true.");
+      }
+
+      if (toBooleanTrue(previewData.provider_called)) {
+        throw new Error("Rollback preview unexpectedly reported provider_called=true.");
+      }
+
+      if (!previewData.confirmation_required_phrase) {
+        throw new Error("Rollback preview did not return a confirmation phrase.");
+      }
+
+      const executePayload = Object.assign({}, previewPayload, {
+        execute: true,
+        confirmation_phrase: previewData.confirmation_required_phrase
+      });
+      enteredMutationBoundary = true;
+      const executeResponse = await postAgentJson(projectState, preconditions.restBase + "/ai/controlled-generate", executePayload, rollbackId, warnings);
+      executeData = executeResponse.json || {};
+
+      afterCounts = await readRuntimeCounts(projectState, rollbackId + "-after", warnings);
+      homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
+
+      const mutationStarted = toBooleanTrue(executeData.applies_changes)
+        || asString(executeData.mutation_status) === "unknown_after_apply_started"
+        || asString(executeData.mutation_status) === "completed";
+
+      if (!mutationStarted) {
+        throw new Error("State rollback did not enter the mutation boundary: " + String(executeData.message || executeData.code || "unknown rollback error"));
+      }
     }
 
     const baseRollbackRecord = {
@@ -3331,6 +3435,11 @@ async function rollbackStateApply(options) {
     });
 
     const refreshedState = refreshResult.state;
+    refreshedState.user_overrides = previousState.user_overrides && typeof previousState.user_overrides === "object"
+      ? JSON.parse(JSON.stringify(previousState.user_overrides))
+      : {};
+    writeJsonFile(refreshResult.statePath, refreshedState);
+    writeJsonFile(refreshResult.snapshotPath, refreshedState);
     const afterValues = deriveEffectiveCurrentValues(refreshedState);
     homeHtmlAfter = await readHomeHtml(projectState.project.wp_url);
     const rollbackRecord = Object.assign({}, baseRollbackRecord, {
