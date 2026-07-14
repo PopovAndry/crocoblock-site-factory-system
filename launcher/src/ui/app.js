@@ -234,9 +234,9 @@
   };
   let stateChangeRequestId = 0;
   let stateChangeAbortController = null;
-  let mutationSessionToken = "";
-  let mutationSessionOrigin = "";
-  let mutationSessionPromise = null;
+  let csrfSessionToken = "";
+  let csrfSessionOrigin = "";
+  let csrfSessionPromise = null;
   let stateChangeView = {
     slug: "",
     requestId: 0,
@@ -569,22 +569,23 @@
   }
 
   function isLauncherMutationSessionCode(code) {
-    return code === "mutation_session_token_required" || code === "mutation_session_token_invalid";
+    return code === "csrf_token_required"
+      || code === "csrf_token_invalid";
   }
 
   async function ensureLauncherMutationSession(forceRefresh) {
-    if (!forceRefresh && mutationSessionToken) {
+    if (!forceRefresh && csrfSessionToken) {
       return {
-        token: mutationSessionToken,
-        origin: mutationSessionOrigin || window.location.origin
+        token: csrfSessionToken,
+        origin: csrfSessionOrigin || window.location.origin
       };
     }
-    if (mutationSessionPromise) {
-      return mutationSessionPromise;
+    if (csrfSessionPromise) {
+      return csrfSessionPromise;
     }
 
-    mutationSessionPromise = (async () => {
-      const response = await fetch(config.sessionPath || "/api/session", {
+    csrfSessionPromise = (async () => {
+      const response = await fetch(config.sessionPath || "/api/security/session", {
         cache: "no-store"
       });
       let payload = {};
@@ -596,31 +597,38 @@
       if (!response.ok) {
         throw new Error(payload.error || "Unable to refresh the Launcher security session.");
       }
-      const token = response.headers.get("X-Factory-Mutation-Token");
+      const token = payload.csrf_token || response.headers.get("X-Factory-CSRF-Token");
       if (!token) {
         throw new Error("Launcher security session token is unavailable.");
       }
-      mutationSessionToken = token;
-      mutationSessionOrigin = payload.launcher_origin || window.location.origin;
+      csrfSessionToken = token;
+      csrfSessionOrigin = payload.launcher_origin || window.location.origin;
       return {
-        token: mutationSessionToken,
-        origin: mutationSessionOrigin
+        token: csrfSessionToken,
+        origin: csrfSessionOrigin
       };
     })();
 
     try {
-      return await mutationSessionPromise;
+      return await csrfSessionPromise;
     } finally {
-      mutationSessionPromise = null;
+      csrfSessionPromise = null;
     }
   }
 
   async function launcherMutationFetch(input, options) {
     await ensureLauncherMutationSession(false);
     const requestOptions = Object.assign({}, options || {});
-    const headers = new Headers(requestOptions.headers || {});
-    headers.set("X-Factory-Mutation-Token", mutationSessionToken);
-    requestOptions.headers = headers;
+    const buildHeaders = () => {
+      const headers = new Headers(requestOptions.headers || {});
+      headers.set("X-Factory-CSRF-Token", csrfSessionToken);
+      if (requestOptions.body != null && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+      return headers;
+    };
+
+    requestOptions.headers = buildHeaders();
     const response = await fetch(input, requestOptions);
 
     if (response.status === 403) {
@@ -631,16 +639,11 @@
         payload = null;
       }
       if (payload && isLauncherMutationSessionCode(payload.code)) {
-        mutationSessionToken = "";
-        mutationSessionOrigin = "";
-        try {
-          await ensureLauncherMutationSession(true);
-        } catch (refreshError) {
-          // Keep the original mutation error surface if refresh fails.
-        }
-        const sessionError = new Error("Launcher security session expired. Retry the action.");
-        sessionError.code = payload.code;
-        throw sessionError;
+        csrfSessionToken = "";
+        csrfSessionOrigin = "";
+        await ensureLauncherMutationSession(true);
+        requestOptions.headers = buildHeaders();
+        return await fetch(input, requestOptions);
       }
     }
 
@@ -2363,7 +2366,7 @@
     const slug = String(formData.get("slug") || "").trim();
     const prompt = String(formData.get("prompt") || "").trim();
 
-    const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/plan", {
+    const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/plan", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -2399,7 +2402,7 @@
     generateResult.hidden = true;
 
     try {
-      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/generation/plan", {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/generation/plan", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2540,7 +2543,7 @@
     statePlanResult.innerHTML = "<strong>Previewing AI site changes...</strong>";
     stateRollbackResult.hidden = true;
 
-    const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/state/plan", {
+    const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/state/plan", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"

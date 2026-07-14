@@ -156,10 +156,11 @@ async function requestJson(baseUrl, requestPath, options) {
   }, requestOptions.headers || {});
 
   if (method !== "GET" && method !== "HEAD" && requestOptions.includeMutationToken !== false) {
-    const sessionResponse = await fetch(baseUrl + "/api/session");
-    const mutationToken = sessionResponse.headers.get("X-Factory-Mutation-Token");
-    assert.ok(mutationToken, "expected Launcher mutation token for POST route tests");
-    headers["X-Factory-Mutation-Token"] = mutationToken;
+    const sessionResponse = await fetch(baseUrl + "/api/security/session");
+    const sessionPayload = await sessionResponse.json();
+    const csrfToken = sessionPayload.csrf_token;
+    assert.ok(csrfToken, "expected Launcher CSRF token for POST route tests");
+    headers["X-Factory-CSRF-Token"] = csrfToken;
     headers.Origin = baseUrl;
   }
 

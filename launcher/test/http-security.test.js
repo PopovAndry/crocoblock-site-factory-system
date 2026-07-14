@@ -135,13 +135,13 @@ function rawRequest(baseUrl, requestPath, options) {
 }
 
 async function getSession(baseUrl, headers) {
-  const response = await rawRequest(baseUrl, "/api/session", {
+  const response = await rawRequest(baseUrl, "/api/security/session", {
     method: "GET",
     headers: headers || {}
   });
   return {
     response,
-    token: response.headers["x-factory-mutation-token"] || null
+    token: response.json && response.json.csrf_token || null
   };
 }
 
@@ -202,6 +202,30 @@ test("default Launcher bind host remains loopback-only", async () => {
   } finally {
     await server.close().catch(() => {});
   }
+});
+
+test("security session returns an in-memory CSRF token with safe headers", async () => {
+  const projectsRoot = createTempProjectsRoot();
+
+  await withPatchedServer({}, Object.assign(async ({ baseUrl }) => {
+    const session = await rawRequest(baseUrl, "/api/security/session", {
+      headers: {
+        Host: "127.0.0.1:" + String(new URL(baseUrl).port)
+      }
+    });
+    assert.equal(session.statusCode, 200);
+    assert.equal(session.json.status, "ok");
+    assert.equal(typeof session.json.csrf_token, "string");
+    assert.equal(session.json.csrf_token.length >= 64, true);
+    assert.equal(session.json.token_scope, "launcher_process");
+    assert.equal(session.json.expires_on_restart, true);
+    assert.equal(session.headers["x-factory-csrf-token"], undefined);
+    assert.equal(session.headers["access-control-allow-origin"], undefined);
+    assert.equal(session.headers["x-content-type-options"], "nosniff");
+    assert.equal(session.headers["referrer-policy"], "no-referrer");
+    assert.equal(session.headers["x-frame-options"], "DENY");
+    assert.equal(session.headers["cache-control"], "no-store");
+  }, { projectsRoot }));
 });
 
 test("shared route inventory covers every current POST server route and required mutation routes", () => {
@@ -274,6 +298,24 @@ test("host validation accepts loopback aliases and rejects arbitrary hosts witho
   }, { projectsRoot }));
 });
 
+test("non-loopback remote addresses are rejected before route handling", () => {
+  const security = createHttpSecurity({
+    host: "127.0.0.1",
+    port: 3847
+  });
+  const requestUrl = new URL("http://127.0.0.1:3847/api/health");
+  const response = { writeHead() {}, end() {} };
+  assert.throws(() => security.enforce({
+    method: "GET",
+    headers: {
+      host: "127.0.0.1:3847"
+    },
+    socket: {
+      remoteAddress: "192.168.0.20"
+    }
+  }, response, requestUrl), (error) => error.code === "loopback_access_required");
+});
+
 test("origin policy and preflight stay exact-same-origin without wildcard CORS", async () => {
   const projectsRoot = createTempProjectsRoot();
   const scaffold = createTempProject(projectsRoot, "origin-guard");
@@ -303,11 +345,24 @@ test("origin policy and preflight stay exact-same-origin without wildcard CORS",
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: baseUrl,
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: "{}"
     });
     assert.equal(sameOrigin.statusCode, 200);
+    assert.equal(refreshExecutions, 1);
+
+    const missingOrigin = await rawRequest(baseUrl, "/api/projects/origin-guard/state/refresh", {
+      method: "POST",
+      headers: {
+        Host: "127.0.0.1:" + String(new URL(baseUrl).port),
+        "Content-Type": "application/json",
+        "X-Factory-CSRF-Token": session.token
+      },
+      body: "{}"
+    });
+    assert.equal(missingOrigin.statusCode, 403);
+    assert.equal(missingOrigin.json.code, "origin_not_allowed");
     assert.equal(refreshExecutions, 1);
 
     const foreignOrigin = await rawRequest(baseUrl, "/api/projects/origin-guard/state/refresh", {
@@ -316,7 +371,7 @@ test("origin policy and preflight stay exact-same-origin without wildcard CORS",
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: "http://evil.local:3847",
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: "{}"
     });
@@ -330,7 +385,7 @@ test("origin policy and preflight stay exact-same-origin without wildcard CORS",
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: "null",
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: "{}"
     });
@@ -343,7 +398,7 @@ test("origin policy and preflight stay exact-same-origin without wildcard CORS",
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: "http://127.0.0.1:3999",
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: "{}"
     });
@@ -356,11 +411,24 @@ test("origin policy and preflight stay exact-same-origin without wildcard CORS",
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: "http://evil.local:3847",
         "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "Content-Type, X-Factory-Mutation-Token"
+        "Access-Control-Request-Headers": "Content-Type, X-Factory-CSRF-Token"
       }
     });
     assert.equal(disallowedPreflight.statusCode, 403);
     assert.equal(disallowedPreflight.headers["access-control-allow-origin"], undefined);
+
+    const allowedPreflight = await rawRequest(baseUrl, "/api/projects/origin-guard/state/refresh", {
+      method: "OPTIONS",
+      headers: {
+        Host: "127.0.0.1:" + String(new URL(baseUrl).port),
+        Origin: baseUrl,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type, X-Factory-CSRF-Token"
+      }
+    });
+    assert.equal(allowedPreflight.statusCode, 204);
+    assert.equal(allowedPreflight.headers["access-control-allow-origin"], baseUrl);
+    assert.notEqual(allowedPreflight.headers["access-control-allow-origin"], "*");
   }, { projectsRoot }));
 });
 
@@ -396,7 +464,7 @@ test("mutation session token gate reaches canonical state apply flow and rejecte
   }, Object.assign(async ({ baseUrl }) => {
     const session = await getSession(baseUrl);
     assert.ok(session.token);
-    assert.equal(typeof session.response.json["X-Factory-Mutation-Token"], "undefined");
+    assert.equal(typeof session.response.headers["x-factory-csrf-token"], "undefined");
 
     const validApply = await rawRequest(baseUrl, "/api/projects/token-guard/state/apply", {
       method: "POST",
@@ -405,7 +473,7 @@ test("mutation session token gate reaches canonical state apply flow and rejecte
         Origin: baseUrl,
         "Content-Type": "application/json",
         "Idempotency-Key": "state-apply-token-guard-0001",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: JSON.stringify({
         plan_id: planId,
@@ -432,7 +500,7 @@ test("mutation session token gate reaches canonical state apply flow and rejecte
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: baseUrl,
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": "wrong-token"
+        "X-Factory-CSRF-Token": "wrong-token"
       },
       body: JSON.stringify({
         plan_id: wrongPlanId,
@@ -440,7 +508,7 @@ test("mutation session token gate reaches canonical state apply flow and rejecte
       })
     });
     assert.equal(wrongToken.statusCode, 403);
-    assert.equal(wrongToken.json.code, "mutation_session_token_invalid");
+    assert.equal(wrongToken.json.code, "csrf_token_invalid");
     assert.equal(listOperations({ slug: "token-guard-wrong", projectsRoot }).length, 0);
 
     const missingTokenProject = createTempProject(projectsRoot, "token-guard-missing");
@@ -461,7 +529,7 @@ test("mutation session token gate reaches canonical state apply flow and rejecte
       })
     });
     assert.equal(missingToken.statusCode, 403);
-    assert.equal(missingToken.json.code, "mutation_session_token_required");
+    assert.equal(missingToken.json.code, "csrf_token_required");
     assert.equal(listOperations({ slug: "token-guard-missing", projectsRoot }).length, 0);
 
     const badOriginProject = createTempProject(projectsRoot, "token-guard-origin");
@@ -475,7 +543,7 @@ test("mutation session token gate reaches canonical state apply flow and rejecte
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: "http://evil.local:3847",
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: JSON.stringify({
         plan_id: badOriginPlanId,
@@ -542,12 +610,12 @@ test("token rotates on restart and old token is rejected", async () => {
         Connection: "close",
         Origin: baseUrl,
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": firstSession.token
+        "X-Factory-CSRF-Token": firstSession.token
       },
       body: "{}"
     });
     assert.equal(oldTokenAttempt.statusCode, 403);
-    assert.equal(oldTokenAttempt.json.code, "mutation_session_token_invalid");
+    assert.equal(oldTokenAttempt.json.code, "csrf_token_invalid");
     assert.equal(refreshExecutions, 0);
 
     const newTokenAttempt = await rawRequest(baseUrl, "/api/projects/restart-rotation/state/refresh", {
@@ -557,7 +625,7 @@ test("token rotates on restart and old token is rejected", async () => {
         Connection: "close",
         Origin: baseUrl,
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": secondSession.token
+        "X-Factory-CSRF-Token": secondSession.token
       },
       body: "{}"
     });
@@ -601,11 +669,39 @@ test("body limit, malformed json, rate limiting, and security errors stay contro
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: baseUrl,
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: "{}"
     });
     assert.equal(valid.statusCode, 200);
+    assert.equal(refreshExecutions, 1);
+
+    const textPlain = await rawRequest(baseUrl, "/api/projects/guarded-refresh/state/refresh", {
+      method: "POST",
+      headers: {
+        Host: "127.0.0.1:" + String(new URL(baseUrl).port),
+        Origin: baseUrl,
+        "Content-Type": "text/plain",
+        "X-Factory-CSRF-Token": session.token
+      },
+      body: "{}"
+    });
+    assert.equal(textPlain.statusCode, 415);
+    assert.equal(textPlain.json.code, "unsupported_media_type");
+    assert.equal(refreshExecutions, 1);
+
+    const formEncoded = await rawRequest(baseUrl, "/api/projects/guarded-refresh/state/refresh", {
+      method: "POST",
+      headers: {
+        Host: "127.0.0.1:" + String(new URL(baseUrl).port),
+        Origin: baseUrl,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Factory-CSRF-Token": session.token
+      },
+      body: "a=1"
+    });
+    assert.equal(formEncoded.statusCode, 415);
+    assert.equal(formEncoded.json.code, "unsupported_media_type");
     assert.equal(refreshExecutions, 1);
 
     const oversized = await rawRequest(baseUrl, "/api/projects/guarded-refresh/state/refresh", {
@@ -614,7 +710,7 @@ test("body limit, malformed json, rate limiting, and security errors stay contro
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: baseUrl,
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: '{"padding":"' + "x".repeat(70 * 1024) + '"}'
     });
@@ -628,16 +724,16 @@ test("body limit, malformed json, rate limiting, and security errors stay contro
         Host: "127.0.0.1:" + String(new URL(baseUrl).port),
         Origin: baseUrl,
         "Content-Type": "application/json",
-        "X-Factory-Mutation-Token": session.token
+        "X-Factory-CSRF-Token": session.token
       },
       body: '{"broken":'
     });
     assert.equal(malformed.statusCode, 400);
-    assert.equal(malformed.json.code, "request_json_invalid");
+    assert.equal(malformed.json.code, "invalid_json_body");
     assert.equal(refreshExecutions, 1);
 
     const leakedValues = JSON.stringify(malformed.json);
-    assert.equal(/Authorization|Bearer|X-Factory-Mutation-Token|Idempotency-Key|[A-Za-z]:\\/.test(leakedValues), false);
+    assert.equal(/Authorization|Bearer|X-Factory-(?:Mutation|CSRF)-Token|Idempotency-Key|[A-Za-z]:\\/.test(leakedValues), false);
   }, {
     projectsRoot,
     mutationRateLimitMax: 2,
@@ -671,7 +767,7 @@ test("body limit, malformed json, rate limiting, and security errors stay contro
           Connection: "close",
           Origin: baseUrl,
           "Content-Type": "application/json",
-          "X-Factory-Mutation-Token": session.token
+          "X-Factory-CSRF-Token": session.token
         },
         body: "{}"
       }));
@@ -680,7 +776,7 @@ test("body limit, malformed json, rate limiting, and security errors stay contro
     assert.equal(attempts[0].statusCode, 200);
     assert.equal(attempts[29].statusCode, 200);
     assert.equal(attempts[30].statusCode, 429);
-    assert.equal(attempts[30].json.code, "mutation_rate_limit_exceeded");
+    assert.equal(attempts[30].json.code, "rate_limit_exceeded");
     assert.ok(attempts[30].headers["retry-after"]);
     assert.equal(refreshExecutions, 30);
   }, {
@@ -703,7 +799,7 @@ test("mutation rate limiter resets deterministically after the configured window
       headers: {
         host: "127.0.0.1:3847",
         origin: "http://127.0.0.1:3847",
-        "x-factory-mutation-token": security.getSessionBootstrap({ origin: "http://127.0.0.1:3847" }).headers["X-Factory-Mutation-Token"]
+        "x-factory-csrf-token": security.getSessionBootstrap({ origin: "http://127.0.0.1:3847" }).body.csrf_token
       },
       socket: {
         remoteAddress: "127.0.0.1"
@@ -712,7 +808,7 @@ test("mutation rate limiter resets deterministically after the configured window
   }
 
   assert.doesNotThrow(() => security.enforce(makeRequest(), response, requestUrl));
-  assert.throws(() => security.enforce(makeRequest(), response, requestUrl), (error) => error.code === "mutation_rate_limit_exceeded");
+  assert.throws(() => security.enforce(makeRequest(), response, requestUrl), (error) => error.code === "rate_limit_exceeded");
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.doesNotThrow(() => security.enforce(makeRequest(), response, requestUrl));
 });

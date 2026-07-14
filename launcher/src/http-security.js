@@ -7,8 +7,10 @@ const DEFAULT_LAUNCHER_HOST = "127.0.0.1";
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 64 * 1024;
 const DEFAULT_MUTATION_RATE_LIMIT_MAX = 30;
 const DEFAULT_MUTATION_RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const MUTATION_TOKEN_HEADER_NAME = "X-Factory-Mutation-Token";
-const MUTATION_TOKEN_HEADER_LOWER = MUTATION_TOKEN_HEADER_NAME.toLowerCase();
+const CSRF_TOKEN_HEADER_NAME = "X-Factory-CSRF-Token";
+const CSRF_TOKEN_HEADER_LOWER = CSRF_TOKEN_HEADER_NAME.toLowerCase();
+const MUTATION_TOKEN_HEADER_NAME = CSRF_TOKEN_HEADER_NAME;
+const MUTATION_TOKEN_HEADER_LOWER = CSRF_TOKEN_HEADER_LOWER;
 const ALLOWED_LOOPBACK_HOSTNAMES = Object.freeze(["127.0.0.1", "localhost", "[::1]"]);
 
 const ROUTE_INVENTORY = Object.freeze([
@@ -16,7 +18,7 @@ const ROUTE_INVENTORY = Object.freeze([
   { id: "ui_styles", method: "GET", group: "health_static_ui", mutation: false, signature: "/assets/styles.css", match: { type: "exact", value: "/assets/styles.css" } },
   { id: "ui_app", method: "GET", group: "health_static_ui", mutation: false, signature: "/assets/app.js", match: { type: "exact", value: "/assets/app.js" } },
   { id: "health", method: "GET", group: "health_static_ui", mutation: false, signature: "/api/health", match: { type: "exact", value: "/api/health" } },
-  { id: "session", method: "GET", group: "health_static_ui", mutation: false, signature: "/api/session", match: { type: "exact", value: "/api/session" } },
+  { id: "security_session", method: "GET", group: "security_session", mutation: false, signature: "/api/security/session", match: { type: "exact", value: "/api/security/session" } },
   { id: "projects_list", method: "GET", group: "read_only", mutation: false, signature: "/api/projects", match: { type: "exact", value: "/api/projects" } },
   { id: "dependency_sources", method: "GET", group: "read_only", mutation: false, signature: "/api/dependency-sources", match: { type: "exact", value: "/api/dependency-sources" } },
   { id: "project_create", method: "POST", group: "mutation", mutation: true, sourceSignature: 'requestUrl.pathname === "/api/projects"', signature: "/api/projects", match: { type: "exact", value: "/api/projects" } },
@@ -141,7 +143,7 @@ function sanitizeErrorText(value) {
   let sanitized = String(value || "");
   sanitized = sanitized.replace(/Authorization\s*:[^\r\n]*/gi, "Authorization: [redacted]");
   sanitized = sanitized.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
-  sanitized = sanitized.replace(/X-Factory-Mutation-Token\s*:[^\r\n]*/gi, MUTATION_TOKEN_HEADER_NAME + ": [redacted]");
+  sanitized = sanitized.replace(/X-Factory-(?:Mutation|CSRF)-Token\s*:[^\r\n]*/gi, CSRF_TOKEN_HEADER_NAME + ": [redacted]");
   sanitized = sanitized.replace(/Idempotency-Key\s*:[^\r\n]*/gi, "Idempotency-Key: [redacted]");
   sanitized = sanitized.replace(/[A-Za-z]:\\[^\r\n"]+/g, "[redacted-path]");
   return sanitized;
@@ -160,9 +162,19 @@ function createHttpSecurity(options) {
   const host = String(options && options.host || DEFAULT_LAUNCHER_HOST).trim();
   const port = Number(options && options.port || 3847);
   const jsonBodyLimitBytes = Number(options && options.jsonBodyLimitBytes || DEFAULT_JSON_BODY_LIMIT_BYTES);
-  const mutationRateLimitMax = Number(options && options.mutationRateLimitMax || DEFAULT_MUTATION_RATE_LIMIT_MAX);
-  const mutationRateLimitWindowMs = Number(options && options.mutationRateLimitWindowMs || DEFAULT_MUTATION_RATE_LIMIT_WINDOW_MS);
-  const mutationToken = crypto.randomBytes(32).toString("hex");
+  const rateLimits = Object.assign({
+    security_session: { max: 60, windowMs: 60 * 1000 },
+    read_only: { max: 600, windowMs: 60 * 1000 },
+    planning_preview: { max: 60, windowMs: 60 * 1000 },
+    mutation: {
+      max: Number(options && options.mutationRateLimitMax || DEFAULT_MUTATION_RATE_LIMIT_MAX),
+      windowMs: Number(options && options.mutationRateLimitWindowMs || DEFAULT_MUTATION_RATE_LIMIT_WINDOW_MS)
+    }
+  }, options && options.rateLimits || {});
+  const csrfToken = (options && typeof options.randomBytes === "function"
+    ? options.randomBytes(32)
+    : crypto.randomBytes(32)
+  ).toString("hex");
   const tokenIssuedAt = new Date().toISOString();
   const rateWindowState = new Map();
 
@@ -171,16 +183,16 @@ function createHttpSecurity(options) {
     if (!hostHeaderValue) {
       throw createSecurityError(
         "Host header is required.",
-        "invalid_host_header",
-        400
+        "host_not_allowed",
+        403
       );
     }
     const hostHeader = parseHostHeader(hostHeaderValue);
     if (!hostHeader || !hostHeader.hostname) {
       throw createSecurityError(
         "Host header is malformed.",
-        "invalid_host_header",
-        400
+        "host_not_allowed",
+        403
       );
     }
     const normalizedHost = hostHeader.hostname === "::1" ? "[::1]" : hostHeader.hostname;
@@ -238,29 +250,54 @@ function createHttpSecurity(options) {
     return parsedOrigin.origin;
   }
 
-  function getMutationRateKey(request) {
-    const remoteKey = normalizeRemoteAddress(request.socket && request.socket.remoteAddress);
-    return remoteKey + "::mutation";
+  function requireOrigin(request, hostInfo) {
+    const origin = validateOrigin(request, hostInfo);
+    if (!origin) {
+      throw createSecurityError(
+        "Origin is not allowed for Launcher.",
+        "origin_not_allowed",
+        403
+      );
+    }
+    const secFetchSite = firstHeaderValue(request.headers, "sec-fetch-site");
+    if (secFetchSite && !["same-origin", "none"].includes(String(secFetchSite).trim().toLowerCase())) {
+      throw createSecurityError(
+        "Origin is not allowed for Launcher.",
+        "origin_not_allowed",
+        403
+      );
+    }
+    return origin;
   }
 
-  function enforceMutationRateLimit(request) {
-    const rateKey = getMutationRateKey(request);
+  function getRateKey(request, group) {
+    const remoteKey = normalizeRemoteAddress(request.socket && request.socket.remoteAddress);
+    return remoteKey + "::" + String(group || "read_only");
+  }
+
+  function enforceRateLimit(request, group) {
+    const normalizedGroup = String(group || "read_only");
+    const policy = rateLimits[normalizedGroup] || rateLimits.read_only;
+    if (!policy || !policy.max) {
+      return null;
+    }
+    const rateKey = getRateKey(request, normalizedGroup);
     const now = Date.now();
     const current = rateWindowState.get(rateKey);
     if (!current || now >= current.resetAt) {
       rateWindowState.set(rateKey, {
         count: 1,
-        resetAt: now + mutationRateLimitWindowMs
+        resetAt: now + Number(policy.windowMs || 60 * 1000)
       });
       return null;
     }
     current.count += 1;
     rateWindowState.set(rateKey, current);
-    if (current.count > mutationRateLimitMax) {
+    if (current.count > Number(policy.max)) {
       const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
       throw createSecurityError(
-        "Too many Launcher mutation requests. Retry later.",
-        "mutation_rate_limit_exceeded",
+        "Too many Launcher requests. Retry later.",
+        "rate_limit_exceeded",
         429,
         {
           retryAfterSeconds
@@ -271,18 +308,18 @@ function createHttpSecurity(options) {
   }
 
   function validateMutationToken(request) {
-    const token = firstHeaderValue(request.headers, MUTATION_TOKEN_HEADER_LOWER);
+    const token = firstHeaderValue(request.headers, CSRF_TOKEN_HEADER_LOWER);
     if (!token || typeof token !== "string") {
       throw createSecurityError(
-        "Launcher mutation session token is required.",
-        "mutation_session_token_required",
+        "Launcher CSRF token is required.",
+        "csrf_token_required",
         403
       );
     }
-    if (!secureCompareToken(mutationToken, token.trim())) {
+    if (String(token).length > 256 || !secureCompareToken(csrfToken, token.trim())) {
       throw createSecurityError(
-        "Launcher mutation session token is invalid.",
-        "mutation_session_token_invalid",
+        "Launcher CSRF token is invalid.",
+        "csrf_token_invalid",
         403
       );
     }
@@ -291,13 +328,13 @@ function createHttpSecurity(options) {
   function getSessionBootstrap(hostInfo) {
     return {
       body: {
-        ok: true,
+        status: "ok",
+        csrf_token: csrfToken,
+        token_scope: "launcher_process",
+        expires_on_restart: true,
         launcher_origin: hostInfo.origin,
-        mutation_token_header: MUTATION_TOKEN_HEADER_NAME,
+        csrf_token_header: CSRF_TOKEN_HEADER_NAME,
         token_issued_at: tokenIssuedAt
-      },
-      headers: {
-        [MUTATION_TOKEN_HEADER_NAME]: mutationToken
       }
     };
   }
@@ -306,7 +343,7 @@ function createHttpSecurity(options) {
     const headers = {
       "Access-Control-Allow-Origin": origin,
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Idempotency-Key, " + MUTATION_TOKEN_HEADER_NAME,
+      "Access-Control-Allow-Headers": "Content-Type, Idempotency-Key, " + CSRF_TOKEN_HEADER_NAME,
       "Access-Control-Max-Age": "600",
       Vary: "Origin"
     };
@@ -314,7 +351,7 @@ function createHttpSecurity(options) {
   }
 
   function handlePreflight(request, response, pathname, hostInfo) {
-    const origin = validateOrigin(request, hostInfo);
+    const origin = requireOrigin(request, hostInfo);
     const requestMethod = firstHeaderValue(request.headers, "access-control-request-method");
     const targetRoute = classifyLauncherRoute("OPTIONS", pathname, requestMethod);
     if (!origin || !targetRoute) {
@@ -332,17 +369,28 @@ function createHttpSecurity(options) {
   function enforce(request, response, requestUrl) {
     const preflightMethod = firstHeaderValue(request.headers, "access-control-request-method");
     const route = classifyLauncherRoute(request.method, requestUrl.pathname, preflightMethod);
+    if (!isLoopbackRemoteAddress(request.socket && request.socket.remoteAddress)) {
+      throw createSecurityError(
+        "Launcher accepts loopback requests only.",
+        "loopback_access_required",
+        403
+      );
+    }
     const hostInfo = validateHost(request);
     const origin = validateOrigin(request, hostInfo);
+    const method = String(request.method || "").toUpperCase();
+    const unsafe = !["GET", "HEAD", "OPTIONS"].includes(method);
 
-    if (String(request.method || "").toUpperCase() === "OPTIONS") {
+    if (method === "OPTIONS") {
       return {
         handled: handlePreflight(request, response, requestUrl.pathname, hostInfo)
       };
     }
 
-    if (route && route.mutation) {
-      enforceMutationRateLimit(request);
+    enforceRateLimit(request, route ? route.group : (unsafe ? "mutation" : "read_only"));
+
+    if (unsafe) {
+      requireOrigin(request, hostInfo);
       validateMutationToken(request);
     }
 
@@ -358,9 +406,10 @@ function createHttpSecurity(options) {
     host,
     port,
     jsonBodyLimitBytes,
-    mutationRateLimitMax,
-    mutationRateLimitWindowMs,
-    mutationTokenHeaderName: MUTATION_TOKEN_HEADER_NAME,
+    mutationRateLimitMax: rateLimits.mutation.max,
+    mutationRateLimitWindowMs: rateLimits.mutation.windowMs,
+    mutationTokenHeaderName: CSRF_TOKEN_HEADER_NAME,
+    csrfTokenHeaderName: CSRF_TOKEN_HEADER_NAME,
     enforce,
     getSessionBootstrap,
     sanitizeErrorText,
@@ -372,6 +421,8 @@ function createHttpSecurity(options) {
 
 module.exports = {
   ALLOWED_LOOPBACK_HOSTNAMES,
+  CSRF_TOKEN_HEADER_LOWER,
+  CSRF_TOKEN_HEADER_NAME,
   DEFAULT_JSON_BODY_LIMIT_BYTES,
   DEFAULT_LAUNCHER_HOST,
   DEFAULT_MUTATION_RATE_LIMIT_MAX,

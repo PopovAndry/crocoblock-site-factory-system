@@ -1,6 +1,7 @@
 "use strict";
 
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
@@ -62,6 +63,12 @@ const {
 } = require("./state-change-contract");
 
 const UI_DIR = path.join(__dirname, "ui");
+const BASE_SECURITY_HEADERS = Object.freeze({
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "X-Frame-Options": "DENY",
+  "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+});
 
 function escapeHtml(value) {
   return String(value)
@@ -73,7 +80,7 @@ function escapeHtml(value) {
 }
 
 function sendJson(response, statusCode, payload, extraHeaders) {
-  response.writeHead(statusCode, Object.assign({
+  response.writeHead(statusCode, Object.assign({}, BASE_SECURITY_HEADERS, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store"
   }, extraHeaders || {}));
@@ -81,7 +88,7 @@ function sendJson(response, statusCode, payload, extraHeaders) {
 }
 
 function sendText(response, statusCode, body, contentType, extraHeaders) {
-  response.writeHead(statusCode, Object.assign({
+  response.writeHead(statusCode, Object.assign({}, BASE_SECURITY_HEADERS, {
     "Content-Type": contentType || "text/plain; charset=utf-8",
     "Cache-Control": "no-store"
   }, extraHeaders || {}));
@@ -128,6 +135,15 @@ function readRequestBody(request, options) {
 }
 
 async function readJsonPayload(request, options) {
+  const contentType = String(request.headers["content-type"] || "").toLowerCase();
+  if (!/^application\/json(?:\s*;|$)/.test(contentType)) {
+    throw createStructuredError(
+      "Launcher API requests with JSON bodies require Content-Type: application/json.",
+      "unsupported_media_type",
+      415,
+      { securityBoundary: true }
+    );
+  }
   const rawBody = await readRequestBody(request, options);
   if (!rawBody) {
     return {};
@@ -137,7 +153,7 @@ async function readJsonPayload(request, options) {
   } catch (error) {
     throw createStructuredError(
       "Request body must be valid JSON.",
-      "request_json_invalid",
+      "invalid_json_body",
       400,
       { securityBoundary: true }
     );
@@ -145,6 +161,7 @@ async function readJsonPayload(request, options) {
 }
 
 function renderHomePage(config) {
+  const cspNonce = config.cspNonce || "";
   return [
     "<!doctype html>",
     "<html lang=\"en\">",
@@ -336,9 +353,9 @@ function renderHomePage(config) {
     "      </section>",
     "    </section>",
     "  </main>",
-    "  <script>window.FactoryLauncherConfig = " + JSON.stringify({
+    "  <script nonce=\"" + escapeHtml(cspNonce) + "\">window.FactoryLauncherConfig = " + JSON.stringify({
       projectsRoot: config.projectsRoot,
-      sessionPath: "/api/session"
+      sessionPath: "/api/security/session"
     }) + ";</script>",
     "  <script src=\"/assets/project-summary-counts.js\"></script>",
     "  <script src=\"/assets/app.js\"></script>",
@@ -357,7 +374,9 @@ function serveAsset(response, assetName) {
   const contentType = assetName.endsWith(".css")
     ? "text/css; charset=utf-8"
     : "application/javascript; charset=utf-8";
-  sendText(response, 200, fs.readFileSync(assetPath, "utf8"), contentType);
+  sendText(response, 200, fs.readFileSync(assetPath, "utf8"), contentType, {
+    "Cache-Control": "no-store"
+  });
 }
 
 function summarizeProjectForSite(project) {
@@ -733,7 +752,21 @@ function createLauncherServer(options) {
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/") {
-        sendText(response, 200, renderHomePage({ projectsRoot }), "text/html; charset=utf-8");
+        const cspNonce = crypto.randomBytes(16).toString("base64");
+        sendText(response, 200, renderHomePage({ projectsRoot, cspNonce }), "text/html; charset=utf-8", {
+          "Content-Security-Policy": [
+            "default-src 'self'",
+            "script-src 'self' 'nonce-" + cspNonce + "'",
+            "style-src 'self'",
+            "img-src 'self' data:",
+            "connect-src 'self'",
+            "font-src 'self'",
+            "object-src 'none'",
+            "base-uri 'none'",
+            "frame-ancestors 'none'",
+            "form-action 'self'"
+          ].join("; ")
+        });
         return;
       }
 
@@ -764,9 +797,9 @@ function createLauncherServer(options) {
         return;
       }
 
-      if (request.method === "GET" && requestUrl.pathname === "/api/session") {
+      if (request.method === "GET" && requestUrl.pathname === "/api/security/session") {
         const sessionBootstrap = httpSecurity.getSessionBootstrap(requestSecurity.hostInfo);
-        sendJson(response, 200, sessionBootstrap.body, sessionBootstrap.headers);
+        sendJson(response, 200, sessionBootstrap.body);
         return;
       }
 
@@ -1885,6 +1918,7 @@ function createLauncherServer(options) {
         ok: false,
         status: "error",
         error: sanitizeErrorText(error.message),
+        message: sanitizeErrorText(error.message),
         code: error.code || null,
         current_operation: isSecurityBoundary ? null : (error.current_operation || null),
         required_fields: isSecurityBoundary ? [] : (error.required_fields || []),
