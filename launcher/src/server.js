@@ -340,6 +340,7 @@ function renderHomePage(config) {
       projectsRoot: config.projectsRoot,
       sessionPath: "/api/session"
     }) + ";</script>",
+    "  <script src=\"/assets/project-summary-counts.js\"></script>",
     "  <script src=\"/assets/app.js\"></script>",
     "</body>",
     "</html>"
@@ -743,6 +744,11 @@ function createLauncherServer(options) {
 
       if (request.method === "GET" && requestUrl.pathname === "/assets/app.js") {
         serveAsset(response, "app.js");
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/assets/project-summary-counts.js") {
+        serveAsset(response, "project-summary-counts.js");
         return;
       }
 

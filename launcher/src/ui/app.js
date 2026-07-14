@@ -29,6 +29,7 @@
   const proofPackRefreshButton = document.getElementById("proof-pack-refresh-button");
   const proofPackGenerateButton = document.getElementById("proof-pack-generate-button");
   const proofPackResult = document.getElementById("proof-pack-result");
+  const projectSummaryCounts = window.FactoryProjectSummaryCounts || null;
   const refreshStateButton = document.getElementById("refresh-state-button");
   const statePlanForm = document.getElementById("state-plan-form");
   const statePlanPrompt = document.getElementById("state-plan-prompt");
@@ -220,6 +221,7 @@
   let generationSelectionRequestId = 0;
   let generationSelectionSettleTimer = null;
   let generationStatusLoading = false;
+  let projectSummaryHydrating = false;
   let generationViewAbortController = null;
   let generationView = {
     slug: "",
@@ -336,6 +338,89 @@
     proofPackStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
   }
 
+  function resolveProjectSummaryCounts(project, selectedSlug) {
+    if (projectSummaryCounts && typeof projectSummaryCounts.resolveProjectSummaryCounts === "function") {
+      return projectSummaryCounts.resolveProjectSummaryCounts({
+        project,
+        selectedSlug,
+        generationView,
+        pendingSelectionHydration: projectSummaryHydrating
+      });
+    }
+    return {
+      status: "unavailable",
+      source: "missing_helper",
+      pages: null,
+      properties: null,
+      attachments: null
+    };
+  }
+
+  function formatProjectSummaryCount(countState, key) {
+    if (countState && countState.status === "loading") {
+      return "Loading...";
+    }
+    const value = countState && countState[key];
+    return value != null ? String(value) : "Unavailable";
+  }
+
+  function renderProjectList(projects) {
+    const selectedGenerateSlug = String(generateProjectSlug.value || "").trim();
+    projectList.innerHTML = projects.map((project) => {
+      const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
+      const dependencyState = project.dependency_state || null;
+      const generationState = project.generation || null;
+      const generatedSite = project.generated_site || null;
+      const countsState = resolveProjectSummaryCounts(project, selectedGenerateSlug);
+      const isSelected = project.slug === selectedGenerateSlug;
+      const blockerSummary = dependencyState && Array.isArray(dependencyState.blockers) && dependencyState.blockers.length
+        ? dependencyState.blockers.join(" | ")
+        : "Not checked yet";
+      const overallReadiness = dependencyState
+        ? (dependencyState.can_generate ? "Project ready" : "Needs setup")
+        : "Unknown";
+      const siteHealth = generatedSite && generatedSite.present
+        ? "Healthy"
+        : (generationState && generationState.status && generationState.status !== "not_generated"
+          ? humanizeOperationStatus(generationState.status)
+          : "Not generated yet");
+      const lastMeaningfulOperation = generationState && generationState.status && generationState.status !== "not_generated"
+        ? humanizeOperationType(generationState.status === "succeeded" ? "controlled_generate" : generationState.status)
+        : "None";
+      const actionLinks = isSelected
+        ? buildActionLinks([
+          generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
+            ? "<a class=\"button\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
+            : "",
+          "<a class=\"button\" href=\"#state-plan-form\">Ask AI to Change</a>"
+        ])
+        : (generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
+          ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
+          : "");
+      return [
+        "<article class=\"project-card" + (isSelected ? " project-card--selected" : "") + "\">",
+        "  <div class=\"project-card__header\">",
+        "    <div>",
+        "      <h3>" + escapeHtml(project.site_name) + "</h3>",
+        "      <p class=\"project-note project-note--compact\">" + escapeHtml(project.slug) + "</p>",
+        "    </div>",
+        "    <span class=\"status-pill\">" + escapeHtml(isSelected ? "Selected" : ("Runtime " + runtimeStatus.replace(/_/g, " "))) + "</span>",
+        "  </div>",
+        "  <dl>",
+        "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(overallReadiness) + "</dd></div>",
+        "    <div><dt>Site health</dt><dd>" + escapeHtml(siteHealth) + "</dd></div>",
+        "    <div><dt>Pages</dt><dd>" + escapeHtml(formatProjectSummaryCount(countsState, "pages")) + "</dd></div>",
+        "    <div><dt>Properties</dt><dd>" + escapeHtml(formatProjectSummaryCount(countsState, "properties")) + "</dd></div>",
+        "    <div><dt>Attachments</dt><dd>" + escapeHtml(formatProjectSummaryCount(countsState, "attachments")) + "</dd></div>",
+        "    <div><dt>Last operation</dt><dd>" + escapeHtml(lastMeaningfulOperation) + "</dd></div>",
+        "  </dl>",
+        dependencyState ? "  <p class=\"project-note\">" + escapeHtml(dependencyState.next_action || (dependencyState.can_generate ? "This project is ready for the next step." : blockerSummary)) + "</p>" : "",
+        actionLinks ? "  <div class=\"site-links\">" + actionLinks + "</div>" : "",
+        "</article>"
+      ].join("\n");
+    }).join("\n");
+  }
+
   function renderProjects(projects) {
     projectsCache = projects.slice();
 
@@ -407,62 +492,7 @@
       : "Not recorded";
     milestoneGenerate.disabled = !(selectedProject.dependency_state && selectedProject.dependency_state.can_generate && selectedProject.current_run_id);
 
-    const selectedGenerateSlug = String(generateProjectSlug.value || "").trim();
-    projectList.innerHTML = projects.map((project) => {
-      const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
-      const dependencyState = project.dependency_state || null;
-      const generationState = project.generation || null;
-      const generatedSite = project.generated_site || null;
-      const siteCounts = generatedSite && generatedSite.counts_summary && generatedSite.counts_summary.after
-        ? generatedSite.counts_summary.after
-        : (generatedSite && generatedSite.counts ? generatedSite.counts : null);
-      const isSelected = project.slug === selectedGenerateSlug;
-      const blockerSummary = dependencyState && Array.isArray(dependencyState.blockers) && dependencyState.blockers.length
-        ? dependencyState.blockers.join(" | ")
-        : "Not checked yet";
-      const overallReadiness = dependencyState
-        ? (dependencyState.can_generate ? "Project ready" : "Needs setup")
-        : "Unknown";
-      const siteHealth = generatedSite && generatedSite.present
-        ? "Healthy"
-        : (generationState && generationState.status && generationState.status !== "not_generated"
-          ? humanizeOperationStatus(generationState.status)
-          : "Not generated yet");
-      const lastMeaningfulOperation = generationState && generationState.status && generationState.status !== "not_generated"
-        ? humanizeOperationType(generationState.status === "succeeded" ? "controlled_generate" : generationState.status)
-        : "None";
-      const actionLinks = isSelected
-        ? buildActionLinks([
-          generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
-            ? "<a class=\"button\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
-            : "",
-          "<a class=\"button\" href=\"#state-plan-form\">Ask AI to Change</a>"
-        ])
-        : (generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
-          ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
-          : "");
-      return [
-        "<article class=\"project-card" + (isSelected ? " project-card--selected" : "") + "\">",
-        "  <div class=\"project-card__header\">",
-        "    <div>",
-        "      <h3>" + escapeHtml(project.site_name) + "</h3>",
-        "      <p class=\"project-note project-note--compact\">" + escapeHtml(project.slug) + "</p>",
-        "    </div>",
-        "    <span class=\"status-pill\">" + escapeHtml(isSelected ? "Selected" : ("Runtime " + runtimeStatus.replace(/_/g, " "))) + "</span>",
-        "  </div>",
-        "  <dl>",
-        "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(overallReadiness) + "</dd></div>",
-        "    <div><dt>Site health</dt><dd>" + escapeHtml(siteHealth) + "</dd></div>",
-        "    <div><dt>Pages</dt><dd>" + escapeHtml(siteCounts && siteCounts.pages != null ? String(siteCounts.pages) : "Unavailable") + "</dd></div>",
-        "    <div><dt>Properties</dt><dd>" + escapeHtml(siteCounts && siteCounts.properties != null ? String(siteCounts.properties) : "Unavailable") + "</dd></div>",
-        "    <div><dt>Attachments</dt><dd>" + escapeHtml(siteCounts && siteCounts.attachments != null ? String(siteCounts.attachments) : "Unavailable") + "</dd></div>",
-        "    <div><dt>Last operation</dt><dd>" + escapeHtml(lastMeaningfulOperation) + "</dd></div>",
-        "  </dl>",
-        dependencyState ? "  <p class=\"project-note\">" + escapeHtml(dependencyState.next_action || (dependencyState.can_generate ? "This project is ready for the next step." : blockerSummary)) + "</p>" : "",
-        actionLinks ? "  <div class=\"site-links\">" + actionLinks + "</div>" : "",
-        "</article>"
-      ].join("\n");
-    }).join("\n");
+    renderProjectList(projects);
 
     const latestProject = projects
       .filter((project) => project.current_run_id)
@@ -918,6 +948,7 @@
     generatePreviewResult.hidden = true;
     generatePreviewResult.innerHTML = "";
     clearGenerateResult();
+    renderProjectList(projectsCache);
     renderGenerationSurface();
     updateGenerateActionState();
     return generationSelectionRequestId;
@@ -1978,6 +2009,7 @@
 
     generationView.sitePayload = payload;
     generationView.error = null;
+    renderProjectList(projectsCache);
     renderGenerationSurface();
   }
 
@@ -2050,6 +2082,7 @@
       operations: Array.isArray(payload.operations) ? payload.operations : []
     };
     generationView.error = null;
+    renderProjectList(projectsCache);
     renderGenerationSurface();
     refreshSetupMutationAvailability();
     updateGenerationPolling(payload);
@@ -2167,6 +2200,7 @@
     if (requestId !== loadProjectsRequestId) {
       return;
     }
+    projectSummaryHydrating = true;
     renderProjects(payload.projects || []);
     if (requestId !== loadProjectsRequestId) {
       return;
@@ -2189,14 +2223,17 @@
           await loadSiteStatus(generateSlugSnapshot, { requestId: activeGenerationRequestId });
         } finally {
           if (isActiveGenerationSelection(generateSlugSnapshot, activeGenerationRequestId)) {
+            projectSummaryHydrating = false;
             generationStatusLoading = false;
             generationView.loading = false;
+            renderProjectList(projectsCache);
             renderGenerationSurface();
             updateGenerateActionState();
           }
         }
       } else {
         await loadGenerationViewForSelection(generateSlugSnapshot);
+        projectSummaryHydrating = false;
     }
     if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
       return;
