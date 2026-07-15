@@ -1534,6 +1534,13 @@ arbitrary CSS/JS/PHP generation
 AI direct apply
 ```
 
+## Related decision records
+
+- `docs/architecture/crocoblock-official-package-provider-adr.md`
+- `docs/architecture/crocoblock-official-package-provider-questions.md`
+
+These records capture the current supportability position for an official Crocoblock package provider contract. They are evidence and planning artifacts only; they are not an implementation green light.
+
 ## Next recommended tasks
 
 1. Save this roadmap as:
