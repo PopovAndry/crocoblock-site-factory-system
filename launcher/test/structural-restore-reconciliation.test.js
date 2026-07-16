@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -140,6 +141,20 @@ function readLatestProof(runtimePath) {
   return JSON.parse(fs.readFileSync(path.join(proofDir, files[files.length - 1]), "utf8"));
 }
 
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function addLightweightDbRescue(workRoot, content) {
+  const filePath = path.join(workRoot, "lightweight-database-rescue.sql");
+  writeFile(filePath, content || "-- MySQL dump\nCREATE TABLE `wp_options` (`option_id` bigint unsigned NOT NULL);\nCREATE TABLE `wp_posts` (`ID` bigint unsigned NOT NULL);\nCREATE TABLE `wp_postmeta` (`meta_id` bigint unsigned NOT NULL);\n");
+  return {
+    filePath,
+    size: fs.statSync(filePath).size,
+    digest: sha256File(filePath)
+  };
+}
+
 test("journal is atomic, server-confined, and discovery only selects unfinished structural restores", () => {
   const projectsRoot = tempRoot();
   const fixture = createProject(projectsRoot, "journal-project");
@@ -275,6 +290,149 @@ test("post-promotion pre-database interruption rolls original filesystem back an
   });
   assert.equal(second.checked, 0);
   assert.equal(listOperations({ projectsRoot, slug: fixture.slug }).length, 1);
+});
+
+test("lightweight restart before DB import rolls filesystem back and removes private DB rescue", async () => {
+  const projectsRoot = tempRoot();
+  const fixture = createProject(projectsRoot, "light-before-db");
+  const operationId = "op-light-before-db";
+  createRunningRestoreOperation(projectsRoot, fixture.slug, operationId);
+  const workRoot = getRestoreWorkRoot(fixture.runtimePath, operationId);
+  const rescue = addLightweightDbRescue(workRoot);
+  const liveRoot = path.join(fixture.runtimePath, "wordpress");
+  const rollbackRoot = path.join(workRoot, "rollback-wordpress");
+  const originalConfig = fs.readFileSync(path.join(liveRoot, "wp-config.php"), "utf8");
+  removeTree(liveRoot);
+  createWordPressTree(liveRoot, "restored-source");
+  createWordPressTree(rollbackRoot, "original");
+  writeFile(path.join(rollbackRoot, "wp-content", "uploads", "original-probe.txt"), "original\n");
+  writeFile(path.join(rollbackRoot, "wp-config.php"), originalConfig);
+  createJournal(projectsRoot, fixture, operationId, {
+    rescue_strategy: "lightweight_required",
+    rescue_verified: true,
+    full_recovery_point_created: false,
+    lightweight_db_rescue_completed: true,
+    lightweight_db_rescue_size: rescue.size,
+    lightweight_db_rescue_digest: rescue.digest,
+    paths: { lightweight_db_rescue: "runs/restore-work/" + operationId + "/lightweight-database-rescue.sql" },
+    wordpress_service_was_running: true,
+    rollback_tree_ready: true,
+    filesystem_promotion_completed: true,
+    database_import_started: false,
+    source_database_import_started: false
+  });
+  const calls = [];
+
+  const result = await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController(calls, true)
+  });
+  const operation = listOperations({ projectsRoot, slug: fixture.slug })[0];
+
+  assert.equal(result.results[0].action, "promoted_before_db_rollback");
+  assert.equal(operation.result_summary.rescue_strategy, "lightweight_required");
+  assert.equal(operation.result_summary.full_recovery_point_created, false);
+  assert.equal(operation.result_summary.database_import_started, false);
+  assert.equal(fs.existsSync(path.join(liveRoot, "wp-content", "uploads", "original-probe.txt")), true);
+  assert.equal(fs.existsSync(rescue.filePath), false);
+});
+
+test("lightweight restart after durable DB completion restores DB and filesystem when rescue is verified", async () => {
+  const projectsRoot = tempRoot();
+  const fixture = createProject(projectsRoot, "light-after-db");
+  const operationId = "op-light-after-db";
+  createRunningRestoreOperation(projectsRoot, fixture.slug, operationId);
+  const workRoot = getRestoreWorkRoot(fixture.runtimePath, operationId);
+  const rescue = addLightweightDbRescue(workRoot);
+  const liveRoot = path.join(fixture.runtimePath, "wordpress");
+  const rollbackRoot = path.join(workRoot, "rollback-wordpress");
+  const originalConfig = fs.readFileSync(path.join(liveRoot, "wp-config.php"), "utf8");
+  removeTree(liveRoot);
+  createWordPressTree(liveRoot, "restored-source");
+  writeFile(path.join(liveRoot, "wp-content", "uploads", "source-only.txt"), "source\n");
+  createWordPressTree(rollbackRoot, "original");
+  writeFile(path.join(rollbackRoot, "wp-content", "uploads", "original-probe.txt"), "original\n");
+  writeFile(path.join(rollbackRoot, "wp-config.php"), originalConfig);
+  createJournal(projectsRoot, fixture, operationId, {
+    rescue_strategy: "lightweight_required",
+    rescue_verified: true,
+    full_recovery_point_created: false,
+    lightweight_db_rescue_completed: true,
+    lightweight_db_rescue_size: rescue.size,
+    lightweight_db_rescue_digest: rescue.digest,
+    paths: { lightweight_db_rescue: "runs/restore-work/" + operationId + "/lightweight-database-rescue.sql" },
+    wordpress_service_was_running: true,
+    rollback_tree_ready: true,
+    filesystem_promotion_completed: true,
+    database_import_started: true,
+    database_import_completed: true,
+    source_database_import_started: true,
+    source_database_import_completed: true,
+    final_restore_verified: false
+  });
+  const calls = [];
+  const dbImports = [];
+
+  const result = await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController(calls, true),
+    dbImporter: async ({ databasePath }) => {
+      dbImports.push(databasePath);
+      return { successful: true };
+    },
+    agentRepairer: async () => {
+      calls.push("agent");
+      return { successful: true };
+    },
+    healthVerifier: async () => {
+      calls.push("health");
+      return { wordpress: "ok" };
+    }
+  });
+  const operation = listOperations({ projectsRoot, slug: fixture.slug })[0];
+
+  assert.equal(result.results[0].action, "lightweight_db_completed_rollback");
+  assert.equal(operation.stage, "interrupted_reconciled");
+  assert.equal(operation.result_summary.lightweight_database_rollback_completed, true);
+  assert.equal(operation.result_summary.database_import_started, true);
+  assert.equal(operation.result_summary.manual_recovery_required, false);
+  assert.equal(dbImports.length, 1);
+  assert.equal(dbImports[0], rescue.filePath);
+  assert.equal(fs.existsSync(path.join(liveRoot, "wp-content", "uploads", "original-probe.txt")), true);
+  assert.equal(fs.existsSync(path.join(liveRoot, "wp-content", "uploads", "source-only.txt")), false);
+  assert.equal(fs.existsSync(rescue.filePath), false);
+  assert.ok(calls.includes("agent"));
+  assert.ok(calls.includes("health"));
+});
+
+test("lightweight restart after DB completion requires verified DB rescue", async () => {
+  const projectsRoot = tempRoot();
+  const fixture = createProject(projectsRoot, "light-missing-db");
+  const operationId = "op-light-missing";
+  createRunningRestoreOperation(projectsRoot, fixture.slug, operationId);
+  createJournal(projectsRoot, fixture, operationId, {
+    rescue_strategy: "lightweight_required",
+    lightweight_db_rescue_completed: true,
+    lightweight_db_rescue_size: 123,
+    lightweight_db_rescue_digest: "0".repeat(64),
+    paths: { lightweight_db_rescue: "runs/restore-work/" + operationId + "/lightweight-database-rescue.sql" },
+    filesystem_promotion_completed: true,
+    database_import_started: true,
+    database_import_completed: true,
+    source_database_import_started: true,
+    source_database_import_completed: true
+  });
+
+  await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController([], true),
+    dbImporter: async () => {
+      throw new Error("should not import");
+    }
+  });
+  const operation = listOperations({ projectsRoot, slug: fixture.slug })[0];
+  assert.equal(operation.stage, "interrupted_recovery_required");
+  assert.equal(operation.error.code, "restore_reconciliation_lightweight_db_missing");
 });
 
 test("ambiguous DB-import and invalid journal identity become manual recovery required", async () => {

@@ -34,6 +34,7 @@ const {
   validateArchiveEntries
 } = require("./structural-snapshot-capture");
 const {
+  captureDatabaseArtifact,
   DB_SERVICE,
   sanitizeDiagnosticText
 } = require("./structural-snapshot-db-capture");
@@ -53,6 +54,7 @@ const MYSQL_IMPORT_TIMEOUT_MS = 180000;
 const SERVICE_TIMEOUT_MS = 90000;
 const HEALTH_TIMEOUT_MS = 120000;
 const RESTORE_WORK_DIRECTORY = path.join("runs", "restore-work");
+const LIGHTWEIGHT_DB_RESCUE_FILENAME = "lightweight-database-rescue.sql";
 const FORBIDDEN_EXECUTION_KEYS = new Set([
   "plan",
   "snapshotPath",
@@ -82,6 +84,12 @@ const FORBIDDEN_EXECUTION_KEYS = new Set([
   "staging_path",
   "backupPath",
   "backup_path",
+  "rescuePath",
+  "rescue_path",
+  "rollbackPath",
+  "rollback_path",
+  "dbDumpPath",
+  "db_dump_path",
   "confirmationPhrase",
   "confirmation_phrase",
   "confirmationPhraseOverride",
@@ -380,6 +388,21 @@ function rollbackPromotedFilesystem(options) {
   return true;
 }
 
+function ensureSameVolumeRename(options) {
+  const liveRoot = path.resolve(options.liveWordPressRoot);
+  const rollbackRoot = path.resolve(options.rollbackRoot);
+  if (typeof options.sameVolumeProbe === "function") {
+    if (options.sameVolumeProbe({ liveWordPressRoot: liveRoot, rollbackRoot }) !== true) {
+      throw createRestoreExecutionError("restore_rollback_cross_volume_unsafe", "Restore rollback must stay on the same volume.", 409);
+    }
+    return true;
+  }
+  if (path.parse(liveRoot).root.toLowerCase() !== path.parse(rollbackRoot).root.toLowerCase()) {
+    throw createRestoreExecutionError("restore_rollback_cross_volume_unsafe", "Restore rollback must stay on the same volume.", 409);
+  }
+  return true;
+}
+
 function runDockerCompose(runtimePath, args, options) {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", ["compose"].concat(args), {
@@ -470,6 +493,26 @@ function importDatabaseArtifact(options) {
   });
 }
 
+async function captureLightweightDatabaseRescue(options) {
+  const workRoot = assertInside(options.runtimePath, options.workRoot, "restore_work_path_unsafe");
+  ensureDirectory(workRoot);
+  const artifact = await captureDatabaseArtifact({
+    projectsRoot: options.projectsRoot,
+    runtimePath: options.runtimePath,
+    snapshotDirectory: workRoot,
+    artifactFilename: LIGHTWEIGHT_DB_RESCUE_FILENAME,
+    dumpRunner: options.dumpRunner,
+    timeoutMs: options.timeoutMs
+  });
+  return {
+    verified: true,
+    databasePath: assertInside(workRoot, path.join(workRoot, artifact.relative_filename), "restore_lightweight_db_path_unsafe"),
+    relativeFilename: artifact.relative_filename,
+    sizeBytes: artifact.size_bytes,
+    digest: artifact.digest
+  };
+}
+
 async function repairAgentBinding(options) {
   const credential = requireAgentSigningCredential(options.projectState);
   const restBase = options.projectState.project.wp_url + "/wp-json/factory/v1";
@@ -518,6 +561,10 @@ function writeRestoreProof(options) {
     plan_id: options.planId,
     source_snapshot_id: options.sourceSnapshotId,
     rescue_snapshot_id: options.rescueSnapshotId,
+    rescue_strategy: options.rescueStrategy,
+    full_recovery_point_created: options.fullRecoveryPointCreated === true,
+    lightweight_db_rescue_verified: options.lightweightDbRescueVerified === true,
+    filesystem_rollback_retained: options.filesystemRollbackRetained === true,
     status: options.status,
     stages: options.stages.slice(),
     filesystem: options.filesystem,
@@ -545,6 +592,9 @@ function browserSafeResult(result) {
     source_snapshot_id: result.source_snapshot_id,
     rescue_snapshot_id: result.rescue_snapshot_id,
     snapshot_id: result.rescue_snapshot_id,
+    rescue_strategy: result.rescue_strategy || null,
+    full_recovery_point_created: result.full_recovery_point_created === true,
+    temporary_safety_copy_removed: result.temporary_safety_copy_removed === true,
     status: result.status,
     manifest_status: "verified",
     restorable: true,
@@ -575,6 +625,9 @@ function resultFromSummary(summary) {
     plan_id: safe.plan_id || null,
     source_snapshot_id: safe.source_snapshot_id || null,
     rescue_snapshot_id: safe.rescue_snapshot_id || null,
+    rescue_strategy: safe.rescue_strategy || null,
+    full_recovery_point_created: safe.full_recovery_point_created === true,
+    temporary_safety_copy_removed: safe.temporary_safety_copy_removed === true,
     status: safe.status,
     restored_components: Array.isArray(safe.restored_components) ? safe.restored_components.slice() : [],
     stages: Array.isArray(safe.stages) ? safe.stages.slice() : [],
@@ -609,7 +662,11 @@ async function executeRestoreInCoordinator(context, options) {
     dbImportCompleted: false,
     wordpressStopped: false,
     rescueSnapshotId: null,
-    maintenance: null
+    maintenance: null,
+    rescueStrategy: null,
+    lightweightDbRescue: null,
+    lightweightDbRollbackCompleted: false,
+    lightweightFilesystemRollbackCompleted: false
   };
   let journalCreated = false;
 
@@ -637,26 +694,72 @@ async function executeRestoreInCoordinator(context, options) {
 
   async function cleanupBeforeThrow(error) {
     try {
-      if (state.liveFilesystemChanged && !state.dbImportCompleted) {
-        rollbackPromotedFilesystem({
+      if (state.rescueStrategy === "lightweight_required" && state.dbImportBegan && !state.dbImportCompleted) {
+        updateJournal({
+          manual_recovery_required: true
+        });
+        error.manualRecoveryRequired = true;
+        throw error;
+      }
+      if (state.rescueStrategy === "lightweight_required" && state.dbImportCompleted && state.lightweightDbRescue) {
+        if (!state.wordpressStopped) {
+          await serviceController("stopWordPress", { runtimePath });
+          state.wordpressStopped = true;
+        }
+        updateJournal({
+          current_stage: "rolling_back_lightweight_database",
+          lightweight_database_rollback_started: true
+        });
+        await (options.dbImporter || importDatabaseArtifact)({
+          databasePath: state.lightweightDbRescue.databasePath,
+          runtimePath,
+          rollback: true
+        });
+        state.lightweightDbRollbackCompleted = true;
+        updateJournal({
+          current_stage: "rolling_back_lightweight_database",
+          lightweight_database_rollback_completed: true
+        });
+      }
+      if (state.liveFilesystemChanged && (state.rescueStrategy === "lightweight_required" || !state.dbImportCompleted)) {
+        const rolledBack = rollbackPromotedFilesystem({
           liveFilesystemChanged: state.liveFilesystemChanged,
           liveWordPressRoot,
           rollbackRoot
         });
         state.liveFilesystemChanged = false;
+        if (rolledBack && state.rescueStrategy === "lightweight_required") {
+          state.lightweightFilesystemRollbackCompleted = true;
+          updateJournal({
+            current_stage: "rolling_back_lightweight_filesystem",
+            lightweight_filesystem_rollback_completed: true
+          });
+        }
       }
       if (state.wordpressStopped) {
         await serviceController("startWordPress", { runtimePath });
         state.wordpressStopped = false;
       }
+      if (state.rescueStrategy === "lightweight_required" && (state.lightweightDbRollbackCompleted || !state.dbImportBegan)) {
+        const proofId = "restore-agent-rollback-" + timestampCompact(options.clock);
+        const repairer = options.rollbackAgentRepairer || options.agentRepairer || repairAgentBinding;
+        await repairer({ projectState, runtimePath, proofId, rollback: true });
+        const verifier = options.rollbackHealthVerifier || options.healthVerifier || verifyHealth;
+        await verifier({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController, rollback: true });
+      }
       if (state.maintenance && state.maintenance.created === true) {
         state.maintenance.cleanup();
       }
-      if (!state.liveFilesystemChanged && !state.dbImportCompleted) {
+      if (!state.liveFilesystemChanged && (state.rescueStrategy !== "lightweight_required" || !state.dbImportBegan || state.lightweightDbRollbackCompleted)) {
         cleanupTree(workRoot);
       }
     } catch (cleanupError) {
       error.manualRecoveryRequired = true;
+    }
+    if (error.result_summary && typeof error.result_summary === "object") {
+      error.result_summary.lightweight_database_rollback_completed = state.lightweightDbRollbackCompleted === true;
+      error.result_summary.lightweight_filesystem_rollback_completed = state.lightweightFilesystemRollbackCompleted === true;
+      error.result_summary.manual_recovery_required = error.manualRecoveryRequired === true || (state.dbImportCompleted === true && state.lightweightDbRollbackCompleted !== true);
     }
     throw error;
   }
@@ -684,8 +787,12 @@ async function executeRestoreInCoordinator(context, options) {
     if (loaded.plan.readiness !== "ready") {
       throw createRestoreExecutionError("restore_plan_not_ready", "Restore plan is not ready for execution.", 409);
     }
-    if (loaded.plan.rescue_strategy !== "full_required") {
-      throw createRestoreExecutionError("restore_full_rescue_required", "This restore executor requires a full rescue Recovery Point.", 409);
+    state.rescueStrategy = loaded.plan.rescue_strategy;
+    if (loaded.plan.rescue_strategy === "none_emergency") {
+      throw createRestoreExecutionError("restore_emergency_not_supported", "Emergency no-rescue restore execution is not available yet.", 409);
+    }
+    if (loaded.plan.rescue_strategy !== "full_required" && loaded.plan.rescue_strategy !== "lightweight_required") {
+      throw createRestoreExecutionError("restore_rescue_strategy_unsupported", "This restore executor does not support the requested rescue strategy.", 409);
     }
     if (String(loaded.plan.confirmation && loaded.plan.confirmation.phrase || "") !== String(options.exactConfirmation || "")) {
       throw createRestoreExecutionError("restore_confirmation_mismatch", "Restore confirmation text does not match.", 409);
@@ -697,6 +804,7 @@ async function executeRestoreInCoordinator(context, options) {
       operationId: context.operationId,
       planId: loaded.plan.plan_id,
       sourceSnapshotId: loaded.plan.snapshot_id,
+      rescueStrategy: loaded.plan.rescue_strategy,
       requestFingerprint: options.requestFingerprint,
       stage: "validating_source",
       clock: options.clock
@@ -712,29 +820,58 @@ async function executeRestoreInCoordinator(context, options) {
       }
     });
 
-    await stage("creating_rescue");
-    const capturePrimitive = options.rescueCapture || executeFullCapture;
-    const rescue = await capturePrimitive({
-      projectState,
-      projectsRoot,
-      operationId: context.operationId,
-      setStage: context.setStage
-    }, Object.assign({}, options.rescueOptions || {}, {
-      maintenanceController: options.rescueMaintenanceController || (() => ({
-        existedBefore: fs.existsSync(path.join(liveWordPressRoot, ".maintenance")),
-        created: false,
-        cleanup: () => false
-      }))
-    }));
-    state.rescueSnapshotId = rescue.result && rescue.result.snapshot_id || null;
-    if (!state.rescueSnapshotId || !rescue.result || !rescue.result.summary || rescue.result.summary.restorable !== true) {
-      throw createRestoreExecutionError("restore_rescue_not_restorable", "Rescue Recovery Point was not verified as restorable.", 500);
+    if (loaded.plan.rescue_strategy === "full_required") {
+      await stage("creating_rescue");
+      const capturePrimitive = options.rescueCapture || executeFullCapture;
+      const rescue = await capturePrimitive({
+        projectState,
+        projectsRoot,
+        operationId: context.operationId,
+        setStage: context.setStage
+      }, Object.assign({}, options.rescueOptions || {}, {
+        maintenanceController: options.rescueMaintenanceController || (() => ({
+          existedBefore: fs.existsSync(path.join(liveWordPressRoot, ".maintenance")),
+          created: false,
+          cleanup: () => false
+        }))
+      }));
+      state.rescueSnapshotId = rescue.result && rescue.result.snapshot_id || null;
+      if (!state.rescueSnapshotId || !rescue.result || !rescue.result.summary || rescue.result.summary.restorable !== true) {
+        throw createRestoreExecutionError("restore_rescue_not_restorable", "Rescue Recovery Point was not verified as restorable.", 500);
+      }
+      updateJournal({
+        current_stage: "creating_rescue",
+        rescue_snapshot_id: state.rescueSnapshotId,
+        rescue_verified: true,
+        full_recovery_point_created: true
+      });
+    } else {
+      await stage("creating_lightweight_rescue");
+      updateJournal({
+        current_stage: "creating_lightweight_rescue",
+        lightweight_db_rescue_started: true,
+        rescue_verified: false,
+        full_recovery_point_created: false
+      });
+      state.lightweightDbRescue = await (options.lightweightDbRescueCapture || captureLightweightDatabaseRescue)({
+        projectsRoot,
+        runtimePath,
+        workRoot,
+        dumpRunner: options.lightweightDumpRunner,
+        timeoutMs: options.lightweightDumpTimeoutMs
+      });
+      updateJournal({
+        current_stage: "creating_lightweight_rescue",
+        rescue_verified: true,
+        lightweight_db_rescue_completed: true,
+        lightweight_db_rescue_size: state.lightweightDbRescue.sizeBytes,
+        lightweight_db_rescue_digest: state.lightweightDbRescue.digest,
+        paths: {
+          lightweight_db_rescue: path.relative(runtimePath, state.lightweightDbRescue.databasePath).split(path.sep).join("/")
+        },
+        full_recovery_point_created: false
+      });
     }
-    updateJournal({
-      current_stage: "creating_rescue",
-      rescue_snapshot_id: state.rescueSnapshotId,
-      rescue_verified: true
-    });
 
     await stage("entering_maintenance", {
       result_summary: {
@@ -772,12 +909,18 @@ async function executeRestoreInCoordinator(context, options) {
       validateExtractedTree({ stagedWordPressRoot });
     }
     const wpConfig = preserveWpConfig({ liveWordPressRoot, stagedWordPressRoot });
+    ensureSameVolumeRename({
+      liveWordPressRoot,
+      rollbackRoot,
+      sameVolumeProbe: options.sameVolumeProbe
+    });
     const serviceState = await serviceController("isWordPressRunning", { runtimePath });
     updateJournal({
       current_stage: "staging_filesystem",
       wordpress_service_was_running: serviceState && serviceState.running === true,
       staging_validated: true,
       rollback_tree_ready: true,
+      lightweight_filesystem_retained: loaded.plan.rescue_strategy === "lightweight_required",
       wp_config_fingerprint_abbrev: wpConfig.fingerprint_abbrev
     });
 
@@ -817,7 +960,8 @@ async function executeRestoreInCoordinator(context, options) {
     await stage("importing_database");
     updateJournal({
       current_stage: "importing_database",
-      database_import_started: true
+      database_import_started: true,
+      source_database_import_started: true
     });
     state.dbImportBegan = true;
     const dbResult = options.dbImporter
@@ -826,7 +970,8 @@ async function executeRestoreInCoordinator(context, options) {
     state.dbImportCompleted = true;
     updateJournal({
       current_stage: "importing_database",
-      database_import_completed: true
+      database_import_completed: true,
+      source_database_import_completed: true
     });
 
     await stage("starting_wordpress");
@@ -862,6 +1007,9 @@ async function executeRestoreInCoordinator(context, options) {
     await stage("cleanup");
     cleanupTree(rollbackRoot);
     cleanupTree(stagingRoot);
+    if (state.lightweightDbRescue && state.lightweightDbRescue.databasePath && fs.existsSync(state.lightweightDbRescue.databasePath)) {
+      fs.rmSync(state.lightweightDbRescue.databasePath, { force: true });
+    }
     try {
       if (fs.existsSync(workRoot) && fs.readdirSync(workRoot).length === 0) {
         fs.rmdirSync(workRoot);
@@ -875,7 +1023,9 @@ async function executeRestoreInCoordinator(context, options) {
     }
     updateJournal({
       current_stage: "cleanup",
-      cleanup_completed: true
+      cleanup_completed: true,
+      final_restore_verified: true,
+      temporary_safety_copy_removed: !state.lightweightDbRescue || !fs.existsSync(state.lightweightDbRescue.databasePath)
     });
 
     await stage("succeeded");
@@ -887,6 +1037,10 @@ async function executeRestoreInCoordinator(context, options) {
       planId: loaded.plan.plan_id,
       sourceSnapshotId: loaded.plan.snapshot_id,
       rescueSnapshotId: state.rescueSnapshotId,
+      rescueStrategy: loaded.plan.rescue_strategy,
+      fullRecoveryPointCreated: loaded.plan.rescue_strategy === "full_required",
+      lightweightDbRescueVerified: loaded.plan.rescue_strategy === "lightweight_required" && state.lightweightDbRescue && state.lightweightDbRescue.verified === true,
+      filesystemRollbackRetained: true,
       status: "succeeded",
       stages,
       filesystem: {
@@ -914,7 +1068,8 @@ async function executeRestoreInCoordinator(context, options) {
         staging_removed: !fs.existsSync(stagingRoot),
         rollback_removed: !fs.existsSync(rollbackRoot),
         work_dir_removed: !fs.existsSync(workRoot),
-        journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME))
+        journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME)),
+        temporary_safety_copy_removed: !state.lightweightDbRescue || !fs.existsSync(state.lightweightDbRescue.databasePath)
       },
       durationMs,
       clock: options.clock
@@ -925,7 +1080,8 @@ async function executeRestoreInCoordinator(context, options) {
       staging_removed: !fs.existsSync(stagingRoot),
       rollback_removed: !fs.existsSync(rollbackRoot),
       work_dir_removed: !fs.existsSync(workRoot),
-      journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME))
+      journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME)),
+      temporary_safety_copy_removed: !state.lightweightDbRescue || !fs.existsSync(state.lightweightDbRescue.databasePath)
     };
     const databaseResult = {
       imported: dbResult && dbResult.successful === true,
@@ -946,7 +1102,8 @@ async function executeRestoreInCoordinator(context, options) {
       staging_removed: !fs.existsSync(stagingRoot),
       rollback_removed: !fs.existsSync(rollbackRoot),
       work_dir_removed: !fs.existsSync(workRoot),
-      journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME))
+      journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME)),
+      temporary_safety_copy_removed: !state.lightweightDbRescue || !fs.existsSync(state.lightweightDbRescue.databasePath)
     };
     const result = {
       project_slug: projectState.project.slug,
@@ -954,6 +1111,9 @@ async function executeRestoreInCoordinator(context, options) {
       plan_id: loaded.plan.plan_id,
       source_snapshot_id: loaded.plan.snapshot_id,
       rescue_snapshot_id: state.rescueSnapshotId,
+      rescue_strategy: loaded.plan.rescue_strategy,
+      full_recovery_point_created: loaded.plan.rescue_strategy === "full_required",
+      temporary_safety_copy_removed: cleanupResult.temporary_safety_copy_removed,
       status: "succeeded",
       restored_components: ["database", "wordpress_filesystem"],
       stages: stages.slice(),
@@ -987,7 +1147,12 @@ async function executeRestoreInCoordinator(context, options) {
     failure.db_import_completed = state.dbImportCompleted === true;
     failure.wordpress_service_stopped = state.wordpressStopped === true;
     failure.rescue_snapshot_id = state.rescueSnapshotId;
-    failure.manual_recovery_required = error && error.manualRecoveryRequired === true || state.dbImportCompleted === true;
+    failure.rescue_strategy = state.rescueStrategy;
+    failure.full_recovery_point_created = state.rescueStrategy === "full_required" && Boolean(state.rescueSnapshotId);
+    failure.lightweight_db_rescue_completed = state.lightweightDbRescue && state.lightweightDbRescue.verified === true;
+    failure.lightweight_database_rollback_completed = state.lightweightDbRollbackCompleted === true;
+    failure.lightweight_filesystem_rollback_completed = state.lightweightFilesystemRollbackCompleted === true;
+    failure.manual_recovery_required = error && error.manualRecoveryRequired === true || (state.dbImportCompleted === true && state.lightweightDbRollbackCompleted !== true);
     error.result_summary = failure;
     await cleanupBeforeThrow(error);
   }
@@ -1048,6 +1213,7 @@ module.exports = {
   RESTORE_WORK_DIRECTORY,
   WORDPRESS_SERVICE,
   browserSafeResult,
+  captureLightweightDatabaseRescue,
   createRestoreExecutionError,
   executeManagedWebsiteRestore,
   executeRestoreInCoordinator,

@@ -37,6 +37,7 @@ const RECONCILIATION_PROOF_SCHEMA_VERSION = 1;
 const RESTORE_WORK_DIRECTORY = path.join("runs", "restore-work");
 const WORDPRESS_SERVICE = "wordpress";
 const SERVICE_TIMEOUT_MS = 90000;
+const MYSQL_IMPORT_TIMEOUT_MS = 180000;
 const REQUIRED_WORDPRESS_ENTRIES = [
   "index.php",
   "wp-admin",
@@ -134,6 +135,10 @@ function normalizeJournal(raw) {
   return Object.assign({}, journal, {
     journal_schema_version: Number(journal.journal_schema_version || 0),
     rescue_verified: normalizeBoolean(journal.rescue_verified),
+    full_recovery_point_created: normalizeBoolean(journal.full_recovery_point_created),
+    lightweight_db_rescue_started: normalizeBoolean(journal.lightweight_db_rescue_started),
+    lightweight_db_rescue_completed: normalizeBoolean(journal.lightweight_db_rescue_completed),
+    lightweight_filesystem_retained: normalizeBoolean(journal.lightweight_filesystem_retained),
     maintenance_preexisting: normalizeBoolean(journal.maintenance_preexisting),
     maintenance_created_by_operation: normalizeBoolean(journal.maintenance_created_by_operation),
     wordpress_service_was_running: normalizeBoolean(journal.wordpress_service_was_running),
@@ -143,8 +148,14 @@ function normalizeJournal(raw) {
     filesystem_promotion_completed: normalizeBoolean(journal.filesystem_promotion_completed),
     database_import_started: normalizeBoolean(journal.database_import_started),
     database_import_completed: normalizeBoolean(journal.database_import_completed),
+    source_database_import_started: normalizeBoolean(journal.source_database_import_started || journal.database_import_started),
+    source_database_import_completed: normalizeBoolean(journal.source_database_import_completed || journal.database_import_completed),
+    lightweight_database_rollback_started: normalizeBoolean(journal.lightweight_database_rollback_started),
+    lightweight_database_rollback_completed: normalizeBoolean(journal.lightweight_database_rollback_completed),
+    lightweight_filesystem_rollback_completed: normalizeBoolean(journal.lightweight_filesystem_rollback_completed),
     agent_repair_completed: normalizeBoolean(journal.agent_repair_completed),
     verification_completed: normalizeBoolean(journal.verification_completed),
+    final_restore_verified: normalizeBoolean(journal.final_restore_verified || journal.verification_completed),
     cleanup_completed: normalizeBoolean(journal.cleanup_completed),
     manual_recovery_required: normalizeBoolean(journal.manual_recovery_required)
   });
@@ -181,11 +192,18 @@ function createRestoreJournal(options) {
     restore_plan_id: options.planId,
     source_snapshot_id: options.sourceSnapshotId,
     rescue_snapshot_id: options.rescueSnapshotId || null,
+    rescue_strategy: options.rescueStrategy || "full_required",
     operation_request_fingerprint: options.requestFingerprint || null,
     created_at: nowIso(options.clock),
     updated_at: nowIso(options.clock),
     current_stage: options.stage || "validating_plan",
     rescue_verified: false,
+    full_recovery_point_created: false,
+    lightweight_db_rescue_started: false,
+    lightweight_db_rescue_completed: false,
+    lightweight_db_rescue_size: null,
+    lightweight_db_rescue_digest: null,
+    lightweight_filesystem_retained: false,
     maintenance_preexisting: false,
     maintenance_created_by_operation: false,
     wordpress_service_was_running: false,
@@ -195,8 +213,14 @@ function createRestoreJournal(options) {
     filesystem_promotion_completed: false,
     database_import_started: false,
     database_import_completed: false,
+    source_database_import_started: false,
+    source_database_import_completed: false,
+    lightweight_database_rollback_started: false,
+    lightweight_database_rollback_completed: false,
+    lightweight_filesystem_rollback_completed: false,
     agent_repair_completed: false,
     verification_completed: false,
+    final_restore_verified: false,
     cleanup_completed: false,
     manual_recovery_required: false,
     paths: {
@@ -232,7 +256,9 @@ function writeRestoreJournal(options) {
 
 function updateRestoreJournal(options, patch) {
   const current = readRestoreJournal(options);
-  const next = normalizeJournal(Object.assign({}, current, patch || {}, {
+  const safePatch = patch || {};
+  const next = normalizeJournal(Object.assign({}, current, safePatch, {
+    paths: Object.assign({}, current.paths || {}, safePatch.paths || {}),
     updated_at: nowIso(options.clock)
   }));
   writeRestoreJournal(Object.assign({}, options, { journal: next }));
@@ -254,6 +280,9 @@ function writeReconciliationProof(options) {
     restore_plan_id: options.planId || null,
     source_snapshot_id: options.sourceSnapshotId || null,
     rescue_snapshot_id: options.rescueSnapshotId || null,
+    rescue_strategy: options.rescueStrategy || null,
+    full_recovery_point_created: options.fullRecoveryPointCreated === true,
+    lightweight_db_rescue_verified: options.lightweightDbRescueVerified === true,
     interrupted_stage: options.interruptedStage || null,
     selected_policy: options.policy,
     actual_state_checks: options.actualStateChecks || {},
@@ -261,6 +290,7 @@ function writeReconciliationProof(options) {
     maintenance: options.maintenance || {},
     filesystem_rollback_completed: options.filesystemRollbackCompleted === true,
     database_import_started: options.databaseImportStarted === true,
+    lightweight_database_rollback_completed: options.lightweightDatabaseRollbackCompleted === true,
     manual_recovery_required: options.manualRecoveryRequired === true,
     final_operation_status: options.finalOperationStatus,
     duration_ms: options.durationMs,
@@ -290,13 +320,17 @@ function validateWordPressTree(rootPath) {
 
 function resolveJournalPaths(runtimePath, journal) {
   const paths = journal.paths && typeof journal.paths === "object" ? journal.paths : {};
-  return {
+  const resolved = {
     workRoot: resolveRelative(runtimePath, paths.work_root, "restore_work_path_unsafe"),
     stagingRoot: resolveRelative(runtimePath, paths.staging_root, "restore_staging_path_unsafe"),
     rollbackRoot: resolveRelative(runtimePath, paths.rollback_root, "restore_rollback_path_unsafe"),
     promotedSourceRoot: resolveRelative(runtimePath, paths.promoted_source_root, "restore_promoted_path_unsafe"),
     liveWordPressRoot: resolveRelative(runtimePath, paths.live_wordpress_root || "wordpress", "restore_live_path_unsafe")
   };
+  if (paths.lightweight_db_rescue) {
+    resolved.lightweightDbRescue = resolveRelative(runtimePath, paths.lightweight_db_rescue, "restore_lightweight_db_path_unsafe");
+  }
+  return resolved;
 }
 
 function runDockerCompose(runtimePath, args, options) {
@@ -323,6 +357,56 @@ function runDockerCompose(runtimePath, args, options) {
       resolve({ code, stdout, stderr });
     });
   });
+}
+
+function importDatabaseArtifact(options) {
+  return new Promise((resolve, reject) => {
+    const script = [
+      "set -eu;",
+      "mysql",
+      "-u\"$MYSQL_USER\"",
+      "-p\"$MYSQL_PASSWORD\"",
+      "\"$MYSQL_DATABASE\""
+    ].join(" ");
+    const child = spawn("docker", ["compose", "exec", "-T", DB_SERVICE, "sh", "-lc", script], {
+      cwd: options.runtimePath,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true
+    });
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(createReconciliationError("restore_reconciliation_db_import_timeout", "Database rollback import timed out.", 504));
+    }, options.timeoutMs || MYSQL_IMPORT_TIMEOUT_MS);
+    child.stderr.on("data", (chunk) => { stderr += String(chunk).slice(-4096); });
+    child.on("error", () => {
+      clearTimeout(timeout);
+      reject(createReconciliationError("restore_reconciliation_db_import_failed", "Database rollback import could not start.", 502));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(createReconciliationError("restore_reconciliation_db_import_failed", "Database rollback import failed.", 502));
+        return;
+      }
+      resolve({ successful: true, service: DB_SERVICE, streamed: true });
+    });
+    fs.createReadStream(options.databasePath).on("error", reject).pipe(child.stdin);
+  });
+}
+
+function validateLightweightDbRescue(paths, journal) {
+  if (!paths.lightweightDbRescue || !fs.existsSync(paths.lightweightDbRescue)) {
+    throw createReconciliationError("restore_reconciliation_lightweight_db_missing", "Lightweight database rescue is missing.", 409);
+  }
+  const stat = fs.statSync(paths.lightweightDbRescue);
+  if (!stat.isFile() || stat.size !== Number(journal.lightweight_db_rescue_size || 0)) {
+    throw createReconciliationError("restore_reconciliation_lightweight_db_size_mismatch", "Lightweight database rescue is invalid.", 409);
+  }
+  if (sha256File(paths.lightweightDbRescue) !== String(journal.lightweight_db_rescue_digest || "")) {
+    throw createReconciliationError("restore_reconciliation_lightweight_db_digest_mismatch", "Lightweight database rescue is invalid.", 409);
+  }
+  return true;
 }
 
 async function defaultServiceController(action, context) {
@@ -369,10 +453,13 @@ function buildFailureSummary(options) {
     auto_rollback_completed: options.autoRollbackCompleted === true,
     database_import_started: options.databaseImportStarted === true,
     database_import_completed: options.databaseImportCompleted === true,
+    lightweight_database_rollback_completed: options.lightweightDatabaseRollbackCompleted === true,
     filesystem_restored_to_pre_operation_state: options.filesystemRestored === true,
     wordpress_service_running: options.wordpressServiceRunning === true,
     maintenance_remaining: options.maintenanceRemaining === true,
     rescue_snapshot_id: options.rescueSnapshotId || null,
+    rescue_strategy: options.rescueStrategy || null,
+    full_recovery_point_created: options.fullRecoveryPointCreated === true,
     manual_recovery_required: options.manualRecoveryRequired === true,
     reconciliation_code: options.code,
     restore_verified: false
@@ -453,6 +540,9 @@ async function reconcilePrePromotion(context) {
   const startedAt = Date.now();
   const paths = context.paths;
   cleanupTree(paths.stagingRoot);
+  if (context.journal.rescue_strategy === "lightweight_required" && paths.lightweightDbRescue) {
+    cleanupTree(paths.lightweightDbRescue);
+  }
   removeOperationMaintenance(paths.liveWordPressRoot, context.journal);
   if (context.journal.wordpress_service_was_running) {
     await context.serviceController("startWordPress", { runtimePath: context.runtimePath });
@@ -466,6 +556,9 @@ async function reconcilePrePromotion(context) {
     planId: context.journal.restore_plan_id,
     sourceSnapshotId: context.journal.source_snapshot_id,
     rescueSnapshotId: context.journal.rescue_snapshot_id,
+    rescueStrategy: context.journal.rescue_strategy,
+    fullRecoveryPointCreated: context.journal.full_recovery_point_created,
+    lightweightDbRescueVerified: context.journal.lightweight_db_rescue_completed,
     interruptedStage: context.operation.stage,
     policy: "pre_promotion_cleanup",
     actualStateChecks: { filesystem_promotion_completed: false, database_import_started: false },
@@ -497,6 +590,8 @@ async function reconcilePrePromotion(context) {
         wordpressServiceRunning: service.running === true,
         maintenanceRemaining: fs.existsSync(path.join(paths.liveWordPressRoot, ".maintenance")),
         rescueSnapshotId: context.journal.rescue_snapshot_id,
+        rescueStrategy: context.journal.rescue_strategy,
+        fullRecoveryPointCreated: context.journal.full_recovery_point_created,
         manualRecoveryRequired: false,
         code: "restore_interrupted_before_promotion_reconciled"
       }),
@@ -551,6 +646,9 @@ async function reconcilePromotedBeforeDb(context) {
   }
   cleanupTree(paths.promotedSourceRoot);
   cleanupTree(paths.stagingRoot);
+  if (context.journal.rescue_strategy === "lightweight_required" && paths.lightweightDbRescue) {
+    cleanupTree(paths.lightweightDbRescue);
+  }
   removeOperationMaintenance(paths.liveWordPressRoot, context.journal);
   if (context.journal.wordpress_service_was_running) {
     await context.serviceController("startWordPress", { runtimePath: context.runtimePath });
@@ -566,6 +664,9 @@ async function reconcilePromotedBeforeDb(context) {
     planId: context.journal.restore_plan_id,
     sourceSnapshotId: context.journal.source_snapshot_id,
     rescueSnapshotId: context.journal.rescue_snapshot_id,
+    rescueStrategy: context.journal.rescue_strategy,
+    fullRecoveryPointCreated: context.journal.full_recovery_point_created,
+    lightweightDbRescueVerified: context.journal.lightweight_db_rescue_completed,
     interruptedStage: context.operation.stage,
     policy: "promoted_before_db_rollback",
     actualStateChecks: {
@@ -602,6 +703,8 @@ async function reconcilePromotedBeforeDb(context) {
         wordpressServiceRunning: service.running === true,
         maintenanceRemaining: fs.existsSync(path.join(paths.liveWordPressRoot, ".maintenance")),
         rescueSnapshotId: context.journal.rescue_snapshot_id,
+        rescueStrategy: context.journal.rescue_strategy,
+        fullRecoveryPointCreated: context.journal.full_recovery_point_created,
         manualRecoveryRequired: false,
         code: "restore_interrupted_promoted_before_db_reconciled"
       }),
@@ -613,6 +716,133 @@ async function reconcilePromotedBeforeDb(context) {
     }
   }).operation;
   return { action: "promoted_before_db_rollback", operation: updated, proof: proof.proof, proofRef: proof.proofRef };
+}
+
+async function reconcileLightweightAfterDbCompleted(context) {
+  const startedAt = Date.now();
+  const paths = context.paths;
+  try {
+    validateLightweightDbRescue(paths, context.journal);
+    validateWordPressTree(paths.rollbackRoot);
+    validateWordPressTree(paths.liveWordPressRoot);
+  } catch (error) {
+    return classifyManualRecovery(context, {
+      policy: "lightweight_db_completed_rollback",
+      code: error && error.code || "restore_reconciliation_lightweight_invalid",
+      databaseImportStarted: true,
+      databaseImportCompleted: true,
+      manualRecoveryRequired: true
+    });
+  }
+  const rollbackFingerprint = sha256File(path.join(paths.rollbackRoot, "wp-config.php")).slice(0, 12);
+  if (context.journal.wp_config_fingerprint_abbrev && rollbackFingerprint !== context.journal.wp_config_fingerprint_abbrev) {
+    return classifyManualRecovery(context, {
+      policy: "lightweight_db_completed_rollback",
+      code: "restore_reconciliation_wp_config_mismatch",
+      databaseImportStarted: true,
+      databaseImportCompleted: true,
+      manualRecoveryRequired: true
+    });
+  }
+  try {
+    await context.serviceController("stopWordPress", { runtimePath: context.runtimePath });
+    await (context.dbImporter || importDatabaseArtifact)({
+      runtimePath: context.runtimePath,
+      databasePath: paths.lightweightDbRescue
+    });
+    if (fs.existsSync(paths.promotedSourceRoot)) {
+      cleanupTree(paths.promotedSourceRoot);
+    }
+    fs.renameSync(paths.liveWordPressRoot, paths.promotedSourceRoot);
+    fs.renameSync(paths.rollbackRoot, paths.liveWordPressRoot);
+    validateWordPressTree(paths.liveWordPressRoot);
+    cleanupTree(paths.promotedSourceRoot);
+    cleanupTree(paths.stagingRoot);
+    cleanupTree(paths.lightweightDbRescue);
+    removeOperationMaintenance(paths.liveWordPressRoot, context.journal);
+    if (context.agentRepairer) {
+      await context.agentRepairer({ projectState: context.projectState, runtimePath: context.runtimePath, rollback: true });
+    }
+    if (context.journal.wordpress_service_was_running) {
+      await context.serviceController("startWordPress", { runtimePath: context.runtimePath });
+    }
+    if (context.healthVerifier) {
+      await context.healthVerifier({ projectState: context.projectState, runtimePath: context.runtimePath, liveWordPressRoot: paths.liveWordPressRoot, rollback: true });
+    }
+  } catch (error) {
+    return classifyManualRecovery(context, {
+      policy: "lightweight_db_completed_rollback",
+      code: error && error.code || "restore_reconciliation_lightweight_rollback_failed",
+      databaseImportStarted: true,
+      databaseImportCompleted: true,
+      manualRecoveryRequired: true
+    });
+  }
+  const service = await context.serviceController("isWordPressRunning", { runtimePath: context.runtimePath });
+  if (fs.existsSync(paths.workRoot) && fs.readdirSync(paths.workRoot).filter((entry) => entry !== JOURNAL_FILENAME).length === 0) {
+    fs.rmSync(paths.workRoot, { recursive: true, force: true });
+  }
+  const proof = writeReconciliationProof({
+    runtimePath: context.runtimePath,
+    projectSlug: context.slug,
+    operationId: context.operation.operation_id,
+    planId: context.journal.restore_plan_id,
+    sourceSnapshotId: context.journal.source_snapshot_id,
+    rescueSnapshotId: context.journal.rescue_snapshot_id,
+    rescueStrategy: context.journal.rescue_strategy,
+    fullRecoveryPointCreated: false,
+    lightweightDbRescueVerified: true,
+    interruptedStage: context.operation.stage,
+    policy: "lightweight_db_completed_rollback",
+    actualStateChecks: {
+      source_database_import_completed: true,
+      lightweight_db_rescue_verified: true,
+      rollback_tree_valid: true,
+      wp_config_fingerprint_abbrev: rollbackFingerprint
+    },
+    service: { wordpress_running: service.running === true },
+    maintenance: { removed_operation_marker: true, remaining: fs.existsSync(path.join(paths.liveWordPressRoot, ".maintenance")) },
+    filesystemRollbackCompleted: true,
+    databaseImportStarted: true,
+    lightweightDatabaseRollbackCompleted: true,
+    manualRecoveryRequired: false,
+    finalOperationStatus: "failed",
+    durationMs: Date.now() - startedAt,
+    clock: context.clock
+  });
+  const updated = updateOperation({
+    slug: context.slug,
+    projectsRoot: context.projectsRoot,
+    operationId: context.operation.operation_id,
+    patch: {
+      status: "failed",
+      stage: "interrupted_reconciled",
+      completed_at: nowIso(context.clock),
+      proof_ref: proof.proofRef,
+      result_summary: buildFailureSummary({
+        restoreState: "interrupted_reconciled",
+        reconciliationSucceeded: true,
+        autoRollbackCompleted: true,
+        databaseImportStarted: true,
+        databaseImportCompleted: true,
+        lightweightDatabaseRollbackCompleted: true,
+        filesystemRestored: true,
+        wordpressServiceRunning: service.running === true,
+        maintenanceRemaining: fs.existsSync(path.join(paths.liveWordPressRoot, ".maintenance")),
+        rescueSnapshotId: context.journal.rescue_snapshot_id,
+        rescueStrategy: context.journal.rescue_strategy,
+        fullRecoveryPointCreated: false,
+        manualRecoveryRequired: false,
+        code: "restore_interrupted_lightweight_db_completed_reconciled"
+      }),
+      error: {
+        code: "restore_interrupted_lightweight_db_completed_reconciled",
+        message: "Interrupted lightweight restore was safely rolled back after database import.",
+        stage: context.operation.stage || "interrupted"
+      }
+    }
+  }).operation;
+  return { action: "lightweight_db_completed_rollback", operation: updated, proof: proof.proof, proofRef: proof.proofRef };
 }
 
 async function reconcileJournalPolicy(context) {
@@ -630,7 +860,7 @@ async function reconcileJournalPolicy(context) {
     });
   }
 
-  if (journal.database_import_started && !journal.database_import_completed) {
+  if (journal.source_database_import_started && !journal.source_database_import_completed) {
     return classifyManualRecovery(context, {
       policy: "db_import_started_incomplete",
       code: "restore_reconciliation_db_import_incomplete",
@@ -638,6 +868,9 @@ async function reconcileJournalPolicy(context) {
       databaseImportCompleted: false,
       manualRecoveryRequired: true
     });
+  }
+  if (journal.rescue_strategy === "lightweight_required" && journal.source_database_import_completed && !journal.final_restore_verified) {
+    return reconcileLightweightAfterDbCompleted(context);
   }
   if (journal.database_import_completed && !journal.verification_completed) {
     return classifyManualRecovery(context, {
@@ -723,6 +956,9 @@ async function reconcileOperation(options) {
       journal,
       paths,
       serviceController: options.serviceController || defaultServiceController,
+      dbImporter: options.dbImporter,
+      agentRepairer: options.agentRepairer,
+      healthVerifier: options.healthVerifier,
       clock: options.clock
     });
   } finally {
@@ -768,6 +1004,9 @@ async function reconcileInterruptedStructuralRestores(options) {
         slug: item.slug,
         operationId: item.operation_id,
         serviceController: options && options.serviceController,
+        dbImporter: options && options.dbImporter,
+        agentRepairer: options && options.agentRepairer,
+        healthVerifier: options && options.healthVerifier,
         clock: options && options.clock,
         staleLockHeartbeatMs: options && options.staleLockHeartbeatMs
       });

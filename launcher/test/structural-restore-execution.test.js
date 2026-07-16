@@ -29,6 +29,7 @@ const {
 } = require("../src/structural-restore-plan");
 const {
   RESTORE_WORK_DIRECTORY,
+  captureLightweightDatabaseRescue,
   executeManagedWebsiteRestore,
   extractTarArchive,
   importDatabaseArtifact,
@@ -256,6 +257,39 @@ async function setupReadyRestore(slug) {
   return { projectsRoot, project, source, plan, wpConfigBefore };
 }
 
+async function setupLightweightRestore(slug) {
+  const fixture = await setupReadyRestore(slug);
+  const lightPlan = await createReadyPlan(fixture.projectsRoot, slug, fixture.source.snapshotId, {
+    idempotencyKey: "restore-plan-light-" + slug + "-0001",
+    currentSiteEstimator: () => 10 * 1024 * 1024 * 1024,
+    freeSpaceProbe: () => 700 * 1024 * 1024,
+    idGenerator: () => "restore-plan-2026-07-16t12-00-00-000z-abc124"
+  });
+  return Object.assign({}, fixture, { plan: lightPlan });
+}
+
+function lightweightInjections(projectsRoot, slug, calls) {
+  return Object.assign({}, executionInjections(projectsRoot, slug, calls), {
+    freeSpaceProbe: () => 700 * 1024 * 1024,
+    currentSiteEstimator: () => 10 * 1024 * 1024 * 1024,
+    lightweightDbRescueCapture: async ({ workRoot }) => {
+      calls.push("lightweight-db-rescue");
+      const databasePath = path.join(workRoot, "lightweight-database-rescue.sql");
+      writeFile(databasePath, syntheticSql() + "-- lightweight\n");
+      return {
+        verified: true,
+        databasePath,
+        relativeFilename: "lightweight-database-rescue.sql",
+        sizeBytes: fs.statSync(databasePath).size,
+        digest: sha256File(databasePath)
+      };
+    },
+    rescueCapture: async () => {
+      throw Object.assign(new Error("full rescue should not run"), { code: "test_full_rescue_unexpected" });
+    }
+  });
+}
+
 test("valid fresh ready plan executes one coordinator operation and restores filesystem with current wp-config", async () => {
   const slug = "exec-ready";
   const fixture = await setupReadyRestore(slug);
@@ -286,6 +320,104 @@ test("valid fresh ready plan executes one coordinator operation and restores fil
   assert.equal(listManifests({ projectsRoot: fixture.projectsRoot, slug }).some((entry) => entry.snapshot_id === "snapshot-2026-07-16t12-01-00-000z-abcdefabcdef"), true);
 });
 
+test("lightweight restore creates no Recovery Point and removes temporary DB rescue on success", async () => {
+  const slug = "exec-light-success";
+  const fixture = await setupLightweightRestore(slug);
+  const calls = [];
+  const beforeManifests = listManifests({ projectsRoot: fixture.projectsRoot, slug }).length;
+  const result = await executeManagedWebsiteRestore(Object.assign({
+    projectsRoot: fixture.projectsRoot,
+    projectSlug: slug,
+    planId: fixture.plan.plan.plan_id,
+    exactConfirmation: fixture.plan.plan.confirmation.phrase,
+    idempotencyKey: "restore-exec-key-light-0001"
+  }, lightweightInjections(fixture.projectsRoot, slug, calls)));
+  const workRoot = path.join(path.dirname(fixture.project.root), RESTORE_WORK_DIRECTORY, result.operation.operation_id);
+
+  assert.equal(fixture.plan.plan.rescue_strategy, "lightweight_required");
+  assert.equal(result.operation.status, "succeeded");
+  assert.equal(result.operation.result_summary.rescue_strategy, "lightweight_required");
+  assert.equal(result.operation.result_summary.full_recovery_point_created, false);
+  assert.equal(result.operation.result_summary.rescue_snapshot_id, null);
+  assert.equal(result.operation.result_summary.temporary_safety_copy_removed, true);
+  assert.equal(fs.existsSync(path.join(workRoot, "lightweight-database-rescue.sql")), false);
+  assert.equal(fs.existsSync(path.join(workRoot, "rollback-wordpress")), false);
+  assert.equal(listManifests({ projectsRoot: fixture.projectsRoot, slug }).length, beforeManifests);
+  assert.ok(calls.indexOf("lightweight-db-rescue") !== -1);
+  assert.equal(calls.includes("rescue"), false);
+});
+
+test("lightweight rescue failure and cross-volume rename fail before restore mutation", async () => {
+  const fixture = await setupLightweightRestore("exec-light-prefail");
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign(lightweightInjections(fixture.projectsRoot, "exec-light-prefail", []), {
+      projectsRoot: fixture.projectsRoot,
+      projectSlug: "exec-light-prefail",
+      planId: fixture.plan.plan.plan_id,
+      exactConfirmation: fixture.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-light-0002",
+      lightweightDbRescueCapture: async () => {
+        throw Object.assign(new Error("dump failed"), { code: "snapshot_db_dump_failed" });
+      }
+    })),
+    (error) => error.code === "snapshot_db_dump_failed"
+  );
+  assert.equal(fs.existsSync(path.join(fixture.project.root, "wp-content", "uploads", "site-factory-restore-probe-20a5a.txt")), true);
+
+  const cross = await setupLightweightRestore("exec-light-cross");
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign(lightweightInjections(cross.projectsRoot, "exec-light-cross", []), {
+      projectsRoot: cross.projectsRoot,
+      projectSlug: "exec-light-cross",
+      planId: cross.plan.plan.plan_id,
+      exactConfirmation: cross.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-light-0003",
+      sameVolumeProbe: () => false
+    })),
+    (error) => error.code === "restore_rollback_cross_volume_unsafe"
+  );
+  assert.equal(fs.existsSync(path.join(cross.project.root, "wp-content", "uploads", "site-factory-restore-probe-20a5a.txt")), true);
+});
+
+test("lightweight post-import verification failure restores DB and filesystem automatically", async () => {
+  const slug = "exec-light-rollback";
+  const fixture = await setupLightweightRestore(slug);
+  const calls = [];
+  let healthCalls = 0;
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign(lightweightInjections(fixture.projectsRoot, slug, calls), {
+      projectsRoot: fixture.projectsRoot,
+      projectSlug: slug,
+      planId: fixture.plan.plan.plan_id,
+      exactConfirmation: fixture.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-light-0004",
+      dbImporter: async ({ databasePath, rollback }) => {
+        calls.push(rollback ? "db-rollback" : "db-source");
+        assert.equal(fs.existsSync(databasePath), true);
+        return { successful: true, streamed: true };
+      },
+      healthVerifier: async () => {
+        healthCalls += 1;
+        calls.push("health-" + healthCalls);
+        if (healthCalls === 1) {
+          throw Object.assign(new Error("health failed"), { code: "restore_health_failed" });
+        }
+        return { wordpress: "ok", wp_json: "ok", mysql: "running", signed_agent: "ok" };
+      }
+    })),
+    (error) => error.code === "restore_health_failed"
+  );
+  const failed = listOperations({ projectsRoot: fixture.projectsRoot, slug })[0];
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.result_summary.rescue_strategy, "lightweight_required");
+  assert.equal(failed.result_summary.lightweight_database_rollback_completed, true);
+  assert.equal(failed.result_summary.lightweight_filesystem_rollback_completed, true);
+  assert.equal(failed.result_summary.manual_recovery_required, false);
+  assert.equal(fs.existsSync(path.join(fixture.project.root, "wp-content", "uploads", "site-factory-restore-probe-20a5a.txt")), true);
+  assert.ok(calls.includes("db-source"));
+  assert.ok(calls.includes("db-rollback"));
+});
+
 test("executor loads stored plan by ID and rejects resubmitted plan bodies and unsafe public fields", async () => {
   const slug = "exec-input";
   const fixture = await setupReadyRestore(slug);
@@ -311,7 +443,7 @@ test("executor loads stored plan by ID and rejects resubmitted plan bodies and u
   );
 });
 
-test("expired plan wrong project confirmation mismatch fingerprint mismatch and non-full rescue fail before mutation", async () => {
+test("expired plan wrong project confirmation mismatch fingerprint mismatch and unsupported rescue fail before mutation", async () => {
   const slug = "exec-reject";
   const fixture = await setupReadyRestore(slug);
   const base = {
@@ -357,7 +489,7 @@ test("expired plan wrong project confirmation mismatch fingerprint mismatch and 
         source: { artifacts: { filesystem: { path: "x" }, database: { path: "y" } } }
       })
     }, executionInjections(fresh.projectsRoot, "exec-nonfull", []))),
-    (error) => error.code === "restore_full_rescue_required" || error.code === "restore_archive_verification_failed"
+    (error) => error.code === "restore_rescue_strategy_unsupported" || error.code === "restore_archive_verification_failed"
   );
 
   assert.equal(listOperations({ projectsRoot: fixture.projectsRoot, slug }).filter((entry) => entry.status === "succeeded").length, 0);
@@ -517,6 +649,8 @@ test("database importer uses fixed mysql service and does not expose passwords i
   assert.equal(/MYSQL_PASSWORD=/.test(source), false);
   assert.equal(source.includes('["compose", "exec", "-T", DB_SERVICE'), true);
   assert.equal(/docker\s+rm|docker\s+volume\s+rm|prune/i.test(source), false);
-  assert.equal(/server\.js|createRecoveryPoint|lightweight|emergency no-rescue/i.test(source), false);
+  assert.equal(/server\.js|createRecoveryPoint|emergencyNoRescue|no_rescue_execute/i.test(source), false);
+  assert.equal(/rescueStrategy|rescue_strategy/.test(source), true);
   assert.equal(typeof importDatabaseArtifact, "function");
+  assert.equal(typeof captureLightweightDatabaseRescue, "function");
 });

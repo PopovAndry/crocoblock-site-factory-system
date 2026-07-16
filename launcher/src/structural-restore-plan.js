@@ -42,6 +42,7 @@ const RESTORE_PLAN_ID_PREFIX = "restore-plan";
 const FIXED_SAFETY_RESERVE_BYTES = 64 * 1024 * 1024;
 const DATABASE_IMPORT_MULTIPLIER = 3;
 const FILESYSTEM_REPLACEMENT_MULTIPLIER = 2;
+const LIGHTWEIGHT_METADATA_ALLOWANCE_BYTES = 16 * 1024 * 1024;
 const LIGHTWEIGHT_RESCUE_MAX_BYTES = 512 * 1024 * 1024;
 const FORBIDDEN_CALLER_KEYS = new Set([
   "artifactPath",
@@ -494,7 +495,9 @@ function calculateDiskPlan(options) {
   const restoreStagingBytes = options.artifactBytes + options.filesystemUncompressedBytes;
   const filesystemReplacementBytes = options.filesystemUncompressedBytes * FILESYSTEM_REPLACEMENT_MULTIPLIER;
   const databaseImportOverheadBytes = options.databaseBytes * DATABASE_IMPORT_MULTIPLIER;
+  const currentDatabaseRescueBytes = Math.max(Number(options.currentDatabaseBytes || options.databaseBytes || 0), 1);
   const rescueBytes = options.currentWordPressBytes + options.filesystemUncompressedBytes + options.databaseBytes;
+  const lightweightRescueBytes = currentDatabaseRescueBytes + LIGHTWEIGHT_METADATA_ALLOWANCE_BYTES + FIXED_SAFETY_RESERVE_BYTES;
   const requiredRestoreBytes = sourceValidationBytes +
     restoreStagingBytes +
     filesystemReplacementBytes +
@@ -502,7 +505,6 @@ function calculateDiskPlan(options) {
     FIXED_SAFETY_RESERVE_BYTES;
   const requiredFullRescueBytes = requiredRestoreBytes + rescueBytes;
   const availableBytes = options.availableBytes;
-  const lightweightRescueBytes = Math.min(Math.max(Math.ceil(rescueBytes / 10), FIXED_SAFETY_RESERVE_BYTES), LIGHTWEIGHT_RESCUE_MAX_BYTES);
   const estimatedPostOperationReserveBytes = availableBytes - requiredRestoreBytes;
 
   return {
@@ -512,6 +514,8 @@ function calculateDiskPlan(options) {
     filesystem_replacement_bytes: filesystemReplacementBytes,
     database_import_overhead_bytes: databaseImportOverheadBytes,
     rescue_bytes: rescueBytes,
+    current_database_rescue_bytes: currentDatabaseRescueBytes,
+    lightweight_metadata_allowance_bytes: LIGHTWEIGHT_METADATA_ALLOWANCE_BYTES,
     lightweight_rescue_bytes: lightweightRescueBytes,
     required_restore_bytes: requiredRestoreBytes,
     required_full_rescue_bytes: requiredFullRescueBytes,
@@ -532,11 +536,11 @@ function evaluateRescueStrategy(disk) {
   }
   if (disk.available_bytes >= disk.required_restore_bytes + disk.lightweight_rescue_bytes) {
     return {
-      readiness: "blocked",
-      rescue_strategy: "lightweight_candidate",
+      readiness: "ready",
+      rescue_strategy: "lightweight_required",
       confirmation_mode: "normal",
-      warnings: ["lightweight_rescue_requires_phase_20a5_execution_support"],
-      blockers: ["full_rescue_space_unavailable"]
+      warnings: ["full_recovery_point_unavailable_temporary_safety_copy_used"],
+      blockers: []
     };
   }
   if (disk.available_bytes >= disk.required_restore_bytes) {
@@ -910,6 +914,7 @@ async function createRestorePlan(options) {
     artifactBytes: artifactValidation.artifactBytes,
     filesystemUncompressedBytes: artifactValidation.filesystemUncompressedBytes,
     databaseBytes: source.artifacts.database.artifact.size_bytes,
+    currentDatabaseBytes: source.artifacts.database.artifact.size_bytes,
     currentWordPressBytes,
     availableBytes
   });
@@ -1031,8 +1036,11 @@ async function loadRestorePlanForExecution(options) {
   if (plan.readiness !== "ready") {
     throw createRestoreError("restore_plan_not_ready", "Restore plan is not ready for execution.", 409);
   }
-  if (plan.rescue_strategy !== "full_required") {
-    throw createRestoreError("restore_full_rescue_required", "This restore executor requires a full rescue Recovery Point.", 409);
+  if (plan.rescue_strategy === "none_emergency") {
+    throw createRestoreError("restore_emergency_not_supported", "Emergency no-rescue restore execution is not available yet.", 409);
+  }
+  if (plan.rescue_strategy !== "full_required" && plan.rescue_strategy !== "lightweight_required") {
+    throw createRestoreError("restore_rescue_strategy_unsupported", "Restore plan rescue strategy is not supported for execution.", 409);
   }
   if (String(options && options.exactConfirmation || "") !== String(plan.confirmation && plan.confirmation.phrase || "")) {
     throw createRestoreError("restore_confirmation_mismatch", "Restore confirmation text does not match.", 409);
@@ -1061,15 +1069,28 @@ async function loadRestorePlanForExecution(options) {
     artifactBytes: artifactValidation.artifactBytes,
     filesystemUncompressedBytes: artifactValidation.filesystemUncompressedBytes,
     databaseBytes: source.artifacts.database.artifact.size_bytes,
+    currentDatabaseBytes: source.artifacts.database.artifact.size_bytes,
     currentWordPressBytes,
     availableBytes
   });
   const rescue = evaluateRescueStrategy(disk);
-  if (rescue.rescue_strategy !== "full_required" || rescue.readiness !== "ready") {
+  const currentSupportsFull = rescue.readiness === "ready" && rescue.rescue_strategy === "full_required";
+  const currentSupportsLightweight = disk.available_bytes >= disk.required_restore_bytes + disk.lightweight_rescue_bytes;
+  if (plan.rescue_strategy === "full_required" && !currentSupportsFull) {
     throw createRestoreError("restore_disk_space_insufficient", "Restore execution requires current full-rescue disk space.", 507, {
       disk: {
         available_bytes: disk.available_bytes,
         required_full_rescue_bytes: disk.required_full_rescue_bytes,
+        minimum_reserve_bytes: disk.minimum_reserve_bytes
+      }
+    });
+  }
+  if (plan.rescue_strategy === "lightweight_required" && !currentSupportsLightweight) {
+    throw createRestoreError("restore_disk_space_insufficient", "Restore execution requires current lightweight rescue disk space.", 507, {
+      disk: {
+        available_bytes: disk.available_bytes,
+        required_restore_bytes: disk.required_restore_bytes,
+        lightweight_rescue_bytes: disk.lightweight_rescue_bytes,
         minimum_reserve_bytes: disk.minimum_reserve_bytes
       }
     });

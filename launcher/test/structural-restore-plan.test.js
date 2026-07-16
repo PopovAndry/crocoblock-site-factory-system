@@ -430,14 +430,17 @@ test("disk and rescue policy classify full lightweight emergency and insufficien
     currentSiteEstimator: () => 10 * 1024 * 1024 * 1024,
     freeSpaceProbe: () => 700 * 1024 * 1024
   });
-  assert.equal(lightPlan.plan.rescue_strategy, "lightweight_candidate");
-  assert.equal(lightPlan.plan.readiness, "blocked");
+  assert.equal(lightPlan.plan.rescue_strategy, "lightweight_required");
+  assert.equal(lightPlan.plan.readiness, "ready");
+  assert.equal(lightPlan.plan.confirmation.mode, "normal");
+  assert.ok(lightPlan.plan.warnings.includes("full_recovery_point_unavailable_temporary_safety_copy_used"));
+  assert.ok(lightPlan.plan.disk.lightweight_rescue_bytes < lightPlan.plan.disk.rescue_bytes);
 
   const emergency = await createVerifiedSnapshot(projectsRoot, "disk-emergency");
   const emergencyPlan = await plan(projectsRoot, "disk-emergency", emergency.snapshotId, {
     idempotencyKey: "emergency-key-0001",
     currentSiteEstimator: () => 100 * 1024 * 1024 * 1024,
-    freeSpaceProbe: () => 170 * 1024 * 1024
+    freeSpaceProbe: () => 100 * 1024 * 1024
   });
   assert.equal(emergencyPlan.plan.rescue_strategy, "none_emergency");
   assert.equal(emergencyPlan.plan.readiness, "ready_with_emergency_confirmation");
