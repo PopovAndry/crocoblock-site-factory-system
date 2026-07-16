@@ -33,6 +33,7 @@ const ALLOWED_OPERATION_TYPES = new Set([
   "state_apply",
   "state_rollback",
   "structural_snapshot_create",
+  "structural_restore_execute",
   "agent_auth_rotate",
   "agent_auth_revoke"
 ]);
@@ -587,6 +588,9 @@ async function runProjectOperation(options) {
           status: "failed",
           stage: currentStage || "failed",
           completed_at: nowIso(),
+          result_summary: error && error.result_summary && typeof error.result_summary === "object"
+            ? error.result_summary
+            : {},
           error: sanitizeFailure(error, currentStage || "failed")
         }
       });

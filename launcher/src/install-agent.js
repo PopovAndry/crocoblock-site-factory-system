@@ -356,6 +356,7 @@ async function installAgent(options) {
 
 module.exports = {
   installAgent,
+  bootstrapAgentSignedAuth,
   createRestNonce,
   ensureAgentApplicationPassword,
   loginWithAdminCookie

@@ -1011,6 +1011,79 @@ function readRestorePlan(options) {
   };
 }
 
+async function loadRestorePlanForExecution(options) {
+  const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
+  const slug = validateExplicitSlug(options && options.slug);
+  const projectState = normalizeProject(projectsRoot, slug);
+  const runtimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
+  const planId = validateRestorePlanId(options && options.planId);
+  const plan = readPlanRecord({
+    runtimePath,
+    planId,
+    planPersistenceAdapter: options && options.planPersistenceAdapter
+  });
+  if (plan.schema !== RESTORE_PLAN_SCHEMA || plan.schema_version !== RESTORE_PLAN_SCHEMA_VERSION || plan.project_slug !== slug) {
+    throw createRestoreError("restore_plan_not_found", "Restore plan was not found.", 404);
+  }
+  if (Date.parse(plan.expires_at) <= (options && options.clock ? options.clock() : Date.now())) {
+    throw createRestoreError("restore_plan_expired", "Restore plan has expired.", 410);
+  }
+  if (plan.readiness !== "ready") {
+    throw createRestoreError("restore_plan_not_ready", "Restore plan is not ready for execution.", 409);
+  }
+  if (plan.rescue_strategy !== "full_required") {
+    throw createRestoreError("restore_full_rescue_required", "This restore executor requires a full rescue Recovery Point.", 409);
+  }
+  if (String(options && options.exactConfirmation || "") !== String(plan.confirmation && plan.confirmation.phrase || "")) {
+    throw createRestoreError("restore_confirmation_mismatch", "Restore confirmation text does not match.", 409);
+  }
+
+  const source = validateSourceRecoveryPoint({
+    projectsRoot,
+    slug,
+    snapshotId: plan.snapshot_id
+  });
+  const artifactValidation = await validateRecoveryArtifacts(source, options || {});
+  const fingerprint = buildFingerprint({
+    projectBinding: source.binding,
+    snapshotId: plan.snapshot_id,
+    manifest: source.manifest
+  });
+  if (fingerprintDigest(fingerprint) !== plan.immutable_source_fingerprint.digest) {
+    throw createRestoreError("restore_artifact_digest_mismatch", "Recovery Point source changed after planning.", 409);
+  }
+
+  const currentWordPressBytes = options && options.currentSiteEstimator
+    ? options.currentSiteEstimator({ runtimePath, slug })
+    : countCurrentWordPressBytes(runtimePath);
+  const availableBytes = probeFreeSpace(projectsRoot, options || {});
+  const disk = calculateDiskPlan({
+    artifactBytes: artifactValidation.artifactBytes,
+    filesystemUncompressedBytes: artifactValidation.filesystemUncompressedBytes,
+    databaseBytes: source.artifacts.database.artifact.size_bytes,
+    currentWordPressBytes,
+    availableBytes
+  });
+  const rescue = evaluateRescueStrategy(disk);
+  if (rescue.rescue_strategy !== "full_required" || rescue.readiness !== "ready") {
+    throw createRestoreError("restore_disk_space_insufficient", "Restore execution requires current full-rescue disk space.", 507, {
+      disk: {
+        available_bytes: disk.available_bytes,
+        required_full_rescue_bytes: disk.required_full_rescue_bytes,
+        minimum_reserve_bytes: disk.minimum_reserve_bytes
+      }
+    });
+  }
+
+  return {
+    plan,
+    source,
+    disk,
+    artifactValidation,
+    summary: plan.browser_safe_summary
+  };
+}
+
 module.exports = {
   FIXED_SAFETY_RESERVE_BYTES,
   RESTORE_PLAN_DIRECTORY,
@@ -1025,6 +1098,7 @@ module.exports = {
   generateRestorePlanId,
   getRestorePlanDirectory,
   getRestorePlanPath,
+  loadRestorePlanForExecution,
   readRestorePlan,
   validateRestorePlanId
 };

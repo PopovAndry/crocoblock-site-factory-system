@@ -969,6 +969,7 @@ module.exports = {
   REQUIRED_ARCHIVE_ENTRIES,
   WORDPRESS_ARTIFACT_FILENAME,
   captureWordPressFilesystemArtifact,
+  executeFullCapture,
   createFullStructuralSnapshot,
   enterMaintenanceMode,
   listTarEntries,
