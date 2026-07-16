@@ -106,15 +106,16 @@ function ensureNoReparsePoint(filePath) {
   }
 }
 
-function resolveArtifactPaths(snapshotDirectory) {
-  const finalPath = path.join(snapshotDirectory, DB_ARTIFACT_FILENAME);
+function resolveArtifactPaths(snapshotDirectory, artifactFilename) {
+  const filename = artifactFilename || DB_ARTIFACT_FILENAME;
+  const finalPath = path.join(snapshotDirectory, filename);
   const tmpPath = path.join(
     snapshotDirectory,
-    DB_ARTIFACT_FILENAME + ".tmp-" + process.pid + "-" + crypto.randomBytes(4).toString("hex")
+    filename + ".tmp-" + process.pid + "-" + crypto.randomBytes(4).toString("hex")
   );
   const relativeFinal = path.relative(snapshotDirectory, finalPath);
   const relativeTmp = path.relative(snapshotDirectory, tmpPath);
-  if (relativeFinal !== DB_ARTIFACT_FILENAME || relativeTmp.startsWith("..") || path.isAbsolute(relativeTmp)) {
+  if (relativeFinal !== filename || relativeTmp.startsWith("..") || path.isAbsolute(relativeTmp)) {
     throw createCaptureError("snapshot_db_artifact_conflict", "Snapshot artifact path escaped its directory.", 500);
   }
   ensureNoReparsePoint(snapshotDirectory);
@@ -125,7 +126,7 @@ function resolveArtifactPaths(snapshotDirectory) {
   return {
     finalPath,
     tmpPath,
-    relativeFilename: DB_ARTIFACT_FILENAME
+    relativeFilename: filename
   };
 }
 
@@ -349,6 +350,53 @@ async function verifyDumpArtifact(filePath, artifact) {
   return scanSqlDump(filePath);
 }
 
+async function captureDatabaseArtifact(options) {
+  const safeRuntimePath = assertSafeRuntimePath(options.runtimePath, options.projectsRoot);
+  const artifactPaths = resolveArtifactPaths(options.snapshotDirectory, options.artifactFilename || DB_ARTIFACT_FILENAME);
+  const dumpRunner = options.dumpRunner || spawnDockerComposeDump;
+
+  try {
+    const captured = await captureProcessToTempFile({
+      runtimePath: safeRuntimePath,
+      tmpPath: artifactPaths.tmpPath,
+      dumpRunner,
+      timeoutMs: options.timeoutMs || DUMP_TIMEOUT_MS
+    });
+
+    if (captured.process.timedOut) {
+      throw createCaptureError("snapshot_db_dump_timeout", "Database dump timed out.", 504);
+    }
+    if (Number(captured.process.code || 0) !== 0) {
+      throw createCaptureError("snapshot_db_dump_failed", "Database dump process failed.", 502, {
+        diagnostic: sanitizeDiagnosticText(captured.process.stderr || "")
+      });
+    }
+    if (captured.sizeBytes <= 0) {
+      throw createCaptureError("snapshot_db_dump_empty", "Database dump was empty.", 422);
+    }
+
+    const verification = await verifyDumpArtifact(artifactPaths.tmpPath, {
+      digest: captured.digest,
+      sizeBytes: captured.sizeBytes
+    });
+    promoteArtifact(artifactPaths.tmpPath, artifactPaths.finalPath);
+
+    return {
+      type: "database_dump",
+      relative_filename: artifactPaths.relativeFilename,
+      digest_algorithm: "sha256",
+      digest: captured.digest,
+      size_bytes: captured.sizeBytes,
+      capture_status: "verified",
+      verification
+    };
+  } catch (error) {
+    cleanupFile(artifactPaths.tmpPath);
+    cleanupFile(artifactPaths.finalPath);
+    throw error;
+  }
+}
+
 function promoteArtifact(tmpPath, finalPath) {
   if (fs.existsSync(finalPath)) {
     throw createCaptureError("snapshot_db_artifact_conflict", "Snapshot database artifact already exists.", 409);
@@ -455,8 +503,6 @@ async function executeDatabaseCapture(context, options) {
     slug: projectState.project.slug,
     snapshotId
   });
-  const artifactPaths = resolveArtifactPaths(snapshotContext.snapshotDirectory);
-  const dumpRunner = options.dumpRunner || spawnDockerComposeDump;
   let lastStage = "dumping_database";
 
   try {
@@ -468,32 +514,16 @@ async function executeDatabaseCapture(context, options) {
       }
     });
 
-    const captured = await captureProcessToTempFile({
+    const captured = await captureDatabaseArtifact({
+      projectsRoot: context.projectsRoot,
       runtimePath: safeRuntimePath,
-      tmpPath: artifactPaths.tmpPath,
-      dumpRunner,
+      snapshotDirectory: snapshotContext.snapshotDirectory,
+      dumpRunner: options.dumpRunner,
       timeoutMs: options.timeoutMs || DUMP_TIMEOUT_MS
     });
 
-    if (captured.process.timedOut) {
-      throw createCaptureError("snapshot_db_dump_timeout", "Database dump timed out.", 504);
-    }
-    if (Number(captured.process.code || 0) !== 0) {
-      throw createCaptureError("snapshot_db_dump_failed", "Database dump process failed.", 502, {
-        diagnostic: sanitizeDiagnosticText(captured.process.stderr || "")
-      });
-    }
-    if (captured.sizeBytes <= 0) {
-      throw createCaptureError("snapshot_db_dump_empty", "Database dump was empty.", 422);
-    }
-
     lastStage = "verifying_database_dump";
     await context.setStage(lastStage);
-    const verification = await verifyDumpArtifact(artifactPaths.tmpPath, {
-      digest: captured.digest,
-      sizeBytes: captured.sizeBytes
-    });
-    promoteArtifact(artifactPaths.tmpPath, artifactPaths.finalPath);
 
     lastStage = "updating_manifest";
     await context.setStage(lastStage);
@@ -505,19 +535,12 @@ async function executeDatabaseCapture(context, options) {
       patch: {
         captured_components: ["database"],
         excluded_components: ["wordpress_filesystem"],
-        artifacts: [{
-          type: "database_dump",
-          relative_filename: artifactPaths.relativeFilename,
-          digest_algorithm: "sha256",
-          digest: captured.digest,
-          size_bytes: captured.sizeBytes,
-          capture_status: "verified"
-        }],
+        artifacts: [captured],
         verification: {
           status: "database_artifact_verified",
           successful: true,
           verified_at: nowIso(),
-          checks: verification.checks,
+          checks: captured.verification.checks,
           warnings: ["wordpress_filesystem_not_captured"]
         },
         restore_compatibility: {
@@ -543,7 +566,7 @@ async function executeDatabaseCapture(context, options) {
       status: "succeeded",
       artifact: {
         type: "database_dump",
-        size_bytes: captured.sizeBytes,
+        size_bytes: captured.size_bytes,
         digest_algorithm: "sha256",
         digest_abbrev: captured.digest.slice(0, 12)
       },
@@ -574,6 +597,7 @@ async function executeDatabaseCapture(context, options) {
     };
   } catch (error) {
     try {
+      const artifactPaths = resolveArtifactPaths(snapshotContext.snapshotDirectory);
       cleanupFile(artifactPaths.tmpPath);
       cleanupFile(artifactPaths.finalPath);
     } catch (cleanupError) {
@@ -703,6 +727,7 @@ module.exports = {
   MYSQLDUMP_SCRIPT,
   OPERATION_TYPE,
   createDatabaseStructuralSnapshot,
+  captureDatabaseArtifact,
   scanSqlDump,
   sanitizeDiagnosticText,
   spawnDockerComposeDump,

@@ -42,11 +42,12 @@ const REQUIRED_STRUCTURAL_COMPONENTS = [
 ];
 const REQUIRED_RESTORABLE_ARTIFACT_TYPES = [
   "database_dump",
-  "wordpress_filesystem_archive",
+  "wordpress_filesystem",
   "project_metadata"
 ];
 const SAFE_ARTIFACT_TYPES = new Set([
   "database_dump",
+  "wordpress_filesystem",
   "wordpress_filesystem_archive",
   "project_metadata",
   "dependency_identity_manifest",
@@ -815,6 +816,9 @@ function isRestorable(manifest, options) {
       .filter((artifact) => artifact.capture_status === "captured" || artifact.capture_status === "verified")
       .map((artifact) => artifact.type)
   );
+  if (capturedArtifactTypes.has("wordpress_filesystem_archive")) {
+    capturedArtifactTypes.add("wordpress_filesystem");
+  }
   return REQUIRED_RESTORABLE_ARTIFACT_TYPES.every((type) => capturedArtifactTypes.has(type));
 }
 
