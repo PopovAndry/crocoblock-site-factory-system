@@ -72,6 +72,12 @@ const FORBIDDEN_EXECUTION_KEYS = new Set([
   "component_map",
   "rescueStrategy",
   "rescue_strategy",
+  "emergency",
+  "skipRescue",
+  "skip_rescue",
+  "force",
+  "diskOverride",
+  "disk_override",
   "credential",
   "credentials",
   "dockerService",
@@ -562,9 +568,15 @@ function writeRestoreProof(options) {
     source_snapshot_id: options.sourceSnapshotId,
     rescue_snapshot_id: options.rescueSnapshotId,
     rescue_strategy: options.rescueStrategy,
+    emergency_restore: options.emergencyRestore === true,
+    emergency_confirmation_verified: options.emergencyConfirmationVerified === true,
+    no_safety_copy_acknowledged: options.noSafetyCopyAcknowledged === true,
     full_recovery_point_created: options.fullRecoveryPointCreated === true,
     lightweight_db_rescue_verified: options.lightweightDbRescueVerified === true,
+    lightweight_rescue_created: options.lightweightRescueCreated === true,
     filesystem_rollback_retained: options.filesystemRollbackRetained === true,
+    rollback_available: options.rollbackAvailable === true,
+    source_snapshot_preserved: options.sourceSnapshotPreserved === true,
     status: options.status,
     stages: options.stages.slice(),
     filesystem: options.filesystem,
@@ -593,8 +605,14 @@ function browserSafeResult(result) {
     rescue_snapshot_id: result.rescue_snapshot_id,
     snapshot_id: result.rescue_snapshot_id,
     rescue_strategy: result.rescue_strategy || null,
+    emergency_restore: result.emergency_restore === true,
+    emergency_confirmation_verified: result.emergency_confirmation_verified === true,
+    no_safety_copy_acknowledged: result.no_safety_copy_acknowledged === true,
     full_recovery_point_created: result.full_recovery_point_created === true,
+    lightweight_rescue_created: result.lightweight_rescue_created === true,
     temporary_safety_copy_removed: result.temporary_safety_copy_removed === true,
+    rollback_available: result.rollback_available === true,
+    source_snapshot_preserved: result.source_snapshot_preserved === true,
     status: result.status,
     manifest_status: "verified",
     restorable: true,
@@ -626,8 +644,14 @@ function resultFromSummary(summary) {
     source_snapshot_id: safe.source_snapshot_id || null,
     rescue_snapshot_id: safe.rescue_snapshot_id || null,
     rescue_strategy: safe.rescue_strategy || null,
+    emergency_restore: safe.emergency_restore === true,
+    emergency_confirmation_verified: safe.emergency_confirmation_verified === true,
+    no_safety_copy_acknowledged: safe.no_safety_copy_acknowledged === true,
     full_recovery_point_created: safe.full_recovery_point_created === true,
+    lightweight_rescue_created: safe.lightweight_rescue_created === true,
     temporary_safety_copy_removed: safe.temporary_safety_copy_removed === true,
+    rollback_available: safe.rollback_available === true,
+    source_snapshot_preserved: safe.source_snapshot_preserved === true,
     status: safe.status,
     restored_components: Array.isArray(safe.restored_components) ? safe.restored_components.slice() : [],
     stages: Array.isArray(safe.stages) ? safe.stages.slice() : [],
@@ -664,6 +688,8 @@ async function executeRestoreInCoordinator(context, options) {
     rescueSnapshotId: null,
     maintenance: null,
     rescueStrategy: null,
+    emergencyRestore: false,
+    destructiveMutationStarted: false,
     lightweightDbRescue: null,
     lightweightDbRollbackCompleted: false,
     lightweightFilesystemRollbackCompleted: false
@@ -694,6 +720,13 @@ async function executeRestoreInCoordinator(context, options) {
 
   async function cleanupBeforeThrow(error) {
     try {
+      if (state.rescueStrategy === "none_emergency" && (state.destructiveMutationStarted || state.dbImportBegan || state.dbImportCompleted)) {
+        updateJournal({
+          manual_recovery_required: true
+        });
+        error.manualRecoveryRequired = true;
+        throw error;
+      }
       if (state.rescueStrategy === "lightweight_required" && state.dbImportBegan && !state.dbImportCompleted) {
         updateJournal({
           manual_recovery_required: true
@@ -721,7 +754,7 @@ async function executeRestoreInCoordinator(context, options) {
           lightweight_database_rollback_completed: true
         });
       }
-      if (state.liveFilesystemChanged && (state.rescueStrategy === "lightweight_required" || !state.dbImportCompleted)) {
+      if (state.liveFilesystemChanged && state.rescueStrategy !== "none_emergency" && (state.rescueStrategy === "lightweight_required" || !state.dbImportCompleted)) {
         const rolledBack = rollbackPromotedFilesystem({
           liveFilesystemChanged: state.liveFilesystemChanged,
           liveWordPressRoot,
@@ -759,7 +792,9 @@ async function executeRestoreInCoordinator(context, options) {
     if (error.result_summary && typeof error.result_summary === "object") {
       error.result_summary.lightweight_database_rollback_completed = state.lightweightDbRollbackCompleted === true;
       error.result_summary.lightweight_filesystem_rollback_completed = state.lightweightFilesystemRollbackCompleted === true;
-      error.result_summary.manual_recovery_required = error.manualRecoveryRequired === true || (state.dbImportCompleted === true && state.lightweightDbRollbackCompleted !== true);
+      error.result_summary.emergency_restore = state.rescueStrategy === "none_emergency";
+      error.result_summary.rollback_available = state.rescueStrategy !== "none_emergency" && (state.rescueStrategy === "lightweight_required" || state.dbImportCompleted !== true);
+      error.result_summary.manual_recovery_required = error.manualRecoveryRequired === true || (state.rescueStrategy === "none_emergency" && (state.destructiveMutationStarted || state.dbImportBegan || state.dbImportCompleted)) || (state.dbImportCompleted === true && state.lightweightDbRollbackCompleted !== true);
     }
     throw error;
   }
@@ -779,19 +814,18 @@ async function executeRestoreInCoordinator(context, options) {
         planId: options.planId,
         exactConfirmation: options.exactConfirmation,
         freeSpaceProbe: options.freeSpaceProbe,
-        clock: options.clock
+        clock: options.clock,
+        currentSiteEstimator: options.currentSiteEstimator
       });
     if (!loaded || !loaded.plan || loaded.plan.project_slug !== projectState.project.slug || loaded.plan.plan_id !== options.planId) {
       throw createRestoreExecutionError("restore_plan_not_found", "Restore plan was not found.", 404);
     }
-    if (loaded.plan.readiness !== "ready") {
+    if (loaded.plan.rescue_strategy === "none_emergency" ? loaded.plan.readiness !== "ready_with_emergency_confirmation" : loaded.plan.readiness !== "ready") {
       throw createRestoreExecutionError("restore_plan_not_ready", "Restore plan is not ready for execution.", 409);
     }
     state.rescueStrategy = loaded.plan.rescue_strategy;
-    if (loaded.plan.rescue_strategy === "none_emergency") {
-      throw createRestoreExecutionError("restore_emergency_not_supported", "Emergency no-rescue restore execution is not available yet.", 409);
-    }
-    if (loaded.plan.rescue_strategy !== "full_required" && loaded.plan.rescue_strategy !== "lightweight_required") {
+    state.emergencyRestore = loaded.plan.rescue_strategy === "none_emergency";
+    if (loaded.plan.rescue_strategy !== "full_required" && loaded.plan.rescue_strategy !== "lightweight_required" && loaded.plan.rescue_strategy !== "none_emergency") {
       throw createRestoreExecutionError("restore_rescue_strategy_unsupported", "This restore executor does not support the requested rescue strategy.", 409);
     }
     if (String(loaded.plan.confirmation && loaded.plan.confirmation.phrase || "") !== String(options.exactConfirmation || "")) {
@@ -807,6 +841,7 @@ async function executeRestoreInCoordinator(context, options) {
       rescueStrategy: loaded.plan.rescue_strategy,
       requestFingerprint: options.requestFingerprint,
       stage: "validating_source",
+      emergencyRestore: state.emergencyRestore,
       clock: options.clock
     });
     journalCreated = true;
@@ -845,7 +880,7 @@ async function executeRestoreInCoordinator(context, options) {
         rescue_verified: true,
         full_recovery_point_created: true
       });
-    } else {
+    } else if (loaded.plan.rescue_strategy === "lightweight_required") {
       await stage("creating_lightweight_rescue");
       updateJournal({
         current_stage: "creating_lightweight_rescue",
@@ -870,6 +905,20 @@ async function executeRestoreInCoordinator(context, options) {
           lightweight_db_rescue: path.relative(runtimePath, state.lightweightDbRescue.databasePath).split(path.sep).join("/")
         },
         full_recovery_point_created: false
+      });
+    } else {
+      await stage("acknowledging_emergency_restore");
+      updateJournal({
+        current_stage: "acknowledging_emergency_restore",
+        emergency_confirmation_verified: true,
+        no_safety_copy_acknowledged: true,
+        full_rescue_unavailable: true,
+        lightweight_rescue_unavailable: true,
+        emergency_restore_warning_code: "no_safety_copy_current_state_may_not_be_recoverable",
+        rescue_verified: false,
+        full_recovery_point_created: false,
+        lightweight_db_rescue_started: false,
+        lightweight_db_rescue_completed: false
       });
     }
 
@@ -919,7 +968,7 @@ async function executeRestoreInCoordinator(context, options) {
       current_stage: "staging_filesystem",
       wordpress_service_was_running: serviceState && serviceState.running === true,
       staging_validated: true,
-      rollback_tree_ready: true,
+      rollback_tree_ready: loaded.plan.rescue_strategy !== "none_emergency",
       lightweight_filesystem_retained: loaded.plan.rescue_strategy === "lightweight_required",
       wp_config_fingerprint_abbrev: wpConfig.fingerprint_abbrev
     });
@@ -931,18 +980,21 @@ async function executeRestoreInCoordinator(context, options) {
     await stage("promoting_filesystem");
     updateJournal({
       current_stage: "promoting_filesystem",
-      filesystem_promotion_started: true
+      filesystem_promotion_started: true,
+      destructive_mutation_started: loaded.plan.rescue_strategy === "none_emergency"
     });
     const promotion = options.filesystemPromoter
       ? await options.filesystemPromoter({ runtimePath, liveWordPressRoot, stagedWordPressRoot, rollbackRoot })
       : promoteFilesystem({ runtimePath, liveWordPressRoot, stagedWordPressRoot, rollbackRoot });
     state.liveFilesystemChanged = promotion.liveFilesystemChanged !== false;
+    state.destructiveMutationStarted = state.liveFilesystemChanged === true;
     const finalConfig = sha256File(path.join(liveWordPressRoot, "wp-config.php"));
     if (finalConfig.slice(0, 12) !== wpConfig.fingerprint_abbrev) {
       throw createRestoreExecutionError("restore_wp_config_preserve_failed", "Current wp-config.php was not preserved.", 500);
     }
     updateJournal({
       current_stage: "promoting_filesystem",
+      destructive_mutation_started: state.destructiveMutationStarted,
       filesystem_promotion_completed: true,
       database_import_started: false
     });
@@ -1038,9 +1090,15 @@ async function executeRestoreInCoordinator(context, options) {
       sourceSnapshotId: loaded.plan.snapshot_id,
       rescueSnapshotId: state.rescueSnapshotId,
       rescueStrategy: loaded.plan.rescue_strategy,
+      emergencyRestore: loaded.plan.rescue_strategy === "none_emergency",
+      emergencyConfirmationVerified: loaded.plan.rescue_strategy === "none_emergency",
+      noSafetyCopyAcknowledged: loaded.plan.rescue_strategy === "none_emergency",
       fullRecoveryPointCreated: loaded.plan.rescue_strategy === "full_required",
       lightweightDbRescueVerified: loaded.plan.rescue_strategy === "lightweight_required" && state.lightweightDbRescue && state.lightweightDbRescue.verified === true,
-      filesystemRollbackRetained: true,
+      lightweightRescueCreated: loaded.plan.rescue_strategy === "lightweight_required",
+      filesystemRollbackRetained: loaded.plan.rescue_strategy !== "none_emergency",
+      rollbackAvailable: loaded.plan.rescue_strategy !== "none_emergency",
+      sourceSnapshotPreserved: true,
       status: "succeeded",
       stages,
       filesystem: {
@@ -1112,8 +1170,14 @@ async function executeRestoreInCoordinator(context, options) {
       source_snapshot_id: loaded.plan.snapshot_id,
       rescue_snapshot_id: state.rescueSnapshotId,
       rescue_strategy: loaded.plan.rescue_strategy,
+      emergency_restore: loaded.plan.rescue_strategy === "none_emergency",
+      emergency_confirmation_verified: loaded.plan.rescue_strategy === "none_emergency",
+      no_safety_copy_acknowledged: loaded.plan.rescue_strategy === "none_emergency",
       full_recovery_point_created: loaded.plan.rescue_strategy === "full_required",
+      lightweight_rescue_created: loaded.plan.rescue_strategy === "lightweight_required",
       temporary_safety_copy_removed: cleanupResult.temporary_safety_copy_removed,
+      rollback_available: loaded.plan.rescue_strategy !== "none_emergency",
+      source_snapshot_preserved: true,
       status: "succeeded",
       restored_components: ["database", "wordpress_filesystem"],
       stages: stages.slice(),
@@ -1148,11 +1212,14 @@ async function executeRestoreInCoordinator(context, options) {
     failure.wordpress_service_stopped = state.wordpressStopped === true;
     failure.rescue_snapshot_id = state.rescueSnapshotId;
     failure.rescue_strategy = state.rescueStrategy;
+    failure.emergency_restore = state.rescueStrategy === "none_emergency";
+    failure.rollback_available = state.rescueStrategy !== "none_emergency";
     failure.full_recovery_point_created = state.rescueStrategy === "full_required" && Boolean(state.rescueSnapshotId);
+    failure.lightweight_rescue_created = state.rescueStrategy === "lightweight_required" && state.lightweightDbRescue && state.lightweightDbRescue.verified === true;
     failure.lightweight_db_rescue_completed = state.lightweightDbRescue && state.lightweightDbRescue.verified === true;
     failure.lightweight_database_rollback_completed = state.lightweightDbRollbackCompleted === true;
     failure.lightweight_filesystem_rollback_completed = state.lightweightFilesystemRollbackCompleted === true;
-    failure.manual_recovery_required = error && error.manualRecoveryRequired === true || (state.dbImportCompleted === true && state.lightweightDbRollbackCompleted !== true);
+    failure.manual_recovery_required = error && error.manualRecoveryRequired === true || (state.rescueStrategy === "none_emergency" && (state.destructiveMutationStarted || state.dbImportBegan || state.dbImportCompleted)) || (state.dbImportCompleted === true && state.lightweightDbRollbackCompleted !== true);
     error.result_summary = failure;
     await cleanupBeforeThrow(error);
   }

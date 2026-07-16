@@ -435,6 +435,129 @@ test("lightweight restart after DB completion requires verified DB rescue", asyn
   assert.equal(operation.error.code, "restore_reconciliation_lightweight_db_missing");
 });
 
+test("emergency restart before destructive mutation cleans safely without rollback claim", async () => {
+  const projectsRoot = tempRoot();
+  const fixture = createProject(projectsRoot, "emergency-before-mutation");
+  const operationId = "op-emergency-before";
+  createRunningRestoreOperation(projectsRoot, fixture.slug, operationId);
+  const workRoot = getRestoreWorkRoot(fixture.runtimePath, operationId);
+  writeFile(path.join(workRoot, "staging", "wordpress", "index.php"), "staged\n");
+  writeFile(path.join(fixture.runtimePath, "wordpress", ".maintenance"), "operation maintenance\n");
+  createJournal(projectsRoot, fixture, operationId, {
+    rescue_strategy: "none_emergency",
+    emergency_confirmation_verified: true,
+    no_safety_copy_acknowledged: true,
+    full_rescue_unavailable: true,
+    lightweight_rescue_unavailable: true,
+    maintenance_created_by_operation: true,
+    wordpress_service_was_running: true,
+    staging_validated: true,
+    filesystem_promotion_started: false,
+    destructive_mutation_started: false,
+    database_import_started: false
+  });
+
+  const result = await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController([], false)
+  });
+  const operation = listOperations({ projectsRoot, slug: fixture.slug })[0];
+
+  assert.equal(result.results[0].action, "pre_promotion_cleanup");
+  assert.equal(operation.status, "failed");
+  assert.equal(operation.result_summary.emergency_restore, true);
+  assert.equal(operation.result_summary.rollback_available, false);
+  assert.equal(operation.result_summary.manual_recovery_required, false);
+  assert.equal(fs.existsSync(workRoot), false);
+});
+
+test("emergency restart after destructive mutation becomes recovery-required and is idempotent", async () => {
+  const projectsRoot = tempRoot();
+  const fixture = createProject(projectsRoot, "emergency-after-mutation");
+  const operationId = "op-emergency-after";
+  createRunningRestoreOperation(projectsRoot, fixture.slug, operationId);
+  const workRoot = getRestoreWorkRoot(fixture.runtimePath, operationId);
+  const liveRoot = path.join(fixture.runtimePath, "wordpress");
+  const rollbackRoot = path.join(workRoot, "rollback-wordpress");
+  removeTree(liveRoot);
+  createWordPressTree(liveRoot, "restored-source");
+  createWordPressTree(rollbackRoot, "original");
+  createJournal(projectsRoot, fixture, operationId, {
+    rescue_strategy: "none_emergency",
+    emergency_confirmation_verified: true,
+    no_safety_copy_acknowledged: true,
+    full_rescue_unavailable: true,
+    lightweight_rescue_unavailable: true,
+    filesystem_promotion_started: true,
+    destructive_mutation_started: true,
+    filesystem_promotion_completed: true,
+    database_import_started: false
+  });
+
+  const result = await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController([], true)
+  });
+  const operation = listOperations({ projectsRoot, slug: fixture.slug })[0];
+
+  assert.equal(result.results[0].action, "manual_recovery_required");
+  assert.equal(operation.stage, "interrupted_recovery_required");
+  assert.equal(operation.result_summary.emergency_restore, true);
+  assert.equal(operation.result_summary.rollback_available, false);
+  assert.equal(operation.result_summary.manual_recovery_required, true);
+  assert.equal(fs.existsSync(path.join(liveRoot, "wp-content", "uploads", "restored-source.txt")), true);
+
+  const second = await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController([], true)
+  });
+  assert.equal(second.checked, 0);
+});
+
+test("emergency restart after database import states require manual recovery", async () => {
+  const projectsRoot = tempRoot();
+  const incomplete = createProject(projectsRoot, "emergency-db-incomplete");
+  createRunningRestoreOperation(projectsRoot, incomplete.slug, "op-emergency-db-incomplete");
+  createJournal(projectsRoot, incomplete, "op-emergency-db-incomplete", {
+    rescue_strategy: "none_emergency",
+    filesystem_promotion_started: true,
+    destructive_mutation_started: true,
+    filesystem_promotion_completed: true,
+    database_import_started: true,
+    database_import_completed: false,
+    source_database_import_started: true,
+    source_database_import_completed: false
+  });
+  await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController([], true)
+  });
+  const incompleteOperation = listOperations({ projectsRoot, slug: incomplete.slug })[0];
+  assert.equal(incompleteOperation.error.code, "restore_reconciliation_emergency_db_import_incomplete");
+  assert.equal(incompleteOperation.result_summary.manual_recovery_required, true);
+
+  const unverified = createProject(projectsRoot, "emergency-db-unverified");
+  createRunningRestoreOperation(projectsRoot, unverified.slug, "op-emergency-db-unverified");
+  createJournal(projectsRoot, unverified, "op-emergency-db-unverified", {
+    rescue_strategy: "none_emergency",
+    filesystem_promotion_started: true,
+    destructive_mutation_started: true,
+    filesystem_promotion_completed: true,
+    database_import_started: true,
+    database_import_completed: true,
+    source_database_import_started: true,
+    source_database_import_completed: true,
+    final_restore_verified: false
+  });
+  await reconcileInterruptedStructuralRestores({
+    projectsRoot,
+    serviceController: fakeServiceController([], true)
+  });
+  const unverifiedOperation = listOperations({ projectsRoot, slug: unverified.slug })[0];
+  assert.equal(unverifiedOperation.error.code, "restore_reconciliation_emergency_db_completed_unverified");
+  assert.equal(unverifiedOperation.result_summary.manual_recovery_required, true);
+});
+
 test("ambiguous DB-import and invalid journal identity become manual recovery required", async () => {
   const projectsRoot = tempRoot();
   const fixture = createProject(projectsRoot, "manual-project");

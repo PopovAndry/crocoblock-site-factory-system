@@ -135,7 +135,13 @@ function normalizeJournal(raw) {
   return Object.assign({}, journal, {
     journal_schema_version: Number(journal.journal_schema_version || 0),
     rescue_verified: normalizeBoolean(journal.rescue_verified),
+    emergency_restore: normalizeBoolean(journal.emergency_restore || journal.rescue_strategy === "none_emergency"),
+    emergency_confirmation_verified: normalizeBoolean(journal.emergency_confirmation_verified),
+    no_safety_copy_acknowledged: normalizeBoolean(journal.no_safety_copy_acknowledged),
+    full_rescue_unavailable: normalizeBoolean(journal.full_rescue_unavailable),
+    lightweight_rescue_unavailable: normalizeBoolean(journal.lightweight_rescue_unavailable),
     full_recovery_point_created: normalizeBoolean(journal.full_recovery_point_created),
+    lightweight_rescue_created: normalizeBoolean(journal.lightweight_rescue_created),
     lightweight_db_rescue_started: normalizeBoolean(journal.lightweight_db_rescue_started),
     lightweight_db_rescue_completed: normalizeBoolean(journal.lightweight_db_rescue_completed),
     lightweight_filesystem_retained: normalizeBoolean(journal.lightweight_filesystem_retained),
@@ -145,6 +151,7 @@ function normalizeJournal(raw) {
     staging_validated: normalizeBoolean(journal.staging_validated),
     rollback_tree_ready: normalizeBoolean(journal.rollback_tree_ready),
     filesystem_promotion_started: normalizeBoolean(journal.filesystem_promotion_started),
+    destructive_mutation_started: normalizeBoolean(journal.destructive_mutation_started || (journal.rescue_strategy === "none_emergency" && journal.filesystem_promotion_started)),
     filesystem_promotion_completed: normalizeBoolean(journal.filesystem_promotion_completed),
     database_import_started: normalizeBoolean(journal.database_import_started),
     database_import_completed: normalizeBoolean(journal.database_import_completed),
@@ -198,7 +205,14 @@ function createRestoreJournal(options) {
     updated_at: nowIso(options.clock),
     current_stage: options.stage || "validating_plan",
     rescue_verified: false,
+    emergency_restore: options.rescueStrategy === "none_emergency" || options.emergencyRestore === true,
+    emergency_confirmation_verified: false,
+    no_safety_copy_acknowledged: false,
+    full_rescue_unavailable: false,
+    lightweight_rescue_unavailable: false,
+    emergency_restore_warning_code: null,
     full_recovery_point_created: false,
+    lightweight_rescue_created: false,
     lightweight_db_rescue_started: false,
     lightweight_db_rescue_completed: false,
     lightweight_db_rescue_size: null,
@@ -281,8 +295,13 @@ function writeReconciliationProof(options) {
     source_snapshot_id: options.sourceSnapshotId || null,
     rescue_snapshot_id: options.rescueSnapshotId || null,
     rescue_strategy: options.rescueStrategy || null,
+    emergency_restore: options.emergencyRestore === true || options.rescueStrategy === "none_emergency",
+    emergency_confirmation_verified: options.emergencyConfirmationVerified === true,
+    no_safety_copy_acknowledged: options.noSafetyCopyAcknowledged === true,
     full_recovery_point_created: options.fullRecoveryPointCreated === true,
     lightweight_db_rescue_verified: options.lightweightDbRescueVerified === true,
+    lightweight_rescue_created: options.lightweightRescueCreated === true,
+    rollback_available: options.rollbackAvailable === true,
     interrupted_stage: options.interruptedStage || null,
     selected_policy: options.policy,
     actual_state_checks: options.actualStateChecks || {},
@@ -459,7 +478,10 @@ function buildFailureSummary(options) {
     maintenance_remaining: options.maintenanceRemaining === true,
     rescue_snapshot_id: options.rescueSnapshotId || null,
     rescue_strategy: options.rescueStrategy || null,
+    emergency_restore: options.emergencyRestore === true || options.rescueStrategy === "none_emergency",
+    rollback_available: options.rollbackAvailable === true,
     full_recovery_point_created: options.fullRecoveryPointCreated === true,
+    lightweight_rescue_created: options.lightweightRescueCreated === true,
     manual_recovery_required: options.manualRecoveryRequired === true,
     reconciliation_code: options.code,
     restore_verified: false
@@ -487,6 +509,8 @@ async function classifyManualRecovery(context, details) {
     planId: context.journal && context.journal.restore_plan_id,
     sourceSnapshotId: context.journal && context.journal.source_snapshot_id,
     rescueSnapshotId: context.journal && context.journal.rescue_snapshot_id,
+    rescueStrategy: context.journal && context.journal.rescue_strategy,
+    emergencyRestore: context.journal && context.journal.rescue_strategy === "none_emergency",
     interruptedStage: context.operation.stage,
     policy: details.policy,
     actualStateChecks: details.actualStateChecks || {},
@@ -494,6 +518,7 @@ async function classifyManualRecovery(context, details) {
     maintenance: details.maintenance || {},
     filesystemRollbackCompleted: false,
     databaseImportStarted: details.databaseImportStarted === true,
+    rollbackAvailable: false,
     manualRecoveryRequired: true,
     finalOperationStatus: "failed",
     durationMs: Date.now() - startedAt,
@@ -518,6 +543,11 @@ async function classifyManualRecovery(context, details) {
         wordpressServiceRunning: details.wordpressServiceRunning === true,
         maintenanceRemaining: details.maintenanceRemaining === true,
         rescueSnapshotId: context.journal && context.journal.rescue_snapshot_id,
+        rescueStrategy: context.journal && context.journal.rescue_strategy,
+        emergencyRestore: context.journal && context.journal.rescue_strategy === "none_emergency",
+        rollbackAvailable: false,
+        fullRecoveryPointCreated: context.journal && context.journal.full_recovery_point_created,
+        lightweightRescueCreated: context.journal && context.journal.lightweight_db_rescue_completed,
         manualRecoveryRequired: true,
         code: details.code || "restore_reconciliation_manual_required"
       }),
@@ -559,6 +589,8 @@ async function reconcilePrePromotion(context) {
     rescueStrategy: context.journal.rescue_strategy,
     fullRecoveryPointCreated: context.journal.full_recovery_point_created,
     lightweightDbRescueVerified: context.journal.lightweight_db_rescue_completed,
+    lightweightRescueCreated: context.journal.lightweight_db_rescue_completed,
+    rollbackAvailable: context.journal.rescue_strategy !== "none_emergency",
     interruptedStage: context.operation.stage,
     policy: "pre_promotion_cleanup",
     actualStateChecks: { filesystem_promotion_completed: false, database_import_started: false },
@@ -667,6 +699,8 @@ async function reconcilePromotedBeforeDb(context) {
     rescueStrategy: context.journal.rescue_strategy,
     fullRecoveryPointCreated: context.journal.full_recovery_point_created,
     lightweightDbRescueVerified: context.journal.lightweight_db_rescue_completed,
+    lightweightRescueCreated: context.journal.lightweight_db_rescue_completed,
+    rollbackAvailable: true,
     interruptedStage: context.operation.stage,
     policy: "promoted_before_db_rollback",
     actualStateChecks: {
@@ -858,6 +892,36 @@ async function reconcileJournalPolicy(context) {
       databaseImportCompleted: journal.database_import_completed,
       manualRecoveryRequired: true
     });
+  }
+
+  if (journal.rescue_strategy === "none_emergency") {
+    if (journal.source_database_import_started && !journal.source_database_import_completed) {
+      return classifyManualRecovery(context, {
+        policy: "emergency_db_import_started_incomplete",
+        code: "restore_reconciliation_emergency_db_import_incomplete",
+        databaseImportStarted: true,
+        databaseImportCompleted: false,
+        manualRecoveryRequired: true
+      });
+    }
+    if (journal.source_database_import_completed && !journal.final_restore_verified) {
+      return classifyManualRecovery(context, {
+        policy: "emergency_db_completed_unverified",
+        code: "restore_reconciliation_emergency_db_completed_unverified",
+        databaseImportStarted: true,
+        databaseImportCompleted: true,
+        manualRecoveryRequired: true
+      });
+    }
+    if (journal.destructive_mutation_started || journal.filesystem_promotion_started || journal.filesystem_promotion_completed) {
+      return classifyManualRecovery(context, {
+        policy: "emergency_destructive_mutation_started",
+        code: "restore_reconciliation_emergency_recovery_required",
+        databaseImportStarted: journal.database_import_started,
+        databaseImportCompleted: journal.database_import_completed,
+        manualRecoveryRequired: true
+      });
+    }
   }
 
   if (journal.source_database_import_started && !journal.source_database_import_completed) {

@@ -27,6 +27,7 @@ const {
   RESTORE_PLAN_TTL_MS,
   createRestorePlan,
   getRestorePlanDirectory,
+  loadRestorePlanForExecution,
   readRestorePlan
 } = require("../src/structural-restore-plan");
 
@@ -417,6 +418,14 @@ test("restore scope is server-generated and caller paths component maps and emer
     createRestorePlan({ projectsRoot, slug: "server-scope", snapshotId: source.snapshotId, idempotencyKey: "scope-key-0000003", rescueMode: "none_emergency" }),
     (error) => error.code === "restore_caller_input_rejected"
   );
+  await assert.rejects(
+    createRestorePlan({ projectsRoot, slug: "server-scope", snapshotId: source.snapshotId, idempotencyKey: "scope-key-0000004", emergency: true }),
+    (error) => error.code === "restore_caller_input_rejected"
+  );
+  await assert.rejects(
+    createRestorePlan({ projectsRoot, slug: "server-scope", snapshotId: source.snapshotId, idempotencyKey: "scope-key-0000005", diskOverride: 1 }),
+    (error) => error.code === "restore_caller_input_rejected"
+  );
 });
 
 test("disk and rescue policy classify full lightweight emergency and insufficient states", async () => {
@@ -445,6 +454,9 @@ test("disk and rescue policy classify full lightweight emergency and insufficien
   assert.equal(emergencyPlan.plan.rescue_strategy, "none_emergency");
   assert.equal(emergencyPlan.plan.readiness, "ready_with_emergency_confirmation");
   assert.equal(emergencyPlan.plan.confirmation.mode, "emergency");
+  assert.equal(emergencyPlan.plan.emergency_restore_policy_version, 1);
+  assert.equal(emergencyPlan.plan.confirmation.phrase, "EMERGENCY RESTORE disk-emergency WITHOUT SAFETY COPY");
+  assert.match(emergencyPlan.plan.confirmation.warning, /cannot create a safety copy/i);
   assert.notEqual(emergencyPlan.plan.confirmation.phrase, "Restore Website for disk-emergency");
 
   const insufficient = await createVerifiedSnapshot(projectsRoot, "disk-low");
@@ -454,6 +466,53 @@ test("disk and rescue policy classify full lightweight emergency and insufficien
       freeSpaceProbe: () => 1
     }),
     (error) => error.code === "restore_disk_space_insufficient"
+  );
+});
+
+test("emergency execution loader requires exact emergency phrase and invalidates stale emergency when safer strategy fits", async () => {
+  const projectsRoot = tempRoot();
+  const source = await createVerifiedSnapshot(projectsRoot, "emergency-loader");
+  const emergency = await plan(projectsRoot, "emergency-loader", source.snapshotId, {
+    idempotencyKey: "emergency-loader-key",
+    currentSiteEstimator: () => 100 * 1024 * 1024 * 1024,
+    freeSpaceProbe: () => 100 * 1024 * 1024
+  });
+
+  await assert.rejects(
+    loadRestorePlanForExecution({
+      projectsRoot,
+      slug: "emergency-loader",
+      planId: emergency.plan.plan_id,
+      exactConfirmation: "Restore Website for emergency-loader",
+      currentSiteEstimator: () => 100 * 1024 * 1024 * 1024,
+      freeSpaceProbe: () => 100 * 1024 * 1024,
+      clock: () => Date.parse("2026-07-16T12:01:00.000Z")
+    }),
+    (error) => error.code === "restore_confirmation_mismatch"
+  );
+
+  const loaded = await loadRestorePlanForExecution({
+    projectsRoot,
+    slug: "emergency-loader",
+    planId: emergency.plan.plan_id,
+    exactConfirmation: emergency.plan.confirmation.phrase,
+    currentSiteEstimator: () => 100 * 1024 * 1024 * 1024,
+    freeSpaceProbe: () => 100 * 1024 * 1024,
+    clock: () => Date.parse("2026-07-16T12:01:00.000Z")
+  });
+  assert.equal(loaded.plan.rescue_strategy, "none_emergency");
+
+  await assert.rejects(
+    loadRestorePlanForExecution({
+      projectsRoot,
+      slug: "emergency-loader",
+      planId: emergency.plan.plan_id,
+      exactConfirmation: emergency.plan.confirmation.phrase,
+      currentSiteEstimator: () => 100 * 1024 * 1024 * 1024,
+      freeSpaceProbe: () => 10 * 1024 * 1024 * 1024,
+      clock: () => Date.parse("2026-07-16T12:01:00.000Z")
+    }),
+    (error) => error.code === "restore_emergency_plan_obsolete"
   );
 });
 

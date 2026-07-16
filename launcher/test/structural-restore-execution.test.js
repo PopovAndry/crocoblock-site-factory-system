@@ -268,6 +268,17 @@ async function setupLightweightRestore(slug) {
   return Object.assign({}, fixture, { plan: lightPlan });
 }
 
+async function setupEmergencyRestore(slug) {
+  const fixture = await setupReadyRestore(slug);
+  const emergencyPlan = await createReadyPlan(fixture.projectsRoot, slug, fixture.source.snapshotId, {
+    idempotencyKey: "restore-plan-emergency-" + slug + "-0001",
+    currentSiteEstimator: () => 100 * 1024 * 1024 * 1024,
+    freeSpaceProbe: () => 100 * 1024 * 1024,
+    idGenerator: () => "restore-plan-2026-07-16t12-00-00-000z-abc125"
+  });
+  return Object.assign({}, fixture, { plan: emergencyPlan });
+}
+
 function lightweightInjections(projectsRoot, slug, calls) {
   return Object.assign({}, executionInjections(projectsRoot, slug, calls), {
     freeSpaceProbe: () => 700 * 1024 * 1024,
@@ -286,6 +297,19 @@ function lightweightInjections(projectsRoot, slug, calls) {
     },
     rescueCapture: async () => {
       throw Object.assign(new Error("full rescue should not run"), { code: "test_full_rescue_unexpected" });
+    }
+  });
+}
+
+function emergencyInjections(projectsRoot, slug, calls) {
+  return Object.assign({}, executionInjections(projectsRoot, slug, calls), {
+    freeSpaceProbe: () => 100 * 1024 * 1024,
+    currentSiteEstimator: () => 100 * 1024 * 1024 * 1024,
+    rescueCapture: async () => {
+      throw Object.assign(new Error("full rescue should not run"), { code: "test_full_rescue_unexpected" });
+    },
+    lightweightDbRescueCapture: async () => {
+      throw Object.assign(new Error("lightweight rescue should not run"), { code: "test_lightweight_rescue_unexpected" });
     }
   });
 }
@@ -345,6 +369,142 @@ test("lightweight restore creates no Recovery Point and removes temporary DB res
   assert.equal(listManifests({ projectsRoot: fixture.projectsRoot, slug }).length, beforeManifests);
   assert.ok(calls.indexOf("lightweight-db-rescue") !== -1);
   assert.equal(calls.includes("rescue"), false);
+});
+
+test("emergency restore requires emergency phrase and creates no rescue artifacts on success", async () => {
+  const slug = "exec-emergency-success";
+  const fixture = await setupEmergencyRestore(slug);
+  const calls = [];
+  const beforeManifests = listManifests({ projectsRoot: fixture.projectsRoot, slug }).length;
+
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign({
+      projectsRoot: fixture.projectsRoot,
+      projectSlug: slug,
+      planId: fixture.plan.plan.plan_id,
+      exactConfirmation: "Restore Website for " + slug,
+      idempotencyKey: "restore-exec-key-emergency-0000"
+    }, emergencyInjections(fixture.projectsRoot, slug, []))),
+    (error) => error.code === "restore_confirmation_mismatch"
+  );
+
+  const result = await executeManagedWebsiteRestore(Object.assign({
+    projectsRoot: fixture.projectsRoot,
+    projectSlug: slug,
+    planId: fixture.plan.plan.plan_id,
+    exactConfirmation: fixture.plan.plan.confirmation.phrase,
+    idempotencyKey: "restore-exec-key-emergency-0001"
+  }, emergencyInjections(fixture.projectsRoot, slug, calls)));
+  const workRoot = path.join(path.dirname(fixture.project.root), RESTORE_WORK_DIRECTORY, result.operation.operation_id);
+
+  assert.equal(fixture.plan.plan.rescue_strategy, "none_emergency");
+  assert.equal(result.operation.status, "succeeded");
+  assert.equal(result.operation.result_summary.rescue_strategy, "none_emergency");
+  assert.equal(result.operation.result_summary.emergency_restore, true);
+  assert.equal(result.operation.result_summary.emergency_confirmation_verified, true);
+  assert.equal(result.operation.result_summary.no_safety_copy_acknowledged, true);
+  assert.equal(result.operation.result_summary.full_recovery_point_created, false);
+  assert.equal(result.operation.result_summary.lightweight_rescue_created, false);
+  assert.equal(result.operation.result_summary.rescue_snapshot_id, null);
+  assert.equal(result.operation.result_summary.rollback_available, false);
+  assert.equal(result.operation.result_summary.source_snapshot_preserved, true);
+  assert.equal(fs.existsSync(path.join(workRoot, "lightweight-database-rescue.sql")), false);
+  assert.equal(fs.existsSync(path.join(workRoot, "rollback-wordpress")), false);
+  assert.equal(listManifests({ projectsRoot: fixture.projectsRoot, slug }).length, beforeManifests);
+  assert.equal(calls.includes("rescue"), false);
+  assert.equal(calls.includes("lightweight-db-rescue"), false);
+  assert.equal(JSON.stringify(result.operation.result_summary).includes(fixture.plan.plan.confirmation.phrase), false);
+});
+
+test("emergency execution fails closed when safer strategy becomes available or source changes", async () => {
+  const stale = await setupEmergencyRestore("exec-emergency-stale");
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign(emergencyInjections(stale.projectsRoot, "exec-emergency-stale", []), {
+      projectsRoot: stale.projectsRoot,
+      projectSlug: "exec-emergency-stale",
+      planId: stale.plan.plan.plan_id,
+      exactConfirmation: stale.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-emergency-0002",
+      freeSpaceProbe: () => 10 * 1024 * 1024 * 1024,
+      currentSiteEstimator: () => 100 * 1024 * 1024 * 1024
+    })),
+    (error) => error.code === "restore_emergency_plan_obsolete"
+  );
+  assert.equal(fs.existsSync(path.join(stale.project.root, "wp-content", "uploads", "site-factory-restore-probe-20a5a.txt")), true);
+
+  const changed = await setupEmergencyRestore("exec-emergency-source-change");
+  fs.appendFileSync(path.join(changed.source.context.snapshotDirectory, "database.sql"), "-- changed\n");
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign({
+      projectsRoot: changed.projectsRoot,
+      projectSlug: "exec-emergency-source-change",
+      planId: changed.plan.plan.plan_id,
+      exactConfirmation: changed.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-emergency-0003"
+    }, emergencyInjections(changed.projectsRoot, "exec-emergency-source-change", []))),
+    (error) => error.code === "restore_artifact_size_mismatch" || error.code === "restore_artifact_digest_mismatch"
+  );
+  assert.equal(fs.existsSync(path.join(changed.project.root, "wp-content", "uploads", "site-factory-restore-probe-20a5a.txt")), true);
+});
+
+test("emergency failures after destructive mutation require manual recovery and do not claim rollback", async () => {
+  const afterFs = await setupEmergencyRestore("exec-emergency-after-fs");
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign(emergencyInjections(afterFs.projectsRoot, "exec-emergency-after-fs", []), {
+      projectsRoot: afterFs.projectsRoot,
+      projectSlug: "exec-emergency-after-fs",
+      planId: afterFs.plan.plan.plan_id,
+      exactConfirmation: afterFs.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-emergency-0004",
+      internalInterruptionHook: async () => {
+        throw Object.assign(new Error("interrupted"), { code: "test_after_filesystem_interruption" });
+      }
+    })),
+    (error) => error.code === "test_after_filesystem_interruption"
+  );
+  const afterFsOp = listOperations({ projectsRoot: afterFs.projectsRoot, slug: "exec-emergency-after-fs" }).find((entry) => entry.operation_type === "structural_restore_execute");
+  assert.equal(afterFsOp.status, "failed");
+  assert.equal(afterFsOp.result_summary.emergency_restore, true);
+  assert.equal(afterFsOp.result_summary.manual_recovery_required, true);
+  assert.equal(afterFsOp.result_summary.rollback_available, false);
+
+  const dbFail = await setupEmergencyRestore("exec-emergency-db-fail");
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign(emergencyInjections(dbFail.projectsRoot, "exec-emergency-db-fail", []), {
+      projectsRoot: dbFail.projectsRoot,
+      projectSlug: "exec-emergency-db-fail",
+      planId: dbFail.plan.plan.plan_id,
+      exactConfirmation: dbFail.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-emergency-0005",
+      dbImporter: async () => {
+        throw Object.assign(new Error("db failed"), { code: "restore_db_import_failed" });
+      }
+    })),
+    (error) => error.code === "restore_db_import_failed"
+  );
+  const dbFailOp = listOperations({ projectsRoot: dbFail.projectsRoot, slug: "exec-emergency-db-fail" }).find((entry) => entry.operation_type === "structural_restore_execute");
+  assert.equal(dbFailOp.result_summary.db_import_began, true);
+  assert.equal(dbFailOp.result_summary.manual_recovery_required, true);
+  assert.equal(dbFailOp.result_summary.rollback_available, false);
+
+  const verifyFail = await setupEmergencyRestore("exec-emergency-verify-fail");
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign(emergencyInjections(verifyFail.projectsRoot, "exec-emergency-verify-fail", []), {
+      projectsRoot: verifyFail.projectsRoot,
+      projectSlug: "exec-emergency-verify-fail",
+      planId: verifyFail.plan.plan.plan_id,
+      exactConfirmation: verifyFail.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-emergency-0006",
+      healthVerifier: async () => {
+        throw Object.assign(new Error("health failed"), { code: "restore_health_failed" });
+      }
+    })),
+    (error) => error.code === "restore_health_failed"
+  );
+  const verifyFailOp = listOperations({ projectsRoot: verifyFail.projectsRoot, slug: "exec-emergency-verify-fail" }).find((entry) => entry.operation_type === "structural_restore_execute");
+  assert.equal(verifyFailOp.result_summary.db_import_completed, true);
+  assert.equal(verifyFailOp.result_summary.manual_recovery_required, true);
+  assert.equal(verifyFailOp.result_summary.rollback_available, false);
 });
 
 test("lightweight rescue failure and cross-volume rename fail before restore mutation", async () => {

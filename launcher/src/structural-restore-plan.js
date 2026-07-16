@@ -36,6 +36,7 @@ const {
 const RESTORE_PLAN_SCHEMA = "factory_structural_restore_plan";
 const RESTORE_PLAN_SCHEMA_VERSION = 1;
 const RESTORE_PLAN_POLICY_VERSION = 1;
+const EMERGENCY_RESTORE_POLICY_VERSION = 1;
 const RESTORE_PLAN_TTL_MS = 10 * 60 * 1000;
 const RESTORE_PLAN_DIRECTORY = path.join("runs", "restore-plans");
 const RESTORE_PLAN_ID_PREFIX = "restore-plan";
@@ -68,10 +69,20 @@ const FORBIDDEN_CALLER_KEYS = new Set([
   "credential_policy",
   "rescueMode",
   "rescue_mode",
+  "rescueStrategy",
+  "rescue_strategy",
+  "emergency",
+  "skipRescue",
+  "skip_rescue",
+  "force",
+  "diskOverride",
+  "disk_override",
   "executable",
   "command",
   "commandArgs",
   "command_args",
+  "confirmationPhraseOverride",
+  "confirmation_phrase_override",
   "confirmationPhrase",
   "confirmation_phrase",
   "compatibility",
@@ -621,8 +632,8 @@ function buildConfirmation(projectSlug, mode) {
     return {
       required: true,
       mode: "emergency",
-      phrase: "EMERGENCY Restore Website for " + projectSlug + " without rescue",
-      warning: "Current damaged state may not be recoverable because no full rescue is planned."
+      phrase: "EMERGENCY RESTORE " + projectSlug + " WITHOUT SAFETY COPY",
+      warning: "Factory cannot create a safety copy of the current website. If this restore fails after changes begin, the current website state may not be recoverable automatically."
     };
   }
   return {
@@ -850,6 +861,7 @@ function makePlan(options) {
     blockers,
     disk,
     rescue_strategy: options.rescue.rescue_strategy,
+    emergency_restore_policy_version: options.rescue.rescue_strategy === "none_emergency" ? EMERGENCY_RESTORE_POLICY_VERSION : null,
     confirmation,
     impact_summary: buildImpactSummary({
       snapshotCreatedAt: options.manifest.created_at,
@@ -1033,13 +1045,21 @@ async function loadRestorePlanForExecution(options) {
   if (Date.parse(plan.expires_at) <= (options && options.clock ? options.clock() : Date.now())) {
     throw createRestoreError("restore_plan_expired", "Restore plan has expired.", 410);
   }
-  if (plan.readiness !== "ready") {
+  const isEmergency = plan.rescue_strategy === "none_emergency";
+  if (!isEmergency && plan.readiness !== "ready") {
     throw createRestoreError("restore_plan_not_ready", "Restore plan is not ready for execution.", 409);
   }
-  if (plan.rescue_strategy === "none_emergency") {
-    throw createRestoreError("restore_emergency_not_supported", "Emergency no-rescue restore execution is not available yet.", 409);
+  if (isEmergency) {
+    if (
+      plan.readiness !== "ready_with_emergency_confirmation" ||
+      !plan.confirmation ||
+      plan.confirmation.mode !== "emergency" ||
+      plan.emergency_restore_policy_version !== EMERGENCY_RESTORE_POLICY_VERSION
+    ) {
+      throw createRestoreError("restore_plan_not_ready", "Restore emergency plan is not ready for execution.", 409);
+    }
   }
-  if (plan.rescue_strategy !== "full_required" && plan.rescue_strategy !== "lightweight_required") {
+  if (plan.rescue_strategy !== "full_required" && plan.rescue_strategy !== "lightweight_required" && !isEmergency) {
     throw createRestoreError("restore_rescue_strategy_unsupported", "Restore plan rescue strategy is not supported for execution.", 409);
   }
   if (String(options && options.exactConfirmation || "") !== String(plan.confirmation && plan.confirmation.phrase || "")) {
@@ -1095,6 +1115,27 @@ async function loadRestorePlanForExecution(options) {
       }
     });
   }
+  if (isEmergency) {
+    if (rescue.rescue_strategy === "full_required" || currentSupportsLightweight) {
+      throw createRestoreError("restore_emergency_plan_obsolete", "A safer restore strategy is now available; create a new restore plan.", 409, {
+        disk: {
+          available_bytes: disk.available_bytes,
+          required_restore_bytes: disk.required_restore_bytes,
+          lightweight_rescue_bytes: disk.lightweight_rescue_bytes,
+          required_full_rescue_bytes: disk.required_full_rescue_bytes
+        }
+      });
+    }
+    if (!(disk.available_bytes >= disk.required_restore_bytes)) {
+      throw createRestoreError("restore_disk_space_insufficient", "Restore execution requires current source restore disk space.", 507, {
+        disk: {
+          available_bytes: disk.available_bytes,
+          required_restore_bytes: disk.required_restore_bytes,
+          minimum_reserve_bytes: disk.minimum_reserve_bytes
+        }
+      });
+    }
+  }
 
   return {
     plan,
@@ -1107,6 +1148,7 @@ async function loadRestorePlanForExecution(options) {
 
 module.exports = {
   FIXED_SAFETY_RESERVE_BYTES,
+  EMERGENCY_RESTORE_POLICY_VERSION,
   RESTORE_PLAN_DIRECTORY,
   RESTORE_PLAN_SCHEMA,
   RESTORE_PLAN_SCHEMA_VERSION,
