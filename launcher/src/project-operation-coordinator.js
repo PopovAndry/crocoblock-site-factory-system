@@ -32,6 +32,7 @@ const ALLOWED_OPERATION_TYPES = new Set([
   "controlled_generate",
   "state_apply",
   "state_rollback",
+  "structural_snapshot_create",
   "agent_auth_rotate",
   "agent_auth_revoke"
 ]);

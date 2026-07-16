@@ -482,6 +482,18 @@ test("unknown snapshot", () => {
   );
 });
 
-test("no real project-root writes", () => {
-  assert.equal(fs.existsSync("C:\\sf-factory-projects\\.factory-recovery"), false);
+test("automated recovery store writes stay under isolated temporary roots", () => {
+  const projectsRoot = createTempProjectsRoot();
+  createTempProject(projectsRoot, "isolated-test-root");
+  const created = createCreatingRecord(projectsRoot, "isolated-test-root");
+  const context = resolveSnapshotDirectory({
+    projectsRoot,
+    slug: "isolated-test-root",
+    snapshotId: created.manifest.snapshot_id
+  });
+
+  assert.equal(pathIsInside(projectsRoot, context.recoveryRoot), true);
+  assert.equal(pathIsInside(projectsRoot, context.snapshotDirectory), true);
+  assert.equal(context.recoveryRoot, path.join(projectsRoot, ".factory-recovery", "snapshots"));
+  assert.notEqual(path.resolve(projectsRoot), path.resolve("C:\\sf-factory-projects"));
 });
