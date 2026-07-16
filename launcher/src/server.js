@@ -62,6 +62,9 @@ const {
   summarizeStatePlanForClient,
   validateChangeRequestPrompt
 } = require("./state-change-contract");
+const {
+  reconcileInterruptedStructuralRestores
+} = require("./structural-restore-reconciliation");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -2044,14 +2047,19 @@ function createLauncherServer(options) {
   });
 
   return {
-    listen() {
+    async listen() {
+      const restoreReconciliation = await reconcileInterruptedStructuralRestores({
+        projectsRoot,
+        serviceController: options.restoreReconciliationServiceController
+      });
       return new Promise((resolve, reject) => {
         server.once("error", reject);
         server.listen(port, host, () => {
           resolve({
             host,
             port,
-            projectsRoot
+            projectsRoot,
+            restoreReconciliation
           });
         });
       });

@@ -41,6 +41,11 @@ const {
   loadRestorePlanForExecution,
   validateRestorePlanId
 } = require("./structural-restore-plan");
+const {
+  createRestoreJournal,
+  JOURNAL_FILENAME,
+  updateRestoreJournal
+} = require("./structural-restore-reconciliation");
 
 const OPERATION_TYPE = "structural_restore_execute";
 const WORDPRESS_SERVICE = "wordpress";
@@ -146,6 +151,13 @@ function cleanupTree(targetPath) {
   if (targetPath && fs.existsSync(targetPath)) {
     fs.rmSync(targetPath, { recursive: true, force: true });
   }
+}
+
+function isRestoreWorkRootClean(workRoot) {
+  if (!fs.existsSync(workRoot)) {
+    return true;
+  }
+  return fs.readdirSync(workRoot).every((entry) => entry === JOURNAL_FILENAME);
 }
 
 function safeMkdir(dirPath) {
@@ -401,6 +413,10 @@ function runDockerCompose(runtimePath, args, options) {
 }
 
 async function defaultServiceController(action, context) {
+  if (action === "isWordPressRunning") {
+    const result = await runDockerCompose(context.runtimePath, ["ps", "--status", "running", WORDPRESS_SERVICE], { timeoutMs: SERVICE_TIMEOUT_MS });
+    return { service: WORDPRESS_SERVICE, running: result.stdout.includes(WORDPRESS_SERVICE) };
+  }
   if (action === "stopWordPress") {
     await runDockerCompose(context.runtimePath, ["stop", WORDPRESS_SERVICE], { timeoutMs: SERVICE_TIMEOUT_MS });
     return { service: WORDPRESS_SERVICE, stopped: true };
@@ -585,6 +601,7 @@ async function executeRestoreInCoordinator(context, options) {
   const stagingRoot = path.join(workRoot, "staging");
   const rollbackRoot = path.join(workRoot, "rollback-wordpress");
   const stages = [];
+  const serviceController = options.serviceController || defaultServiceController;
   const state = {
     stage: "validating_plan",
     liveFilesystemChanged: false,
@@ -594,11 +611,28 @@ async function executeRestoreInCoordinator(context, options) {
     rescueSnapshotId: null,
     maintenance: null
   };
+  let journalCreated = false;
 
   async function stage(name, patch) {
     state.stage = name;
     stages.push(name);
     await context.setStage(name, patch || {});
+  }
+
+  function journalOptions() {
+    return {
+      projectsRoot,
+      runtimePath,
+      operationId: context.operationId,
+      clock: options.clock
+    };
+  }
+
+  function updateJournal(patch) {
+    if (!journalCreated) {
+      return null;
+    }
+    return updateRestoreJournal(journalOptions(), patch);
   }
 
   async function cleanupBeforeThrow(error) {
@@ -612,7 +646,7 @@ async function executeRestoreInCoordinator(context, options) {
         state.liveFilesystemChanged = false;
       }
       if (state.wordpressStopped) {
-        await (options.serviceController || defaultServiceController)("startWordPress", { runtimePath });
+        await serviceController("startWordPress", { runtimePath });
         state.wordpressStopped = false;
       }
       if (state.maintenance && state.maintenance.created === true) {
@@ -656,6 +690,18 @@ async function executeRestoreInCoordinator(context, options) {
     if (String(loaded.plan.confirmation && loaded.plan.confirmation.phrase || "") !== String(options.exactConfirmation || "")) {
       throw createRestoreExecutionError("restore_confirmation_mismatch", "Restore confirmation text does not match.", 409);
     }
+    createRestoreJournal({
+      projectsRoot,
+      runtimePath,
+      projectState,
+      operationId: context.operationId,
+      planId: loaded.plan.plan_id,
+      sourceSnapshotId: loaded.plan.snapshot_id,
+      requestFingerprint: options.requestFingerprint,
+      stage: "validating_source",
+      clock: options.clock
+    });
+    journalCreated = true;
 
     await stage("validating_source", {
       result_summary: {
@@ -684,6 +730,11 @@ async function executeRestoreInCoordinator(context, options) {
     if (!state.rescueSnapshotId || !rescue.result || !rescue.result.summary || rescue.result.summary.restorable !== true) {
       throw createRestoreExecutionError("restore_rescue_not_restorable", "Rescue Recovery Point was not verified as restorable.", 500);
     }
+    updateJournal({
+      current_stage: "creating_rescue",
+      rescue_snapshot_id: state.rescueSnapshotId,
+      rescue_verified: true
+    });
 
     await stage("entering_maintenance", {
       result_summary: {
@@ -696,6 +747,11 @@ async function executeRestoreInCoordinator(context, options) {
     state.maintenance = options.maintenanceController
       ? options.maintenanceController({ wordpressRoot: liveWordPressRoot, now: options.now })
       : enterMaintenanceMode(liveWordPressRoot, { now: options.now });
+    updateJournal({
+      current_stage: "entering_maintenance",
+      maintenance_preexisting: state.maintenance ? state.maintenance.existedBefore === true : false,
+      maintenance_created_by_operation: state.maintenance ? state.maintenance.created === true : false
+    });
 
     await stage("staging_filesystem");
     const extracted = options.archiveExtractor
@@ -716,12 +772,24 @@ async function executeRestoreInCoordinator(context, options) {
       validateExtractedTree({ stagedWordPressRoot });
     }
     const wpConfig = preserveWpConfig({ liveWordPressRoot, stagedWordPressRoot });
+    const serviceState = await serviceController("isWordPressRunning", { runtimePath });
+    updateJournal({
+      current_stage: "staging_filesystem",
+      wordpress_service_was_running: serviceState && serviceState.running === true,
+      staging_validated: true,
+      rollback_tree_ready: true,
+      wp_config_fingerprint_abbrev: wpConfig.fingerprint_abbrev
+    });
 
     await stage("stopping_wordpress");
-    await (options.serviceController || defaultServiceController)("stopWordPress", { runtimePath });
+    await serviceController("stopWordPress", { runtimePath });
     state.wordpressStopped = true;
 
     await stage("promoting_filesystem");
+    updateJournal({
+      current_stage: "promoting_filesystem",
+      filesystem_promotion_started: true
+    });
     const promotion = options.filesystemPromoter
       ? await options.filesystemPromoter({ runtimePath, liveWordPressRoot, stagedWordPressRoot, rollbackRoot })
       : promoteFilesystem({ runtimePath, liveWordPressRoot, stagedWordPressRoot, rollbackRoot });
@@ -730,16 +798,39 @@ async function executeRestoreInCoordinator(context, options) {
     if (finalConfig.slice(0, 12) !== wpConfig.fingerprint_abbrev) {
       throw createRestoreExecutionError("restore_wp_config_preserve_failed", "Current wp-config.php was not preserved.", 500);
     }
+    updateJournal({
+      current_stage: "promoting_filesystem",
+      filesystem_promotion_completed: true,
+      database_import_started: false
+    });
+    if (typeof options.internalInterruptionHook === "function") {
+      await options.internalInterruptionHook({
+        checkpoint: "after_filesystem_promotion_before_database",
+        projectSlug: projectState.project.slug,
+        operationId: context.operationId,
+        planId: loaded.plan.plan_id,
+        sourceSnapshotId: loaded.plan.snapshot_id,
+        rescueSnapshotId: state.rescueSnapshotId
+      });
+    }
 
     await stage("importing_database");
+    updateJournal({
+      current_stage: "importing_database",
+      database_import_started: true
+    });
     state.dbImportBegan = true;
     const dbResult = options.dbImporter
       ? await options.dbImporter({ databasePath: loaded.source.artifacts.database.path, runtimePath })
       : await importDatabaseArtifact({ databasePath: loaded.source.artifacts.database.path, runtimePath });
     state.dbImportCompleted = true;
+    updateJournal({
+      current_stage: "importing_database",
+      database_import_completed: true
+    });
 
     await stage("starting_wordpress");
-    await (options.serviceController || defaultServiceController)("startWordPress", { runtimePath });
+    await serviceController("startWordPress", { runtimePath });
     state.wordpressStopped = false;
 
     await stage("repairing_agent_binding");
@@ -747,11 +838,19 @@ async function executeRestoreInCoordinator(context, options) {
     const agent = options.agentRepairer
       ? await options.agentRepairer({ projectState, runtimePath, proofId })
       : await repairAgentBinding({ projectState, runtimePath, proofId });
+    updateJournal({
+      current_stage: "repairing_agent_binding",
+      agent_repair_completed: true
+    });
 
     await stage("verifying_restore");
     const health = options.healthVerifier
       ? await options.healthVerifier({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController })
       : await verifyHealth({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController });
+    updateJournal({
+      current_stage: "verifying_restore",
+      verification_completed: true
+    });
 
     if (state.maintenance && state.maintenance.created === true) {
       state.maintenance.cleanup();
@@ -770,10 +869,14 @@ async function executeRestoreInCoordinator(context, options) {
     } catch (cleanupError) {
       throw createRestoreExecutionError("restore_cleanup_failed", "Restore cleanup failed.", 500);
     }
-    const cleanupOk = !fs.existsSync(rollbackRoot) && !fs.existsSync(stagingRoot) && !fs.existsSync(workRoot);
+    const cleanupOk = !fs.existsSync(rollbackRoot) && !fs.existsSync(stagingRoot) && isRestoreWorkRootClean(workRoot);
     if (!cleanupOk) {
       throw createRestoreExecutionError("restore_cleanup_failed", "Restore cleanup failed.", 500);
     }
+    updateJournal({
+      current_stage: "cleanup",
+      cleanup_completed: true
+    });
 
     await stage("succeeded");
     const durationMs = Date.now() - startedAt;
@@ -810,7 +913,8 @@ async function executeRestoreInCoordinator(context, options) {
       cleanup: {
         staging_removed: !fs.existsSync(stagingRoot),
         rollback_removed: !fs.existsSync(rollbackRoot),
-        work_dir_removed: !fs.existsSync(workRoot)
+        work_dir_removed: !fs.existsSync(workRoot),
+        journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME))
       },
       durationMs,
       clock: options.clock
@@ -820,7 +924,8 @@ async function executeRestoreInCoordinator(context, options) {
       wp_config_fingerprint_abbrev: wpConfig.fingerprint_abbrev,
       staging_removed: !fs.existsSync(stagingRoot),
       rollback_removed: !fs.existsSync(rollbackRoot),
-      work_dir_removed: !fs.existsSync(workRoot)
+      work_dir_removed: !fs.existsSync(workRoot),
+      journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME))
     };
     const databaseResult = {
       imported: dbResult && dbResult.successful === true,
@@ -840,7 +945,8 @@ async function executeRestoreInCoordinator(context, options) {
     const cleanupResult = {
       staging_removed: !fs.existsSync(stagingRoot),
       rollback_removed: !fs.existsSync(rollbackRoot),
-      work_dir_removed: !fs.existsSync(workRoot)
+      work_dir_removed: !fs.existsSync(workRoot),
+      journal_retained: fs.existsSync(path.join(workRoot, JOURNAL_FILENAME))
     };
     const result = {
       project_slug: projectState.project.slug,
@@ -898,16 +1004,17 @@ async function executeManagedWebsiteRestore(options) {
     plan_id: input.planId,
     confirmation_hash: crypto.createHash("sha256").update(input.exactConfirmation, "utf8").digest("hex")
   };
+  const requestFingerprint = computeRequestFingerprint({
+    project_slug: input.projectSlug,
+    operation_type: OPERATION_TYPE,
+    input: fingerprintInput
+  });
   const operationResult = await runProjectOperation({
     projectsRoot,
     slug: input.projectSlug,
     operationType: OPERATION_TYPE,
     idempotencyKey: input.idempotencyKey,
-    requestFingerprint: computeRequestFingerprint({
-      project_slug: input.projectSlug,
-      operation_type: OPERATION_TYPE,
-      input: fingerprintInput
-    }),
+    requestFingerprint,
     fingerprintInput,
     metadata: {
       restore_scope: "managed_website_same_project",
@@ -924,7 +1031,8 @@ async function executeManagedWebsiteRestore(options) {
     execute: async (context) => executeRestoreInCoordinator(context, Object.assign({}, options || {}, {
       planId: input.planId,
       exactConfirmation: input.exactConfirmation,
-      projectState
+      projectState,
+      requestFingerprint
     }))
   });
   if (operationResult.idempotentReplay && !operationResult.result) {

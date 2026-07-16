@@ -627,6 +627,7 @@ function getProjectOperationsStatus(options) {
 module.exports = {
   PROCESS_INSTANCE_ID,
   computeRequestFingerprint,
+  acquireProjectLock,
   getProjectOperationsStatus,
   reconcileInterruptedOperations,
   runProjectOperation,

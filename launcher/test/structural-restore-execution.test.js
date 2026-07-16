@@ -34,6 +34,9 @@ const {
   importDatabaseArtifact,
   validateExecutionInput
 } = require("../src/structural-restore-execution");
+const {
+  JOURNAL_FILENAME
+} = require("../src/structural-restore-reconciliation");
 
 let portCounter = 36200;
 
@@ -273,10 +276,11 @@ test("valid fresh ready plan executes one coordinator operation and restores fil
   assert.equal(fs.existsSync(path.join(liveRoot, "wp-content", "uploads", "site-factory-restore-probe-20a5a.txt")), false);
   assert.equal(fs.existsSync(path.join(liveRoot, "wp-content", "uploads", "mutated.txt")), false);
   assert.equal(sha256File(path.join(liveRoot, "wp-config.php")), fixture.wpConfigBefore);
-  assert.deepEqual(calls.slice(0, 2), ["rescue", "stopWordPress"]);
+  assert.deepEqual(calls.slice(0, 3), ["rescue", "isWordPressRunning", "stopWordPress"]);
   assert.ok(calls.includes("db"));
   assert.ok(calls.includes("agent"));
   assert.ok(calls.includes("health"));
+  assert.equal(fs.existsSync(path.join(path.dirname(liveRoot), RESTORE_WORK_DIRECTORY, result.operation.operation_id, JOURNAL_FILENAME)), true);
   assert.equal(listOperations({ projectsRoot: fixture.projectsRoot, slug }).length, 1);
   assert.equal(listManifests({ projectsRoot: fixture.projectsRoot, slug }).some((entry) => entry.snapshot_id === fixture.source.snapshotId), true);
   assert.equal(listManifests({ projectsRoot: fixture.projectsRoot, slug }).some((entry) => entry.snapshot_id === "snapshot-2026-07-16t12-01-00-000z-abcdefabcdef"), true);
