@@ -256,6 +256,17 @@
     phase: "idle",
     error: null
   };
+  let recoveryRestoreView = {
+    slug: "",
+    requestId: 0,
+    phase: "idle",
+    points: [],
+    selectedReference: null,
+    plan: null,
+    progress: "",
+    error: null
+  };
+  let recoveryRestoreProgressTimer = null;
   let stateChangeRequestId = 0;
   let stateChangeAbortController = null;
   let csrfSessionToken = "";
@@ -303,6 +314,12 @@
     return isActiveRecoverySelection(slug, requestId)
       && String(recoveryCreateView.slug || "") === String(slug || "")
       && Number(recoveryCreateView.requestId) === Number(requestId);
+  }
+
+  function isActiveRecoveryRestore(slug, requestId) {
+    return isActiveRecoverySelection(slug, requestId)
+      && String(recoveryRestoreView.slug || "") === String(slug || "")
+      && Number(recoveryRestoreView.requestId) === Number(requestId);
   }
 
   function humanizeRecoveryAvailability(status) {
@@ -396,6 +413,113 @@
     });
   }
 
+  function buildRecoveryRestoreActions(restoreAllowed) {
+    const phase = recoveryRestoreView.phase;
+    const plan = recoveryRestoreView.plan || {};
+    if (!restoreAllowed && phase === "idle") {
+      return "";
+    }
+    if (phase === "selecting") {
+      return "  <p class=\"project-note\">Loading available Recovery Points...</p>";
+    }
+    if (phase === "select") {
+      const points = Array.isArray(recoveryRestoreView.points) ? recoveryRestoreView.points : [];
+      if (!points.length) {
+        return [
+          "  <p class=\"project-note\">No verified Recovery Point is available for restore.</p>",
+          "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"site-link\" data-recovery-action=\"cancel-restore\">Cancel</button></div>"
+        ].join("\n");
+      }
+      return [
+        "  <p class=\"project-note\">Choose a verified Recovery Point to review its restore impact.</p>",
+        "  <div class=\"recovery-card__choices\">",
+        points.map((point, index) => "    <button type=\"button\" class=\"button\" data-recovery-action=\"select-restore\" data-recovery-point-index=\"" + String(index) + "\">" + escapeHtml((point.label || "Recovery Point") + " · " + formatRecoveryPointTime(point.created_at)) + "</button>").join("\n"),
+        "  </div>",
+        "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"site-link\" data-recovery-action=\"cancel-restore\">Cancel</button></div>"
+      ].join("\n");
+    }
+    if (phase === "planning") {
+      return "  <p class=\"project-note\">Reviewing restore impact...</p>";
+    }
+    if (phase === "review" && plan && plan.confirmation) {
+      const impact = plan.impact_summary || {};
+      const lists = [
+        ["Restores", impact.replaces],
+        ["Preserves", impact.preserves],
+        ["Does not affect", impact.does_not_affect]
+      ].map((entry) => Array.isArray(entry[1]) && entry[1].length
+        ? "  <p class=\"project-note project-note--compact\"><strong>" + escapeHtml(entry[0]) + ":</strong> " + escapeHtml(entry[1].join(", ")) + "</p>"
+        : "").filter(Boolean);
+      const isEmergency = plan.confirmation.mode === "emergency";
+      return [
+        "  <p class=\"project-note\">Restore Website will replace the selected website state with this Recovery Point.</p>",
+        impact.expected_temporary_downtime ? "  <p class=\"project-note project-note--compact\">" + escapeHtml(impact.expected_temporary_downtime) + "</p>" : "",
+        "  <p class=\"project-note project-note--compact\"><strong>Safety copy:</strong> " + escapeHtml(humanizeRestoreRescueStrategy(plan.rescue_strategy)) + "</p>",
+        lists.join("\n"),
+        isEmergency && plan.confirmation.warning ? "  <p class=\"project-note recovery-card__warning\">" + escapeHtml(plan.confirmation.warning) + "</p>" : "",
+        "  <label class=\"project-form recovery-card__confirmation\"><span>Type the confirmation exactly</span><input id=\"recovery-restore-confirmation\" type=\"text\" autocomplete=\"off\" value=\"\"></label>",
+        "  <p class=\"project-note project-note--compact\">" + escapeHtml(plan.confirmation.phrase) + "</p>",
+        "  <div class=\"recovery-card__actions\">",
+        "    <button type=\"button\" class=\"button\" data-recovery-action=\"confirm-restore\" disabled>Restore Website</button>",
+        "    <button type=\"button\" class=\"site-link\" data-recovery-action=\"cancel-restore\">Cancel</button>",
+        "  </div>"
+      ].filter(Boolean).join("\n");
+    }
+    if (phase === "executing") {
+      return "  <p class=\"project-note\">" + escapeHtml(recoveryRestoreView.progress || "Preparing restore") + "...</p>";
+    }
+    if (phase === "succeeded") {
+      return [
+        "  <p class=\"project-note\">Website restore completed and verified.</p>",
+        restoreAllowed ? "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"button\" data-recovery-action=\"start-restore\">Restore Website</button></div>" : ""
+      ].filter(Boolean).join("\n");
+    }
+    if (phase === "failed") {
+      return [
+        "  <p class=\"project-note\">" + escapeHtml(recoveryRestoreView.error || "Restore did not complete. Review the result and try again.") + "</p>",
+        restoreAllowed ? "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"button\" data-recovery-action=\"start-restore\">Restore Website</button></div>" : ""
+      ].filter(Boolean).join("\n");
+    }
+    return restoreAllowed
+      ? "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"button\" data-recovery-action=\"start-restore\">Restore Website</button></div>"
+      : "";
+  }
+
+  function humanizeRestoreRescueStrategy(strategy) {
+    switch (String(strategy || "")) {
+      case "full_required":
+        return "A full safety copy will be created before restore.";
+      case "lightweight_required":
+        return "A temporary safety copy will be created before restore.";
+      case "none_emergency":
+        return "Emergency restore will proceed without a safety copy.";
+      default:
+        return "Safety copy details will be confirmed before restore.";
+    }
+  }
+
+  function mapRestoreProgress(stage) {
+    switch (String(stage || "")) {
+      case "creating_rescue":
+      case "creating_lightweight_rescue":
+        return "Creating safety copy";
+      case "entering_maintenance":
+      case "staging_filesystem":
+      case "stopping_wordpress":
+      case "promoting_filesystem":
+      case "importing_database":
+      case "starting_wordpress":
+      case "repairing_agent_binding":
+      case "cleanup":
+        return "Restoring website";
+      case "verifying_restore":
+      case "verifying":
+        return "Verifying website";
+      default:
+        return "Preparing restore";
+    }
+  }
+
   function buildRecoveryStatusCardHtml(payload) {
     const latest = payload && payload.latest_recovery_point && payload.latest_recovery_point.available
       ? payload.latest_recovery_point
@@ -424,7 +548,14 @@
     const confirming = recoveryCreateView.phase === "confirming";
     const succeeded = recoveryCreateView.phase === "succeeded";
     const failed = recoveryCreateView.phase === "failed";
-    const createAllowed = !blocked
+    const restoreBusy = ["selecting", "select", "planning", "review", "executing"].includes(recoveryRestoreView.phase);
+    const restoreAllowed = hasUsablePoint
+      && !blocked
+      && !["running", "interrupted", "reconciliation_required", "unknown"].includes(String(payload && payload.restore_status || ""))
+      && recoveryCreateView.phase !== "creating"
+      && recoveryCreateView.phase !== "confirming";
+    const createAllowed = !restoreBusy
+      && !blocked
       && String(payload && payload.storage_status || "") !== "capture_blocked"
       && !["running", "interrupted", "reconciliation_required"].includes(String(payload && payload.restore_status || ""));
     const countLines = [];
@@ -451,6 +582,7 @@
             failed ? "  <p class=\"project-note\">Recovery Point could not be created. Review the issue and try again.</p>" : "",
             "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"button\" data-recovery-action=\"start-create\">Create Recovery Point</button></div>"
           ].filter(Boolean).join("\n")));
+    const restoreActions = buildRecoveryRestoreActions(restoreAllowed);
     return [
       "<article class=\"project-card recovery-card\" data-recovery-state=\"" + escapeHtml(blocked ? "blocked" : (unavailable ? "unavailable" : (warning ? "warning" : "healthy"))) + "\">",
       "  <div class=\"project-card__header\">",
@@ -467,6 +599,7 @@
       "  <p class=\"project-note\">" + escapeHtml(note) + "</p>",
       countLines.join("\n"),
       actions,
+      restoreActions,
       "</article>"
     ].filter(Boolean).join("\n");
   }
@@ -488,6 +621,14 @@
     }
     if (recoveryStatusView.payload) {
       recoveryStatus.innerHTML = buildRecoveryStatusCardHtml(recoveryStatusView.payload);
+      const confirmationInput = document.getElementById("recovery-restore-confirmation");
+      const confirmationButton = recoveryStatus.querySelector("[data-recovery-action=\"confirm-restore\"]");
+      if (confirmationInput && confirmationButton && recoveryRestoreView.plan && recoveryRestoreView.plan.confirmation) {
+        const expected = String(recoveryRestoreView.plan.confirmation.phrase || "");
+        confirmationInput.addEventListener("input", () => {
+          confirmationButton.disabled = String(confirmationInput.value || "") !== expected;
+        });
+      }
       return;
     }
     setRecoveryStatusEmpty("Recovery status has not been loaded yet.");
@@ -499,6 +640,7 @@
       recoveryStatusAbortController.abort();
       recoveryStatusAbortController = null;
     }
+    stopRecoveryRestoreProgress();
     recoveryStatusView = {
       slug: String(slug || "").trim(),
       requestId: recoveryStatusRequestId,
@@ -510,6 +652,16 @@
       slug: recoveryStatusView.slug,
       requestId: recoveryStatusView.requestId,
       phase: "idle",
+      error: null
+    };
+    recoveryRestoreView = {
+      slug: recoveryStatusView.slug,
+      requestId: recoveryStatusView.requestId,
+      phase: "idle",
+      points: [],
+      selectedReference: null,
+      plan: null,
+      progress: "",
       error: null
     };
     renderRecoveryStatusView();
@@ -2515,6 +2667,205 @@
     }
   }
 
+  function startRecoveryRestore() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = recoveryStatusView.requestId;
+    if (!slug || !isActiveRecoverySelection(slug, requestId) || !recoveryStatusView.payload) {
+      return;
+    }
+    recoveryRestoreView = {
+      slug,
+      requestId,
+      phase: "selecting",
+      points: [],
+      selectedReference: null,
+      plan: null,
+      progress: "",
+      error: null
+    };
+    renderRecoveryStatusView();
+    loadRecoveryPoints(slug, requestId).catch(() => {});
+  }
+
+  function cancelRecoveryRestore() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = recoveryStatusView.requestId;
+    if (!isActiveRecoveryRestore(slug, requestId)) {
+      return;
+    }
+    recoveryRestoreView = {
+      slug,
+      requestId,
+      phase: "idle",
+      points: [],
+      selectedReference: null,
+      plan: null,
+      progress: "",
+      error: null
+    };
+    renderRecoveryStatusView();
+  }
+
+  function stopRecoveryRestoreProgress() {
+    if (recoveryRestoreProgressTimer) {
+      clearInterval(recoveryRestoreProgressTimer);
+      recoveryRestoreProgressTimer = null;
+    }
+  }
+
+  function startRecoveryRestoreProgress(slug, requestId) {
+    stopRecoveryRestoreProgress();
+    const refresh = async () => {
+      try {
+        const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/operations?limit=5");
+        const payload = await response.json();
+        if (!isActiveRecoveryRestore(slug, requestId) || recoveryRestoreView.phase !== "executing" || !response.ok) {
+          return;
+        }
+        const operations = Array.isArray(payload.operations) ? payload.operations : [];
+        const operation = operations.find((entry) => entry && entry.operation_type === "structural_restore_execute" && ["requested", "running"].includes(entry.status));
+        if (operation) {
+          recoveryRestoreView.progress = mapRestoreProgress(operation.stage);
+          renderRecoveryStatusView();
+        }
+      } catch (error) {
+        // Keep the current customer-facing progress state until the operation settles.
+      }
+    };
+    refresh();
+    recoveryRestoreProgressTimer = setInterval(refresh, 1000);
+  }
+
+  async function loadRecoveryPoints(slug, requestId) {
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/recovery-points");
+      const payload = await response.json();
+      if (!isActiveRecoveryRestore(slug, requestId)) {
+        return;
+      }
+      if (!response.ok || !Array.isArray(payload.recovery_points)) {
+        throw new Error("Recovery Points are temporarily unavailable.");
+      }
+      recoveryRestoreView.points = payload.recovery_points.filter((point) => point && point.restorable === true && point.status === "verified");
+      recoveryRestoreView.phase = "select";
+      renderRecoveryStatusView();
+    } catch (error) {
+      if (!isActiveRecoveryRestore(slug, requestId)) {
+        return;
+      }
+      recoveryRestoreView.phase = "failed";
+      recoveryRestoreView.error = "Recovery Points are temporarily unavailable.";
+      renderRecoveryStatusView();
+    }
+  }
+
+  async function selectRecoveryPointForRestore(index) {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = recoveryStatusView.requestId;
+    if (!isActiveRecoveryRestore(slug, requestId) || recoveryRestoreView.phase !== "select") {
+      return;
+    }
+    const point = recoveryRestoreView.points[Number(index)];
+    const reference = point && typeof point.reference === "string" ? point.reference : "";
+    if (!reference) {
+      recoveryRestoreView.phase = "failed";
+      recoveryRestoreView.error = "Selected Recovery Point is unavailable.";
+      renderRecoveryStatusView();
+      return;
+    }
+    recoveryRestoreView.phase = "planning";
+    recoveryRestoreView.selectedReference = reference;
+    renderRecoveryStatusView();
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/recovery-points/" + encodeURIComponent(reference) + "/restore-plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": createRequestIdempotencyKey("restore-plan")
+        },
+        body: JSON.stringify({})
+      });
+      const payload = await response.json();
+      if (!isActiveRecoveryRestore(slug, requestId)) {
+        return;
+      }
+      if (!response.ok || !payload.restore_plan || !payload.restore_plan.plan_id || !payload.restore_plan.confirmation) {
+        throw new Error("Restore review could not be prepared.");
+      }
+      recoveryRestoreView.phase = "review";
+      recoveryRestoreView.plan = payload.restore_plan;
+      recoveryRestoreView.error = null;
+      renderRecoveryStatusView();
+    } catch (error) {
+      if (!isActiveRecoveryRestore(slug, requestId)) {
+        return;
+      }
+      recoveryRestoreView.phase = "failed";
+      recoveryRestoreView.error = "Restore review could not be prepared. Review the Recovery Point and try again.";
+      renderRecoveryStatusView();
+    }
+  }
+
+  async function confirmRecoveryRestore(exactConfirmation) {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = recoveryStatusView.requestId;
+    const plan = recoveryRestoreView.plan || {};
+    const enteredConfirmation = exactConfirmation == null
+      ? String((document.getElementById("recovery-restore-confirmation") || {}).value || "")
+      : String(exactConfirmation);
+    if (
+      !isActiveRecoveryRestore(slug, requestId) ||
+      recoveryRestoreView.phase !== "review" ||
+      !plan.plan_id ||
+      !plan.confirmation ||
+      enteredConfirmation !== String(plan.confirmation.phrase || "")
+    ) {
+      return;
+    }
+    recoveryRestoreView.phase = "executing";
+    recoveryRestoreView.progress = "Preparing restore";
+    recoveryRestoreView.error = null;
+    renderRecoveryStatusView();
+    startRecoveryRestoreProgress(slug, requestId);
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/restore/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": createRequestIdempotencyKey("restore-execute")
+        },
+        body: JSON.stringify({
+          plan_id: plan.plan_id,
+          exact_confirmation: enteredConfirmation
+        })
+      });
+      const payload = await response.json();
+      if (!isActiveRecoveryRestore(slug, requestId)) {
+        return;
+      }
+      stopRecoveryRestoreProgress();
+      if (!response.ok || !payload.restore || payload.restore.status !== "succeeded" || payload.restore.verified !== true || payload.restore.manual_recovery_required === true) {
+        const restoreError = new Error("Restore did not complete.");
+        restoreError.code = payload && payload.code || "restore_failed";
+        throw restoreError;
+      }
+      recoveryRestoreView.phase = "succeeded";
+      renderRecoveryStatusView();
+      await loadRecoveryStatus(slug, { requestId });
+    } catch (error) {
+      if (!isActiveRecoveryRestore(slug, requestId)) {
+        return;
+      }
+      stopRecoveryRestoreProgress();
+      recoveryRestoreView.phase = "failed";
+      recoveryRestoreView.error = error && error.code === "restore_recovery_required"
+        ? "Restore requires attention. Manual recovery is required."
+        : "Restore did not complete. Review the result and try again.";
+      renderRecoveryStatusView();
+      loadRecoveryStatus(slug, { requestId }).catch(() => {});
+    }
+  }
+
   recoveryStatus.addEventListener("click", (event) => {
     const target = event && event.target && typeof event.target.closest === "function"
       ? event.target.closest("[data-recovery-action]")
@@ -2526,6 +2877,14 @@
       confirmRecoveryPointCreate().catch(() => {});
     } else if (action === "cancel-create") {
       cancelRecoveryPointCreate();
+    } else if (action === "start-restore") {
+      startRecoveryRestore();
+    } else if (action === "cancel-restore") {
+      cancelRecoveryRestore();
+    } else if (action === "select-restore") {
+      selectRecoveryPointForRestore(target.getAttribute("data-recovery-point-index")).catch(() => {});
+    } else if (action === "confirm-restore") {
+      confirmRecoveryRestore().catch(() => {});
     }
   });
 
@@ -3202,9 +3561,12 @@
     window.FactoryLauncherTestHooks.recoveryStatus = {
       buildRecoveryStatusCardHtml,
       cancelRecoveryPointCreate,
+      cancelRecoveryRestore,
       confirmRecoveryPointCreate,
+      confirmRecoveryRestore,
       getHtml: () => recoveryStatus.innerHTML,
       getCreateState: () => Object.assign({}, recoveryCreateView),
+      getRestoreState: () => Object.assign({}, recoveryRestoreView),
       loadRecoveryStatus,
       renderState(nextState) {
         recoveryStatusView = Object.assign({
@@ -3220,10 +3582,22 @@
           phase: nextState && nextState.createPhase || "idle",
           error: null
         };
+        recoveryRestoreView = {
+          slug: recoveryStatusView.slug,
+          requestId: recoveryStatusView.requestId,
+          phase: nextState && nextState.restorePhase || "idle",
+          points: nextState && Array.isArray(nextState.restorePoints) ? nextState.restorePoints : [],
+          selectedReference: null,
+          plan: nextState && nextState.restorePlan || null,
+          progress: "",
+          error: nextState && nextState.restoreError || null
+        };
         renderRecoveryStatusView();
       },
       resetRecoveryStatusView,
       startRecoveryPointCreate,
+      startRecoveryRestore,
+      selectRecoveryPointForRestore,
       setSelectedProject(slug) {
         generateProjectSlug.value = String(slug || "");
       }

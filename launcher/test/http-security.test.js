@@ -253,6 +253,7 @@ test("shared route inventory covers every current POST server route and required
     "agent_auth_revoke",
     "dependency_install",
     "project_generate",
+    "restore_execute",
     "state_apply",
     "state_rollback"
   ].forEach((requiredId) => {

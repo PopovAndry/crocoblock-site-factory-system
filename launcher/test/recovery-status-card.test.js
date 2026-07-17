@@ -94,6 +94,8 @@ function createHarness(fetchImpl) {
     AbortController,
     Headers,
     FormData: class FormData {},
+    setInterval,
+    clearInterval,
     setTimeout,
     clearTimeout
   };
@@ -238,7 +240,7 @@ test("Recovery card requires confirmation, shows progress, refreshes status afte
   hooks.setSelectedProject("card-project");
   hooks.renderState({ slug: "card-project", requestId: 7, payload: baseStatus() });
   assert.match(recoveryStatus.innerHTML, /Create Recovery Point/);
-  assert.equal(/<button[^>]*>[^<]*(?:Restore|cleanup)/i.test(recoveryStatus.innerHTML), false);
+  assert.match(recoveryStatus.innerHTML, /Restore Website/);
 
   hooks.startRecoveryPointCreate();
   assert.match(recoveryStatus.innerHTML, /Create a Recovery Point for this website\?/);
@@ -259,6 +261,95 @@ test("Recovery card requires confirmation, shows progress, refreshes status afte
   assert.equal(hooks.getCreateState().phase, "succeeded");
   assert.equal(requests.some((request) => request.url.includes("/recovery-points")), true);
   assert.equal(requests.some((request) => request.url.includes("/recovery/status")), true);
+  assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
+});
+
+test("Recovery card selects a verified Recovery Point, requires exact restore confirmation, and refreshes after verified restore", async () => {
+  const requests = [];
+  const plan = {
+    plan_id: "restore-plan-2026-07-17t12-00-00-000z-abcdef",
+    recovery_point: { label: "Recovery Point", created_at: "2026-07-17T10:00:00.000Z" },
+    readiness: "ready",
+    restore_boundary: { restores: ["WordPress database"] },
+    warnings: [],
+    blockers: [],
+    rescue_strategy: "full_required",
+    confirmation: {
+      required: true,
+      mode: "normal",
+      phrase: "Restore Website for card-project",
+      warning: null
+    },
+    impact_summary: {
+      replaces: ["Managed WordPress database state"],
+      preserves: ["Current project credentials"],
+      does_not_affect: ["Other Factory projects"],
+      expected_temporary_downtime: "The website may be temporarily unavailable while restore execution runs in a later phase."
+    }
+  };
+  const { hooks, recoveryStatus } = createHarness(async (url, options) => {
+    requests.push({ url: String(url), options: options || {} });
+    if (String(url) === "/api/security/session") {
+      return {
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({ csrf_token: "test-csrf-token", launcher_origin: "http://127.0.0.1:3847" })
+      };
+    }
+    if (String(url) === "/api/projects/card-project/recovery-points") {
+      return {
+        ok: true,
+        json: async () => ({
+          recovery_points: [{
+            reference: "snapshot-2026-07-17t10-00-00-000z-abcdef123456",
+            label: "Recovery Point",
+            created_at: "2026-07-17T10:00:00.000Z",
+            status: "verified",
+            restorable: true
+          }]
+        })
+      };
+    }
+    if (String(url).includes("/restore-plan")) {
+      return { ok: true, json: async () => ({ restore_plan: plan }) };
+    }
+    if (String(url) === "/api/projects/card-project/restore/execute") {
+      return {
+        ok: true,
+        json: async () => ({ restore: { status: "succeeded", verified: true, manual_recovery_required: false } })
+      };
+    }
+    if (String(url).includes("/recovery/status")) {
+      return { ok: true, json: async () => baseStatus({ restore_status: "completed" }) };
+    }
+    throw new Error("unexpected fetch: " + url);
+  });
+
+  hooks.setSelectedProject("card-project");
+  hooks.renderState({ slug: "card-project", requestId: 13, payload: baseStatus() });
+  hooks.startRecoveryRestore();
+  assert.match(recoveryStatus.innerHTML, /Loading available Recovery Points/);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(recoveryStatus.innerHTML, /Choose a verified Recovery Point/);
+  assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
+
+  await hooks.selectRecoveryPointForRestore(0);
+  assert.match(recoveryStatus.innerHTML, /Restore Website will replace/);
+  assert.match(recoveryStatus.innerHTML, /Restore Website for card-project/);
+  assert.equal(/snapshot-/.test(recoveryStatus.innerHTML), false);
+  assert.equal(hooks.getRestoreState().phase, "review");
+
+  await hooks.confirmRecoveryRestore("not the exact phrase");
+  assert.equal(hooks.getRestoreState().phase, "review");
+  await hooks.confirmRecoveryRestore("Restore Website for card-project");
+  assert.match(recoveryStatus.innerHTML, /Website restore completed and verified/);
+  assert.equal(hooks.getRestoreState().phase, "succeeded");
+  const execute = requests.find((request) => request.url.endsWith("/restore/execute"));
+  assert.ok(execute);
+  assert.deepEqual(JSON.parse(execute.options.body), {
+    plan_id: "restore-plan-2026-07-17t12-00-00-000z-abcdef",
+    exact_confirmation: "Restore Website for card-project"
+  });
   assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
 });
 
@@ -300,6 +391,21 @@ test("Recovery card hides creation without a selected project, blocks it for uns
   assert.match(recoveryStatus.innerHTML, /Recovery Point could not be created/);
   assert.match(recoveryStatus.innerHTML, /Review the issue and try again/);
   assert.match(recoveryStatus.innerHTML, /Create Recovery Point/);
+  assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
+});
+
+test("Recovery card presents manual recovery as attention-required, never as restore success", () => {
+  const { hooks, recoveryStatus } = createHarness();
+  hooks.setSelectedProject("card-project");
+  hooks.renderState({
+    slug: "card-project",
+    requestId: 15,
+    payload: baseStatus(),
+    restorePhase: "failed",
+    restoreError: "Restore requires attention. Manual recovery is required."
+  });
+  assert.match(recoveryStatus.innerHTML, /Restore requires attention. Manual recovery is required/);
+  assert.equal(/Website restore completed and verified/.test(recoveryStatus.innerHTML), false);
   assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
 });
 

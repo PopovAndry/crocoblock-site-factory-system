@@ -71,6 +71,15 @@ const {
 const {
   createFullStructuralSnapshot
 } = require("./structural-snapshot-capture");
+const {
+  listManifests
+} = require("./structural-snapshot-store");
+const {
+  createRestorePlan
+} = require("./structural-restore-plan");
+const {
+  executeManagedWebsiteRestore
+} = require("./structural-restore-execution");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -550,6 +559,155 @@ function sendRecoveryPointCreateError(response, error) {
     ok: false,
     status: "error",
     code: code && Object.prototype.hasOwnProperty.call(known, code) ? code : "recovery_point_create_failed",
+    error: entry[1],
+    message: entry[1]
+  });
+}
+
+function listRecoveryPointsForBrowser(projectsRoot, slug) {
+  return listManifests({ projectsRoot, slug })
+    .filter((summary) => summary && summary.verification_state === "verified" && summary.restorable === true)
+    .map((summary) => ({
+      reference: summary.snapshot_id,
+      label: summary.customer_label || "Recovery Point",
+      created_at: summary.created_at,
+      status: "verified",
+      restorable: true
+    }));
+}
+
+function validateRestorePlanPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length > 0) {
+    throw createStructuredError(
+      "Restore planning accepts a selected Recovery Point only.",
+      "restore_plan_request_rejected",
+      400
+    );
+  }
+}
+
+function validateRestoreExecutionPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  if (!input || Object.keys(input).some((field) => field !== "plan_id" && field !== "exact_confirmation")) {
+    throw createStructuredError(
+      "Restore execution accepts the reviewed plan and exact confirmation only.",
+      "restore_execution_request_rejected",
+      400
+    );
+  }
+  if (typeof input.plan_id !== "string" || typeof input.exact_confirmation !== "string") {
+    throw createStructuredError(
+      "Restore execution requires the reviewed plan and exact confirmation.",
+      "restore_execution_confirmation_required",
+      400
+    );
+  }
+  return {
+    planId: input.plan_id,
+    exactConfirmation: input.exact_confirmation
+  };
+}
+
+function summarizeRestorePlanForBrowser(summary) {
+  if (!summary || typeof summary !== "object" || !summary.plan_id || !summary.confirmation || !summary.impact_summary) {
+    throw createStructuredError("Restore review could not be prepared.", "restore_plan_invalid", 500);
+  }
+  return {
+    plan_id: summary.plan_id,
+    recovery_point: {
+      label: summary.recovery_point_label || "Recovery Point",
+      created_at: summary.recovery_point_created_at || null
+    },
+    readiness: summary.readiness,
+    restore_boundary: summary.restore_boundary,
+    warnings: Array.isArray(summary.warnings) ? summary.warnings : [],
+    blockers: Array.isArray(summary.blockers) ? summary.blockers : [],
+    rescue_strategy: summary.rescue_strategy || null,
+    confirmation: {
+      required: summary.confirmation.required === true,
+      mode: summary.confirmation.mode === "emergency" ? "emergency" : "normal",
+      phrase: String(summary.confirmation.phrase || ""),
+      warning: summary.confirmation.warning || null
+    },
+    impact_summary: summary.impact_summary
+  };
+}
+
+function buildRestorePlanResponse(planResult) {
+  return {
+    ok: true,
+    status: planResult && planResult.idempotentReplay === true ? "replayed" : "planned",
+    idempotent_replay: planResult && planResult.idempotentReplay === true,
+    restore_plan: summarizeRestorePlanForBrowser(planResult && planResult.summary)
+  };
+}
+
+function buildRestoreExecutionResponse(operationResult) {
+  const operation = operationResult && operationResult.operation || {};
+  const summary = operation.result_summary && typeof operation.result_summary === "object"
+    ? operation.result_summary
+    : {};
+  if (operation.status !== "succeeded" || summary.status !== "succeeded" || summary.restore_verified !== true) {
+    throw createStructuredError("Restore did not complete verification.", "restore_verification_failed", 500);
+  }
+  return {
+    ok: true,
+    status: operationResult.idempotentReplay === true ? "replayed" : "completed",
+    idempotent_replay: operationResult.idempotentReplay === true,
+    restore: {
+      status: "succeeded",
+      verified: true,
+      manual_recovery_required: false
+    }
+  };
+}
+
+function sendRestoreFlowError(response, error) {
+  if (error && (error.manualRecoveryRequired === true || error.result_summary && error.result_summary.manual_recovery_required === true)) {
+    sendJson(response, 409, {
+      ok: false,
+      status: "recovery_requires_attention",
+      code: "restore_recovery_required",
+      error: "Restore requires attention. Manual recovery is required.",
+      message: "Restore requires attention. Manual recovery is required.",
+      recovery: {
+        manual_recovery_required: true
+      }
+    });
+    return;
+  }
+  const code = error && error.code;
+  const known = {
+    invalid_project_slug: [400, "Project slug is invalid."],
+    project_not_found: [404, "Project not found."],
+    restore_plan_request_rejected: [400, "Restore planning accepts a selected Recovery Point only."],
+    restore_execution_request_rejected: [400, "Restore execution accepts the reviewed plan and exact confirmation only."],
+    restore_execution_confirmation_required: [400, "Restore execution requires the reviewed plan and exact confirmation."],
+    restore_snapshot_not_found: [404, "Recovery Point was not found."],
+    restore_plan_not_found: [404, "Restore plan was not found."],
+    restore_snapshot_not_verified: [409, "Recovery Point is not verified."],
+    restore_snapshot_not_restorable: [409, "Recovery Point is not available for restore."],
+    restore_project_binding_mismatch: [409, "Recovery Point is not bound to this project."],
+    restore_confirmation_required: [400, "Restore confirmation text is required."],
+    restore_confirmation_mismatch: [409, "Restore confirmation text does not match."],
+    restore_plan_expired: [410, "Restore review has expired. Review the Recovery Point again."],
+    restore_plan_not_ready: [409, "Restore review is not ready for execution."],
+    restore_active_operation: [409, "A project operation is active. Restore cannot begin yet."],
+    project_operation_in_progress: [409, "A project operation is active. Restore cannot begin yet."],
+    restore_disk_space_insufficient: [409, "Restore requires more available storage before it can begin."],
+    restore_emergency_plan_obsolete: [409, "A safer restore review is now available. Review it again."],
+    restore_artifact_digest_mismatch: [409, "Recovery Point changed after review. Review it again."],
+    restore_execution_input_rejected: [400, "Restore execution accepts the reviewed plan and exact confirmation only."],
+    restore_verification_failed: [500, "Restore did not complete verification."],
+    idempotency_key_conflict: [409, "Restore request conflicts with an earlier request."],
+    operation_retry_requires_new_idempotency_key: [409, "Restore did not complete. Review the result and try again."]
+  };
+  const entry = known[code] || [500, "Restore did not complete. Review the result and try again."];
+  sendJson(response, entry[0], {
+    ok: false,
+    status: "error",
+    code: code && Object.prototype.hasOwnProperty.call(known, code) ? code : "restore_failed",
     error: entry[1],
     message: entry[1]
   });
@@ -1660,6 +1818,21 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/recovery-points$/.test(requestUrl.pathname)) {
+        try {
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          sendJson(response, 200, {
+            ok: true,
+            project: { slug },
+            recovery_points: listRecoveryPointsForBrowser(projectsRoot, slug)
+          });
+        } catch (error) {
+          sendRestoreFlowError(response, error);
+        }
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/recovery-points$/.test(requestUrl.pathname)) {
         try {
           const payload = await readJsonPayload(request);
@@ -1677,6 +1850,53 @@ function createLauncherServer(options) {
             throw error;
           }
           sendRecoveryPointCreateError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const parts = requestUrl.pathname.split("/");
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(parts[3] || ""));
+          const snapshotId = decodeURIComponent(parts[5] || "");
+          assertProjectExistsForRoute(slug, projectsRoot);
+          validateRestorePlanPayload(payload);
+          const planResult = await createRestorePlan({
+            projectsRoot,
+            slug,
+            snapshotId,
+            idempotencyKey: getRequestIdempotencyKey(request)
+          });
+          sendJson(response, 200, buildRestorePlanResponse(planResult));
+        } catch (error) {
+          if (error && error.securityBoundary === true) {
+            throw error;
+          }
+          sendRestoreFlowError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/restore\/execute$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const input = validateRestoreExecutionPayload(payload);
+          const operationResult = await executeManagedWebsiteRestore({
+            projectsRoot,
+            projectSlug: slug,
+            planId: input.planId,
+            exactConfirmation: input.exactConfirmation,
+            idempotencyKey: getRequestIdempotencyKey(request)
+          });
+          sendJson(response, 200, buildRestoreExecutionResponse(operationResult));
+        } catch (error) {
+          if (error && error.securityBoundary === true) {
+            throw error;
+          }
+          sendRestoreFlowError(response, error);
         }
         return;
       }
@@ -2171,6 +2391,8 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/recovery-points$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/restore\/execute$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/proof-pack\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname) ||

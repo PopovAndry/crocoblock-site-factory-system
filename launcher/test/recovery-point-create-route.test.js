@@ -246,13 +246,16 @@ test("Recovery Point creation idempotency replay creates no duplicate and captur
   assert.equal(executions, 1);
 });
 
-test("Recovery Point creation is classified as a mutation and no adjacent recovery mutation routes exist", () => {
+test("Recovery Point creation stays classified as a mutation while the approved restore flow routes stay explicit", () => {
   const route = classifyLauncherRoute("POST", "/api/projects/create-route/recovery-points");
   assert.ok(route);
   assert.equal(route.id, "recovery_point_create");
   assert.equal(route.group, "mutation");
   assert.equal(route.mutation, true);
-  assert.equal(classifyLauncherRoute("GET", "/api/projects/create-route/recovery-points"), null);
+  const inventory = classifyLauncherRoute("GET", "/api/projects/create-route/recovery-points");
+  assert.ok(inventory);
+  assert.equal(inventory.id, "recovery_points_list");
+  assert.equal(inventory.mutation, false);
   assert.equal(classifyLauncherRoute("POST", "/api/projects/create-route/recovery-points/restore"), null);
   assert.equal(classifyLauncherRoute("DELETE", "/api/projects/create-route/recovery-points"), null);
 });
