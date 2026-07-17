@@ -68,6 +68,9 @@ const {
 const {
   getRecoveryStatus
 } = require("./recovery-status-read-model");
+const {
+  createFullStructuralSnapshot
+} = require("./structural-snapshot-capture");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -473,6 +476,82 @@ function sendRecoveryStatusError(response, error) {
     code: safeCode,
     error: safeMessage,
     message: safeMessage
+  });
+}
+
+function validateRecoveryPointCreatePayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  const rejectedFields = Object.keys(input).filter((field) => field !== "confirm_create_recovery_point");
+  if (rejectedFields.length > 0) {
+    throw createStructuredError(
+      "Recovery Point creation accepts confirmation only.",
+      "recovery_point_request_rejected",
+      400
+    );
+  }
+  if (input.confirm_create_recovery_point !== true) {
+    throw createStructuredError(
+      "Create Recovery Point requires confirmation.",
+      "recovery_point_confirmation_required",
+      400
+    );
+  }
+}
+
+function buildRecoveryPointCreateResponse(operationResult) {
+  const result = operationResult && operationResult.result;
+  const manifest = result && result.manifest;
+  const summary = result && result.summary;
+  if (
+    !manifest ||
+    manifest.status !== "verified" ||
+    !summary ||
+    summary.restorable !== true ||
+    summary.verification_state !== "verified"
+  ) {
+    throw createStructuredError(
+      "Recovery Point could not be verified.",
+      "recovery_point_verification_failed",
+      500
+    );
+  }
+  return {
+    ok: true,
+    status: operationResult.idempotentReplay ? "replayed" : "created",
+    idempotent_replay: operationResult.idempotentReplay === true,
+    operation: {
+      status: operationResult.operation && operationResult.operation.status === "succeeded"
+        ? "succeeded"
+        : "unknown"
+    },
+    recovery_point: {
+      status: "verified",
+      restorable: true
+    }
+  };
+}
+
+function sendRecoveryPointCreateError(response, error) {
+  const code = error && error.code;
+  const known = {
+    invalid_project_slug: [400, "Project slug is invalid."],
+    project_not_found: [404, "Project not found."],
+    recovery_point_confirmation_required: [400, "Create Recovery Point requires confirmation."],
+    recovery_point_request_rejected: [400, "Recovery Point creation accepts confirmation only."],
+    invalid_idempotency_key: [400, "Recovery Point request could not be accepted."],
+    idempotency_key_conflict: [409, "Recovery Point request conflicts with an earlier request."],
+    operation_retry_requires_new_idempotency_key: [409, "Recovery Point could not be created. Review the issue and try again."],
+    project_operation_in_progress: [409, "Recovery Point creation is already in progress."],
+    recovery_point_verification_failed: [500, "Recovery Point could not be verified."],
+    snapshot_disk_space_low: [409, "Recovery Point could not be created. Review the issue and try again."]
+  };
+  const entry = known[code] || [500, "Recovery Point could not be created. Review the issue and try again."];
+  sendJson(response, entry[0], {
+    ok: false,
+    status: "error",
+    code: code && Object.prototype.hasOwnProperty.call(known, code) ? code : "recovery_point_create_failed",
+    error: entry[1],
+    message: entry[1]
   });
 }
 
@@ -1581,6 +1660,27 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/recovery-points$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          validateRecoveryPointCreatePayload(payload);
+          const operationResult = await createFullStructuralSnapshot({
+            projectsRoot,
+            slug,
+            idempotencyKey: getRequestIdempotencyKey(request)
+          });
+          sendJson(response, 200, buildRecoveryPointCreateResponse(operationResult));
+        } catch (error) {
+          if (error && error.securityBoundary === true) {
+            throw error;
+          }
+          sendRecoveryPointCreateError(response, error);
+        }
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname)) {
         await readJsonPayload(request);
         const slug = decodeURIComponent(requestUrl.pathname.split("/")[3] || "");
@@ -2070,6 +2170,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/recovery-points$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/proof-pack\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/state\/refresh$/.test(requestUrl.pathname) ||

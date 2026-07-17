@@ -92,6 +92,7 @@ function createHarness(fetchImpl) {
       throw new Error("unexpected fetch");
     }),
     AbortController,
+    Headers,
     FormData: class FormData {},
     setTimeout,
     clearTimeout
@@ -201,6 +202,141 @@ test("Recovery card renders healthy, unavailable, warning, and blocked human sta
   assert.match(recoveryStatus.innerHTML, /Attention required/);
   assert.match(recoveryStatus.innerHTML, /Blockers: 1/);
   assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
+});
+
+test("Recovery card requires confirmation, shows progress, refreshes status after verified creation, and keeps actions customer-safe", async () => {
+  let resolveCreate;
+  const createResponse = new Promise((resolve) => {
+    resolveCreate = resolve;
+  });
+  const requests = [];
+  const { hooks, recoveryStatus } = createHarness(async (url, options) => {
+    requests.push({ url: String(url), options: options || {} });
+    if (String(url) === "/api/security/session") {
+      return {
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({ csrf_token: "test-csrf-token", launcher_origin: "http://127.0.0.1:3847" })
+      };
+    }
+    if (String(url).includes("/recovery-points")) {
+      return createResponse;
+    }
+    if (String(url).includes("/recovery/status")) {
+      return {
+        ok: true,
+        json: async () => baseStatus({
+          latest_recovery_point: Object.assign({}, baseStatus().latest_recovery_point, {
+            created_at: "2026-07-17T11:00:00.000Z"
+          })
+        })
+      };
+    }
+    throw new Error("unexpected fetch: " + url);
+  });
+
+  hooks.setSelectedProject("card-project");
+  hooks.renderState({ slug: "card-project", requestId: 7, payload: baseStatus() });
+  assert.match(recoveryStatus.innerHTML, /Create Recovery Point/);
+  assert.equal(/<button[^>]*>[^<]*(?:Restore|cleanup)/i.test(recoveryStatus.innerHTML), false);
+
+  hooks.startRecoveryPointCreate();
+  assert.match(recoveryStatus.innerHTML, /Create a Recovery Point for this website\?/);
+  assert.equal(hooks.getCreateState().phase, "confirming");
+
+  const creating = hooks.confirmRecoveryPointCreate();
+  assert.match(recoveryStatus.innerHTML, /Creating Recovery Point/);
+  assert.equal(hooks.getCreateState().phase, "creating");
+  resolveCreate({
+    ok: true,
+    json: async () => ({
+      recovery_point: { status: "verified", restorable: true }
+    })
+  });
+  await creating;
+
+  assert.match(recoveryStatus.innerHTML, /Recovery Point created and verified/);
+  assert.equal(hooks.getCreateState().phase, "succeeded");
+  assert.equal(requests.some((request) => request.url.includes("/recovery-points")), true);
+  assert.equal(requests.some((request) => request.url.includes("/recovery/status")), true);
+  assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
+});
+
+test("Recovery card hides creation without a selected project, blocks it for unsafe state, and keeps failed creation retryable", async () => {
+  const { hooks, recoveryStatus } = createHarness(async (url) => {
+    if (String(url) === "/api/security/session") {
+      return {
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({ csrf_token: "test-csrf-token", launcher_origin: "http://127.0.0.1:3847" })
+      };
+    }
+    if (String(url).includes("/recovery-points")) {
+      return {
+        ok: false,
+        json: async () => ({ error: "C:\\secret\\database.sql password" })
+      };
+    }
+    throw new Error("unexpected fetch: " + url);
+  });
+
+  hooks.renderState({ slug: "", requestId: 0 });
+  assert.equal(/Create Recovery Point/.test(recoveryStatus.innerHTML), false);
+
+  hooks.setSelectedProject("card-project");
+  hooks.renderState({
+    slug: "card-project",
+    requestId: 8,
+    payload: baseStatus({
+      availability: "unknown",
+      blockers: [{ code: "recovery_metadata_unreadable", message: "Recovery metadata could not be read safely." }]
+    })
+  });
+  assert.equal(/Create Recovery Point/.test(recoveryStatus.innerHTML), false);
+
+  hooks.renderState({ slug: "card-project", requestId: 9, payload: baseStatus() });
+  await hooks.startRecoveryPointCreate();
+  await hooks.confirmRecoveryPointCreate();
+  assert.match(recoveryStatus.innerHTML, /Recovery Point could not be created/);
+  assert.match(recoveryStatus.innerHTML, /Review the issue and try again/);
+  assert.match(recoveryStatus.innerHTML, /Create Recovery Point/);
+  assertNoTechnicalRecoveryDetails(recoveryStatus.innerHTML);
+});
+
+test("Recovery Point creation ignores a stale completion after the selected project changes", async () => {
+  let resolveCreate;
+  const pendingCreate = new Promise((resolve) => {
+    resolveCreate = resolve;
+  });
+  const { hooks, recoveryStatus } = createHarness(async (url) => {
+    if (String(url) === "/api/security/session") {
+      return {
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({ csrf_token: "test-csrf-token", launcher_origin: "http://127.0.0.1:3847" })
+      };
+    }
+    if (String(url).includes("/recovery-points")) {
+      return pendingCreate;
+    }
+    throw new Error("unexpected fetch: " + url);
+  });
+
+  hooks.setSelectedProject("alpha");
+  hooks.renderState({ slug: "alpha", requestId: 10, payload: baseStatus({ project: { slug: "alpha" } }) });
+  hooks.startRecoveryPointCreate();
+  const creating = hooks.confirmRecoveryPointCreate();
+  hooks.setSelectedProject("beta");
+  hooks.resetRecoveryStatusView("beta");
+  resolveCreate({
+    ok: true,
+    json: async () => ({ recovery_point: { status: "verified", restorable: true } })
+  });
+  await creating;
+
+  assert.match(recoveryStatus.innerHTML, /Loading Recovery status/);
+  assert.equal(/Recovery Point created and verified/.test(recoveryStatus.innerHTML), false);
+  assert.equal(hooks.getCreateState().slug, "beta");
 });
 
 test("Recovery card ignores stale project-switch responses and renders no mutation action", async () => {

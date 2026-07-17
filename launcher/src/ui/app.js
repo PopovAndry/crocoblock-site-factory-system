@@ -250,6 +250,12 @@
     payload: null,
     error: null
   };
+  let recoveryCreateView = {
+    slug: "",
+    requestId: 0,
+    phase: "idle",
+    error: null
+  };
   let stateChangeRequestId = 0;
   let stateChangeAbortController = null;
   let csrfSessionToken = "";
@@ -291,6 +297,12 @@
     return String(recoveryStatusView.slug || "") === String(slug || "")
       && Number(recoveryStatusView.requestId) === Number(requestId)
       && String(generateProjectSlug.value || "").trim() === String(slug || "");
+  }
+
+  function isActiveRecoveryCreate(slug, requestId) {
+    return isActiveRecoverySelection(slug, requestId)
+      && String(recoveryCreateView.slug || "") === String(slug || "")
+      && Number(recoveryCreateView.requestId) === Number(requestId);
   }
 
   function humanizeRecoveryAvailability(status) {
@@ -408,6 +420,13 @@
     const note = unavailable
       ? "Create one before making major changes."
       : humanizeRecoveryRecommendation(payload && payload.recommended_action);
+    const creating = recoveryCreateView.phase === "creating";
+    const confirming = recoveryCreateView.phase === "confirming";
+    const succeeded = recoveryCreateView.phase === "succeeded";
+    const failed = recoveryCreateView.phase === "failed";
+    const createAllowed = !blocked
+      && String(payload && payload.storage_status || "") !== "capture_blocked"
+      && !["running", "interrupted", "reconciliation_required"].includes(String(payload && payload.restore_status || ""));
     const countLines = [];
     if (warnings.length > 0) {
       countLines.push("<p class=\"project-note project-note--compact\">Warnings: " + escapeHtml(String(warnings.length)) + "</p>");
@@ -415,6 +434,23 @@
     if (hardBlockers.length > 0) {
       countLines.push("<p class=\"project-note project-note--compact\">Blockers: " + escapeHtml(String(hardBlockers.length)) + "</p>");
     }
+    const actions = !createAllowed
+      ? ""
+      : (confirming
+        ? [
+          "  <p class=\"project-note\">Create a Recovery Point for this website?</p>",
+          "  <div class=\"recovery-card__actions\">",
+          "    <button type=\"button\" class=\"button\" data-recovery-action=\"confirm-create\">Create Recovery Point</button>",
+          "    <button type=\"button\" class=\"site-link\" data-recovery-action=\"cancel-create\">Cancel</button>",
+          "  </div>"
+        ].join("\n")
+        : (creating
+          ? "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"button\" disabled>Creating Recovery Point...</button></div>"
+          : [
+            succeeded ? "  <p class=\"project-note\">Recovery Point created and verified.</p>" : "",
+            failed ? "  <p class=\"project-note\">Recovery Point could not be created. Review the issue and try again.</p>" : "",
+            "  <div class=\"recovery-card__actions\"><button type=\"button\" class=\"button\" data-recovery-action=\"start-create\">Create Recovery Point</button></div>"
+          ].filter(Boolean).join("\n")));
     return [
       "<article class=\"project-card recovery-card\" data-recovery-state=\"" + escapeHtml(blocked ? "blocked" : (unavailable ? "unavailable" : (warning ? "warning" : "healthy"))) + "\">",
       "  <div class=\"project-card__header\">",
@@ -430,6 +466,7 @@
       "  </dl>",
       "  <p class=\"project-note\">" + escapeHtml(note) + "</p>",
       countLines.join("\n"),
+      actions,
       "</article>"
     ].filter(Boolean).join("\n");
   }
@@ -467,6 +504,12 @@
       requestId: recoveryStatusRequestId,
       loading: Boolean(slug),
       payload: null,
+      error: null
+    };
+    recoveryCreateView = {
+      slug: recoveryStatusView.slug,
+      requestId: recoveryStatusView.requestId,
+      phase: "idle",
       error: null
     };
     renderRecoveryStatusView();
@@ -2396,6 +2439,96 @@
     renderRecoveryStatusView();
   }
 
+  function startRecoveryPointCreate() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = recoveryStatusView.requestId;
+    if (!slug || !isActiveRecoverySelection(slug, requestId) || !recoveryStatusView.payload) {
+      return;
+    }
+    recoveryCreateView = {
+      slug,
+      requestId,
+      phase: "confirming",
+      error: null
+    };
+    renderRecoveryStatusView();
+  }
+
+  function cancelRecoveryPointCreate() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = recoveryStatusView.requestId;
+    if (!isActiveRecoveryCreate(slug, requestId)) {
+      return;
+    }
+    recoveryCreateView.phase = "idle";
+    recoveryCreateView.error = null;
+    renderRecoveryStatusView();
+  }
+
+  async function confirmRecoveryPointCreate() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = recoveryStatusView.requestId;
+    if (!isActiveRecoveryCreate(slug, requestId) || recoveryCreateView.phase !== "confirming") {
+      return;
+    }
+    recoveryCreateView.phase = "creating";
+    recoveryCreateView.error = null;
+    renderRecoveryStatusView();
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/recovery-points", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": createRequestIdempotencyKey("recovery-point-create")
+        },
+        body: JSON.stringify({
+          confirm_create_recovery_point: true
+        })
+      });
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (error) {
+        payload = {};
+      }
+      if (!isActiveRecoveryCreate(slug, requestId)) {
+        return;
+      }
+      if (
+        !response.ok ||
+        !payload.recovery_point ||
+        payload.recovery_point.status !== "verified" ||
+        payload.recovery_point.restorable !== true
+      ) {
+        throw new Error("Recovery Point could not be created.");
+      }
+      recoveryCreateView.phase = "succeeded";
+      renderRecoveryStatusView();
+      await loadRecoveryStatus(slug, { requestId });
+    } catch (error) {
+      if (!isActiveRecoveryCreate(slug, requestId)) {
+        return;
+      }
+      recoveryCreateView.phase = "failed";
+      recoveryCreateView.error = "Recovery Point could not be created.";
+      renderRecoveryStatusView();
+    }
+  }
+
+  recoveryStatus.addEventListener("click", (event) => {
+    const target = event && event.target && typeof event.target.closest === "function"
+      ? event.target.closest("[data-recovery-action]")
+      : null;
+    const action = target && target.getAttribute("data-recovery-action");
+    if (action === "start-create") {
+      startRecoveryPointCreate();
+    } else if (action === "confirm-create") {
+      confirmRecoveryPointCreate().catch(() => {});
+    } else if (action === "cancel-create") {
+      cancelRecoveryPointCreate();
+    }
+  });
+
   async function loadProjectOperations(slug, options) {
     const activeRequest = getActiveGenerationRequest(slug, options);
     const selectedSlug = activeRequest.slug;
@@ -3068,7 +3201,10 @@
   if (config.testMode && window.FactoryLauncherTestHooks) {
     window.FactoryLauncherTestHooks.recoveryStatus = {
       buildRecoveryStatusCardHtml,
+      cancelRecoveryPointCreate,
+      confirmRecoveryPointCreate,
       getHtml: () => recoveryStatus.innerHTML,
+      getCreateState: () => Object.assign({}, recoveryCreateView),
       loadRecoveryStatus,
       renderState(nextState) {
         recoveryStatusView = Object.assign({
@@ -3078,9 +3214,16 @@
           payload: null,
           error: null
         }, nextState || {});
+        recoveryCreateView = {
+          slug: recoveryStatusView.slug,
+          requestId: recoveryStatusView.requestId,
+          phase: nextState && nextState.createPhase || "idle",
+          error: null
+        };
         renderRecoveryStatusView();
       },
       resetRecoveryStatusView,
+      startRecoveryPointCreate,
       setSelectedProject(slug) {
         generateProjectSlug.value = String(slug || "");
       }
