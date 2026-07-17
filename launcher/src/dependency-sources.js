@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { listDependencyDefinitions, resolveDependencyDefinition } = require("./dependency-catalog");
 
-const DEFAULT_VENDOR_DIR = "C:\\sf-vendor";
+const DEFAULT_VENDOR_DIR = path.join(path.parse(process.cwd()).root || path.sep, "sf-vendor");
 
 function getApprovedDependencySources() {
   return Object.fromEntries(listDependencyDefinitions().map((dependency) => [

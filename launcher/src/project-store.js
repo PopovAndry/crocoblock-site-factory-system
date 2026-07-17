@@ -5,13 +5,17 @@ const path = require("path");
 const crypto = require("crypto");
 const { createDockerCompose, createEnvFile } = require("./templates");
 
-const DEFAULT_PROJECTS_ROOT = "C:\\sf-factory-projects";
+function getSystemRoot() {
+  return path.parse(process.cwd()).root || path.sep;
+}
+
+const DEFAULT_PROJECTS_ROOT = path.join(getSystemRoot(), "sf-factory-projects");
 const BLOCKED_ROOTS = [
-  "C:\\crocoblock-site-factory-system",
-  "C:\\sf-playable-beta",
-  "C:\\sf-slate-visual-smoke",
-  "C:\\sf-controlled-generate-smoke"
-];
+  "crocoblock-site-factory-system",
+  "sf-playable-beta",
+  "sf-slate-visual-smoke",
+  "sf-controlled-generate-smoke"
+].map((directoryName) => path.join(getSystemRoot(), directoryName));
 const PROJECT_SUBDIRECTORIES = ["runs", "proofs", "snapshots", "logs", "exports", "secrets", "wordpress", "mysql"];
 
 function resolveProjectsRoot(projectsRoot) {

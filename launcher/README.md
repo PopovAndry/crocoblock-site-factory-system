@@ -23,6 +23,18 @@ node launcher/src/cli.js dependencies --slug kyiv-realty
 Optional flags:
 - `--projects-root "C:\path\to\projects"`
 
+## Windows development package
+
+Build the early installable Launcher skeleton with the maintained local Node.js executable already available on the build machine:
+
+```powershell
+node scripts/build-windows-launcher-package.js
+```
+
+The generated archive contains `installer\install.cmd`, a Start menu shortcut helper, and an uninstall script. The installer stores application data and project configuration outside the installation folder. Uninstall removes only the installed application files and shortcut; it preserves application data and Factory projects.
+
+This development package does not install or configure Docker, WordPress, databases, plugins, or dependencies. On launch it presents safe status labels for Docker availability, project storage, application-data storage, and the Launcher port. The package runs the copied executable and packaged application files, not the source checkout.
+
 What this does today:
 - writes `factory-project.json`
 - writes `.env`

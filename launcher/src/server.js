@@ -181,6 +181,22 @@ async function readJsonPayload(request, options) {
 
 function renderHomePage(config) {
   const cspNonce = config.cspNonce || "";
+  const packagedRuntime = config.packagedRuntime || null;
+  const projectsRootLabel = packagedRuntime ? "Factory-managed project location" : escapeHtml(config.projectsRoot);
+  const runtimeDiagnosticsMarkup = packagedRuntime && Array.isArray(packagedRuntime.diagnostics)
+    ? [
+      "    <section class=\"panel single-panel runtime-diagnostics\">",
+      "      <div class=\"panel-header\">",
+      "        <h2>Factory runtime</h2>",
+      "        <p>" + escapeHtml(packagedRuntime.summary || "Runtime checks completed.") + "</p>",
+      "      </div>",
+      "      <dl class=\"runtime-diagnostics-list\">",
+      packagedRuntime.diagnostics.map((diagnostic) => {
+        return "        <div><dt>" + escapeHtml(diagnostic.label) + "</dt><dd>" + escapeHtml(diagnostic.message) + "</dd></div>";
+      }).join("\n"),
+      "      </dl>",
+      "    </section>"
+    ].join("\n") : "";
   return [
     "<!doctype html>",
     "<html lang=\"en\">",
@@ -230,7 +246,7 @@ function renderHomePage(config) {
     "            <span>WordPress port</span>",
     "            <input name=\"port\" type=\"number\" min=\"1024\" max=\"65535\" value=\"8120\" required>",
     "          </label>",
-    "          <p class=\"project-note\">Vertical: Real Estate. Projects root: " + escapeHtml(config.projectsRoot) + "</p>",
+    "          <p class=\"project-note\">Vertical: Real Estate. Projects root: " + projectsRootLabel + "</p>",
     "          <button type=\"submit\" class=\"button\">Create project scaffold</button>",
     "        </form>",
     "        <div id=\"create-result\" class=\"result-box\" hidden></div>",
@@ -376,9 +392,11 @@ function renderHomePage(config) {
     "        <div id=\"proof-pack-result\" class=\"result-box\" hidden></div>",
     "      </section>",
     "    </section>",
+    runtimeDiagnosticsMarkup,
     "  </main>",
     "  <script nonce=\"" + escapeHtml(cspNonce) + "\">window.FactoryLauncherConfig = " + JSON.stringify({
-      projectsRoot: config.projectsRoot,
+      projectsRoot: packagedRuntime ? null : config.projectsRoot,
+      packagedRuntime: Boolean(packagedRuntime),
       sessionPath: "/api/security/session"
     }) + ";</script>",
     "  <script src=\"/assets/project-summary-counts.js\"></script>",
@@ -1067,7 +1085,11 @@ function createLauncherServer(options) {
 
       if (request.method === "GET" && requestUrl.pathname === "/") {
         const cspNonce = crypto.randomBytes(16).toString("base64");
-        sendText(response, 200, renderHomePage({ projectsRoot, cspNonce }), "text/html; charset=utf-8", {
+        sendText(response, 200, renderHomePage({
+          projectsRoot,
+          cspNonce,
+          packagedRuntime: options.packagedRuntime
+        }), "text/html; charset=utf-8", {
           "Content-Security-Policy": [
             "default-src 'self'",
             "script-src 'self' 'nonce-" + cspNonce + "'",
@@ -1106,7 +1128,7 @@ function createLauncherServer(options) {
           mode: "alpha_scaffold_and_provisioning",
           host,
           port,
-          projects_root: projectsRoot
+          projects_root: options.packagedRuntime ? undefined : projectsRoot
         });
         return;
       }
@@ -1119,7 +1141,7 @@ function createLauncherServer(options) {
 
       if (request.method === "GET" && requestUrl.pathname === "/api/projects") {
         sendJson(response, 200, {
-          projects_root: projectsRoot,
+          projects_root: options.packagedRuntime ? undefined : projectsRoot,
           projects: listProjects(projectsRoot)
         });
         return;
@@ -2431,23 +2453,26 @@ function createLauncherServer(options) {
 
   return {
     async listen() {
-      const restoreReconciliation = await reconcileInterruptedStructuralRestores({
-        projectsRoot,
-        serviceController: options.restoreReconciliationServiceController
-      });
+      const restoreReconciliation = options.skipRestoreReconciliation
+        ? { skipped: true, reason: "packaged_runtime_read_only_start" }
+        : await reconcileInterruptedStructuralRestores({
+          projectsRoot,
+          serviceController: options.restoreReconciliationServiceController
+        });
       return new Promise((resolve, reject) => {
         server.once("error", reject);
         server.listen(port, host, () => {
+          const address = server.address();
           resolve({
             host,
-            port,
+            port: address && typeof address === "object" ? address.port : port,
             projectsRoot,
             restoreReconciliation
           });
         });
       });
     },
-    close() {
+    close(closeOptions) {
       return new Promise((resolve, reject) => {
         server.close((error) => {
           if (error) {
@@ -2456,6 +2481,9 @@ function createLauncherServer(options) {
           }
           resolve();
         });
+        if (closeOptions && closeOptions.closeConnections === true && typeof server.closeAllConnections === "function") {
+          server.closeAllConnections();
+        }
       });
     }
   };
