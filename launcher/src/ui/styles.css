@@ -222,6 +222,10 @@ body {
   box-shadow: 0 22px 40px rgba(31, 111, 95, 0.12);
 }
 
+.panel-header--nested {
+  margin-top: 18px;
+}
+
 .project-card__header {
   display: flex;
   justify-content: space-between;

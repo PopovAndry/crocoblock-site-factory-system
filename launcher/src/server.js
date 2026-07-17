@@ -65,6 +65,9 @@ const {
 const {
   reconcileInterruptedStructuralRestores
 } = require("./structural-restore-reconciliation");
+const {
+  getRecoveryStatus
+} = require("./recovery-status-read-model");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -308,6 +311,11 @@ function renderHomePage(config) {
     "            <span>I understand that Generate will modify this WordPress project.</span>",
     "          </label>",
     "        </form>",
+    "        <div class=\"panel-header panel-header--nested\">",
+    "          <h2>Recovery</h2>",
+    "          <p>Current read-only Recovery state for the selected project.</p>",
+    "        </div>",
+    "        <div id=\"recovery-status\" class=\"project-list\"></div>",
     "        <div id=\"generation-status\" class=\"project-list\"></div>",
     "        <div id=\"generate-preview-result\" class=\"result-box\" hidden></div>",
     "        <div id=\"generate-result\" class=\"result-box\" hidden></div>",
@@ -428,6 +436,44 @@ function assertProjectExistsForRoute(slug, projectsRoot) {
       404
     );
   }
+}
+
+function sendRecoveryStatusError(response, error) {
+  const code = error && error.code;
+  if (code === "project_not_found") {
+    sendJson(response, 404, {
+      ok: false,
+      status: "error",
+      code: "project_not_found",
+      error: "Project not found.",
+      message: "Project not found."
+    });
+    return;
+  }
+  if (code === "invalid_project_slug") {
+    sendJson(response, 400, {
+      ok: false,
+      status: "error",
+      code: "invalid_project_slug",
+      error: "Project slug is invalid.",
+      message: "Project slug is invalid."
+    });
+    return;
+  }
+  const statusCode = code === "recovery_metadata_unreadable" || code === "unsupported_recovery_metadata"
+    ? 503
+    : 500;
+  const safeCode = statusCode === 503 ? "recovery_status_unavailable" : "recovery_status_failed";
+  const safeMessage = statusCode === 503
+    ? "Recovery status is temporarily unavailable."
+    : "Recovery status could not be loaded safely.";
+  sendJson(response, statusCode, {
+    ok: false,
+    status: "error",
+    code: safeCode,
+    error: safeMessage,
+    message: safeMessage
+  });
 }
 
 function validateGenerationPrompt(promptInput) {
@@ -1518,6 +1564,20 @@ function createLauncherServer(options) {
           project: summarizeProjectForSite(result.project),
           site: result.site
         });
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/recovery\/status$/.test(requestUrl.pathname)) {
+        try {
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          const result = getRecoveryStatus({
+            projectsRoot,
+            projectSlug: slug
+          });
+          sendJson(response, 200, result);
+        } catch (error) {
+          sendRecoveryStatusError(response, error);
+        }
         return;
       }
 

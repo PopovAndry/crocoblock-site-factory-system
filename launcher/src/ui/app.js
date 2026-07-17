@@ -20,6 +20,7 @@
   const generateSubmitButton = document.getElementById("generate-submit-button");
   const generateConfirmCheckbox = document.getElementById("generate-confirm-checkbox");
   const generationStatus = document.getElementById("generation-status");
+  const recoveryStatus = document.getElementById("recovery-status");
   const generatePreviewResult = document.getElementById("generate-preview-result");
   const generateResult = document.getElementById("generate-result");
   const projectOperations = document.getElementById("project-operations");
@@ -240,6 +241,15 @@
     sitePayload: null,
     error: null
   };
+  let recoveryStatusRequestId = 0;
+  let recoveryStatusAbortController = null;
+  let recoveryStatusView = {
+    slug: "",
+    requestId: 0,
+    loading: false,
+    payload: null,
+    error: null
+  };
   let stateChangeRequestId = 0;
   let stateChangeAbortController = null;
   let csrfSessionToken = "";
@@ -271,6 +281,196 @@
 
   function setGenerationStatusEmpty(message) {
     generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
+  function setRecoveryStatusEmpty(message) {
+    recoveryStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(message) + "</p>";
+  }
+
+  function isActiveRecoverySelection(slug, requestId) {
+    return String(recoveryStatusView.slug || "") === String(slug || "")
+      && Number(recoveryStatusView.requestId) === Number(requestId)
+      && String(generateProjectSlug.value || "").trim() === String(slug || "");
+  }
+
+  function humanizeRecoveryAvailability(status) {
+    switch (String(status || "")) {
+      case "available":
+        return "Available";
+      case "limited":
+        return "Available with warnings";
+      case "unavailable":
+        return "Not available";
+      case "unknown":
+        return "Needs review";
+      default:
+        return "Needs review";
+    }
+  }
+
+  function humanizeRecoveryStorage(status) {
+    switch (String(status || "")) {
+      case "healthy":
+        return "Healthy";
+      case "approaching_limit":
+        return "Approaching limit";
+      case "cleanup_recommended":
+        return "Needs review";
+      case "capture_blocked":
+        return "New Recovery Points blocked";
+      case "restore_only_emergency":
+        return "Restore only";
+      case "unknown":
+        return "Needs review";
+      default:
+        return "Needs review";
+    }
+  }
+
+  function humanizeRestoreReadiness(status) {
+    switch (String(status || "")) {
+      case "idle":
+      case "completed":
+        return "Website restore is ready.";
+      case "plan_ready":
+        return "A restore review is ready.";
+      case "awaiting_confirmation":
+        return "A restore is waiting for confirmation.";
+      case "running":
+        return "A restore is currently running.";
+      case "interrupted":
+      case "reconciliation_required":
+        return "An unfinished restore needs review.";
+      case "failed":
+        return "The latest restore needs review.";
+      case "conflict":
+      case "unknown":
+        return "Restore readiness needs review.";
+      default:
+        return "Restore readiness needs review.";
+    }
+  }
+
+  function humanizeRecoveryRecommendation(action) {
+    switch (String(action || "")) {
+      case "none":
+        return "No action needed.";
+      case "create_recovery_point":
+        return "Create a Recovery Point before making major changes.";
+      case "review_storage":
+        return "Review Recovery storage.";
+      case "resume_reconciliation":
+        return "Resume restore recovery review.";
+      case "review_restore":
+        return "Review the latest restore.";
+      case "contact_support":
+        return "Contact support.";
+      default:
+        return "Review Recovery status.";
+    }
+  }
+
+  function formatRecoveryPointTime(value) {
+    const parsed = Date.parse(value || "");
+    if (!Number.isFinite(parsed)) {
+      return "Not available";
+    }
+    return new Date(parsed).toLocaleString([], {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  }
+
+  function buildRecoveryStatusCardHtml(payload) {
+    const latest = payload && payload.latest_recovery_point && payload.latest_recovery_point.available
+      ? payload.latest_recovery_point
+      : null;
+    const warnings = Array.isArray(payload && payload.warnings) ? payload.warnings : [];
+    const blockers = Array.isArray(payload && payload.blockers) ? payload.blockers : [];
+    const hardBlockers = blockers.filter((entry) => entry && entry.code !== "recovery_point_not_available");
+    const hasUsablePoint = Boolean(latest && latest.verified === true && latest.restorable === true);
+    const blocked = hardBlockers.length > 0 || String(payload && payload.availability || "") === "unknown";
+    const unavailable = !hasUsablePoint && !blocked;
+    const warning = !blocked && !unavailable && (warnings.length > 0 || String(payload && payload.availability || "") === "limited");
+    const pill = blocked
+      ? "Attention"
+      : (unavailable ? "Not available" : (warning ? "Review" : "Healthy"));
+    const headline = blocked
+      ? "Attention required."
+      : (unavailable
+        ? "No verified Recovery Point is available yet."
+        : (warning
+          ? "A verified Recovery Point is available, with items to review."
+          : "A verified Recovery Point is available."));
+    const note = unavailable
+      ? "Create one before making major changes."
+      : humanizeRecoveryRecommendation(payload && payload.recommended_action);
+    const countLines = [];
+    if (warnings.length > 0) {
+      countLines.push("<p class=\"project-note project-note--compact\">Warnings: " + escapeHtml(String(warnings.length)) + "</p>");
+    }
+    if (hardBlockers.length > 0) {
+      countLines.push("<p class=\"project-note project-note--compact\">Blockers: " + escapeHtml(String(hardBlockers.length)) + "</p>");
+    }
+    return [
+      "<article class=\"project-card recovery-card\" data-recovery-state=\"" + escapeHtml(blocked ? "blocked" : (unavailable ? "unavailable" : (warning ? "warning" : "healthy"))) + "\">",
+      "  <div class=\"project-card__header\">",
+      "    <h3>Recovery</h3>",
+      "    <span class=\"status-pill\">" + escapeHtml(pill) + "</span>",
+      "  </div>",
+      "  <p class=\"project-note project-note--compact\">" + escapeHtml(headline) + "</p>",
+      "  <dl>",
+      "    <div><dt>Availability</dt><dd>" + escapeHtml(humanizeRecoveryAvailability(payload && payload.availability)) + "</dd></div>",
+      "    <div><dt>Recovery Point</dt><dd>" + escapeHtml(latest ? formatRecoveryPointTime(latest.created_at) : "Not available") + "</dd></div>",
+      "    <div><dt>Restore</dt><dd>" + escapeHtml(humanizeRestoreReadiness(payload && payload.restore_status)) + "</dd></div>",
+      "    <div><dt>Storage</dt><dd>" + escapeHtml(humanizeRecoveryStorage(payload && payload.storage_status)) + "</dd></div>",
+      "  </dl>",
+      "  <p class=\"project-note\">" + escapeHtml(note) + "</p>",
+      countLines.join("\n"),
+      "</article>"
+    ].filter(Boolean).join("\n");
+  }
+
+  function renderRecoveryStatusView() {
+    recoveryStatus.dataset.projectSlug = recoveryStatusView.slug || "";
+    recoveryStatus.dataset.requestId = String(recoveryStatusView.requestId || 0);
+    if (!recoveryStatusView.slug) {
+      setRecoveryStatusEmpty("Select a project to view Recovery status.");
+      return;
+    }
+    if (recoveryStatusView.loading && !recoveryStatusView.payload) {
+      setRecoveryStatusEmpty("Loading Recovery status...");
+      return;
+    }
+    if (recoveryStatusView.error && !recoveryStatusView.payload) {
+      setRecoveryStatusEmpty("Recovery status is temporarily unavailable.");
+      return;
+    }
+    if (recoveryStatusView.payload) {
+      recoveryStatus.innerHTML = buildRecoveryStatusCardHtml(recoveryStatusView.payload);
+      return;
+    }
+    setRecoveryStatusEmpty("Recovery status has not been loaded yet.");
+  }
+
+  function resetRecoveryStatusView(slug) {
+    recoveryStatusRequestId += 1;
+    if (recoveryStatusAbortController) {
+      recoveryStatusAbortController.abort();
+      recoveryStatusAbortController = null;
+    }
+    recoveryStatusView = {
+      slug: String(slug || "").trim(),
+      requestId: recoveryStatusRequestId,
+      loading: Boolean(slug),
+      payload: null,
+      error: null
+    };
+    renderRecoveryStatusView();
+    return recoveryStatusView.requestId;
   }
 
   function isActiveStateSelection(slug, requestId) {
@@ -483,6 +683,7 @@
       generateProjectSlug.disabled = true;
       latestRun.innerHTML = "<p class=\"empty-state\">No planning runs yet.</p>";
       setSetupEmpty("Create a project, then provision WordPress and install dependencies here.");
+      setRecoveryStatusEmpty("Select a project to view Recovery status.");
       setGenerationStatusEmpty("Finish project setup, then preview a generate plan here.");
       setProjectOperationsEmpty("Select a project to view operation history.");
       setSiteStatusEmpty("No generated site result yet.");
@@ -2146,6 +2347,55 @@
     renderGenerationSurface();
   }
 
+  async function loadRecoveryStatus(slug, options) {
+    const selectedSlug = String(slug || "").trim();
+    if (!selectedSlug) {
+      recoveryStatusView.payload = null;
+      recoveryStatusView.error = null;
+      recoveryStatusView.loading = false;
+      renderRecoveryStatusView();
+      return;
+    }
+    const requestId = options && options.requestId ? Number(options.requestId) : recoveryStatusView.requestId;
+    if (!isActiveRecoverySelection(selectedSlug, requestId)) {
+      return;
+    }
+    if (recoveryStatusAbortController) {
+      recoveryStatusAbortController.abort();
+    }
+    recoveryStatusAbortController = new AbortController();
+    let response;
+    let payload;
+    try {
+      response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/recovery/status", {
+        signal: recoveryStatusAbortController.signal
+      });
+      payload = await response.json();
+    } catch (error) {
+      if (!isActiveRecoverySelection(selectedSlug, requestId) || error.name === "AbortError") {
+        return;
+      }
+      recoveryStatusView.loading = false;
+      recoveryStatusView.error = "Recovery status is temporarily unavailable.";
+      recoveryStatusView.payload = null;
+      renderRecoveryStatusView();
+      throw new Error(recoveryStatusView.error);
+    }
+    if (!isActiveRecoverySelection(selectedSlug, requestId)) {
+      return;
+    }
+    recoveryStatusView.loading = false;
+    if (!response.ok) {
+      recoveryStatusView.error = "Recovery status is temporarily unavailable.";
+      recoveryStatusView.payload = null;
+      renderRecoveryStatusView();
+      throw new Error(recoveryStatusView.error);
+    }
+    recoveryStatusView.payload = payload;
+    recoveryStatusView.error = null;
+    renderRecoveryStatusView();
+  }
+
   async function loadProjectOperations(slug, options) {
     const activeRequest = getActiveGenerationRequest(slug, options);
     const selectedSlug = activeRequest.slug;
@@ -2341,7 +2591,12 @@
     const setupSlugSnapshot = String(setupProjectSlug.value || "").trim();
     const generateSlugSnapshot = String(generateProjectSlug.value || "").trim();
     const setupRequestId = resetSetupView(setupSlugSnapshot);
+    const recoveryRequestId = resetRecoveryStatusView(generateSlugSnapshot);
     await loadSetupStatus(setupSlugSnapshot, { requestId: setupRequestId });
+    if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
+      return;
+    }
+    await loadRecoveryStatus(generateSlugSnapshot, { requestId: recoveryRequestId });
     if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
       return;
     }
@@ -2388,9 +2643,11 @@
     planProjectSlug.value = setupProjectSlug.value;
     generateProjectSlug.value = setupProjectSlug.value;
     const setupRequestId = resetSetupView(setupProjectSlug.value);
+    const recoveryRequestId = resetRecoveryStatusView(setupProjectSlug.value);
     const stateRequestId = resetStateChangeView(setupProjectSlug.value);
     Promise.all([
       loadSetupStatus(setupProjectSlug.value, { requestId: setupRequestId }),
+      loadRecoveryStatus(setupProjectSlug.value, { requestId: recoveryRequestId }),
       loadGenerationViewForSelection(setupProjectSlug.value),
       loadManagedState(setupProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(setupProjectSlug.value)
@@ -2405,9 +2662,11 @@
     setupProjectSlug.value = planProjectSlug.value;
     generateProjectSlug.value = planProjectSlug.value;
     const setupRequestId = resetSetupView(planProjectSlug.value);
+    const recoveryRequestId = resetRecoveryStatusView(planProjectSlug.value);
     const stateRequestId = resetStateChangeView(planProjectSlug.value);
     Promise.all([
       loadSetupStatus(planProjectSlug.value, { requestId: setupRequestId }),
+      loadRecoveryStatus(planProjectSlug.value, { requestId: recoveryRequestId }),
       loadGenerationViewForSelection(planProjectSlug.value),
       loadManagedState(planProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(planProjectSlug.value)
@@ -2421,9 +2680,11 @@
     setupProjectSlug.value = generateProjectSlug.value;
     planProjectSlug.value = generateProjectSlug.value;
     const setupRequestId = resetSetupView(generateProjectSlug.value);
+    const recoveryRequestId = resetRecoveryStatusView(generateProjectSlug.value);
     const stateRequestId = resetStateChangeView(generateProjectSlug.value);
     Promise.all([
       loadSetupStatus(generateProjectSlug.value, { requestId: setupRequestId }),
+      loadRecoveryStatus(generateProjectSlug.value, { requestId: recoveryRequestId }),
       loadGenerationViewForSelection(generateProjectSlug.value),
       loadManagedState(generateProjectSlug.value, { requestId: stateRequestId }),
       loadProofPack(generateProjectSlug.value)
@@ -2482,7 +2743,9 @@
         planProjectSlug.value = result.project.slug;
         generateProjectSlug.value = result.project.slug;
         const setupRequestId = resetSetupView(result.project.slug);
+        const recoveryRequestId = resetRecoveryStatusView(result.project.slug);
         await loadSetupStatus(result.project.slug, { requestId: setupRequestId });
+        await loadRecoveryStatus(result.project.slug, { requestId: recoveryRequestId });
         await loadGenerationViewForSelection(result.project.slug);
       }
     } finally {
@@ -2802,8 +3065,32 @@
     });
   }
 
-  ensureLauncherMutationSession(false).catch(() => {});
-  loadProjects().catch((error) => {
-    showResult(createResult, { error: error.message }, true);
-  });
+  if (config.testMode && window.FactoryLauncherTestHooks) {
+    window.FactoryLauncherTestHooks.recoveryStatus = {
+      buildRecoveryStatusCardHtml,
+      getHtml: () => recoveryStatus.innerHTML,
+      loadRecoveryStatus,
+      renderState(nextState) {
+        recoveryStatusView = Object.assign({
+          slug: "",
+          requestId: 0,
+          loading: false,
+          payload: null,
+          error: null
+        }, nextState || {});
+        renderRecoveryStatusView();
+      },
+      resetRecoveryStatusView,
+      setSelectedProject(slug) {
+        generateProjectSlug.value = String(slug || "");
+      }
+    };
+  }
+
+  if (!config.skipInitialLoad) {
+    ensureLauncherMutationSession(false).catch(() => {});
+    loadProjects().catch((error) => {
+      showResult(createResult, { error: error.message }, true);
+    });
+  }
 })();
