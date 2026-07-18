@@ -1,0 +1,93 @@
+{
+  "contract_id": "real-estate-contract@1",
+  "contract_version": 1,
+  "vertical_id": "real_estate",
+  "name": "Real Estate",
+  "compatibility": {
+    "blueprint_source": "wordpress-plugin/presets/real-estate.json",
+    "minimum_agent_manifest_version": 1
+  },
+  "boundaries": {
+    "vertical_contract": "Required product structure and acceptance invariants.",
+    "blueprint": "Initial provisioning input only.",
+    "design_profile": "Presentation choices only.",
+    "desired_state": "A requested project configuration.",
+    "proof_contract": "Read-only compliance evaluation."
+  },
+  "dependencies": [
+    { "id": "wordpress", "required": true, "kind": "runtime" },
+    { "id": "kava", "required": true, "kind": "theme" },
+    { "id": "jet-engine", "required": true, "kind": "plugin" },
+    { "id": "jet-smart-filters", "required": true, "kind": "plugin" },
+    { "id": "jet-form-builder", "required": false, "kind": "plugin" }
+  ],
+  "data_model": {
+    "entities": [
+      { "id": "property", "post_type": "property", "required": true, "ownership": "factory_managed" }
+    ],
+    "taxonomies": [
+      { "id": "property_purpose", "slug": "purpose", "required": true, "ownership": "factory_managed" },
+      { "id": "property_type", "slug": "property_type", "required": true, "ownership": "factory_managed" },
+      { "id": "property_district", "slug": "district", "required": true, "ownership": "factory_managed" }
+    ],
+    "fields": [
+      { "id": "property_price", "key": "price", "type": "number", "multiple": false, "required": true, "ownership": "factory_managed" },
+      { "id": "property_address", "key": "address", "type": "text", "multiple": false, "required": true, "ownership": "factory_managed" },
+      { "id": "property_bedrooms", "key": "bedrooms", "type": "number", "multiple": false, "required": true, "ownership": "factory_managed" },
+      { "id": "property_bathrooms", "key": "bathrooms", "type": "number", "multiple": false, "required": true, "ownership": "factory_managed" },
+      { "id": "property_size", "key": "property_size", "type": "number", "multiple": false, "required": true, "ownership": "factory_managed" },
+      { "id": "property_district_value", "key": "district", "type": "text", "multiple": false, "required": true, "ownership": "factory_managed" }
+    ]
+  },
+  "surfaces": [
+    { "id": "homepage", "route": "home", "required": true, "regions": ["site_header", "hero", "property_listing", "contact_section", "site_footer"], "bindings": ["property-card"], "navigation": ["property_archive", "contact"] },
+    { "id": "property_archive", "route": "properties", "required": true, "regions": ["site_header", "property_filters", "property_listing", "site_footer"], "bindings": ["property-card"], "navigation": ["homepage", "property_single"] },
+    { "id": "property_single", "route": "single_property", "required": true, "regions": ["site_header", "property_details", "contact_section", "site_footer"], "bindings": ["property"], "navigation": ["property_archive", "contact"] },
+    { "id": "contact", "route": "contact", "required": true, "regions": ["site_header", "contact_section", "site_footer"], "bindings": [], "navigation": ["homepage", "property_archive"] }
+  ],
+  "component_slots": [
+    { "id": "site_header", "surfaces": ["homepage", "property_archive", "property_single", "contact"], "required": true, "inputs": ["navigation"], "responsibility": "Primary navigation", "compatibility": ["wordpress"] },
+    { "id": "hero", "surfaces": ["homepage"], "required": true, "inputs": ["agency_name", "hero_title"], "responsibility": "Homepage entry", "compatibility": ["wordpress"] },
+    { "id": "property_listing", "surfaces": ["homepage", "property_archive"], "required": true, "inputs": ["property"], "responsibility": "Property record rendering", "compatibility": ["jet-engine"] },
+    { "id": "property_card", "surfaces": ["homepage", "property_archive"], "required": true, "inputs": ["price", "address", "bedrooms", "bathrooms", "property_size", "district"], "responsibility": "Property summary", "compatibility": ["jet-engine"] },
+    { "id": "property_filters", "surfaces": ["property_archive"], "required": true, "inputs": ["purpose", "property_type", "district"], "responsibility": "Catalog narrowing", "compatibility": ["jet-smart-filters"] },
+    { "id": "property_details", "surfaces": ["property_single"], "required": true, "inputs": ["property"], "responsibility": "Property detail rendering", "compatibility": ["jet-engine"] },
+    { "id": "contact_section", "surfaces": ["homepage", "property_single", "contact"], "required": true, "inputs": ["contact"], "responsibility": "Viewing/contact handoff", "compatibility": ["wordpress"] },
+    { "id": "site_footer", "surfaces": ["homepage", "property_archive", "property_single", "contact"], "required": true, "inputs": ["navigation"], "responsibility": "Secondary navigation", "compatibility": ["wordpress"] }
+  ],
+  "ownership": [
+    { "id": "property_structure", "class": "factory_managed" },
+    { "id": "agency_name", "class": "owner_editable" },
+    { "id": "hero_title", "class": "protected" },
+    { "id": "generated_urls", "class": "derived_runtime_only" }
+  ],
+  "proof": {
+    "checks": [
+      { "id": "runtime.wordpress", "severity": "error", "kind": "runtime_status", "expected": "provisioned", "summary": "WordPress runtime is available." },
+      { "id": "dependency.kava", "severity": "error", "kind": "validation_message", "expected": "Theme active: kava", "summary": "Required theme is active." },
+      { "id": "dependency.jet_engine", "severity": "error", "kind": "validation_message", "expected": "Plugin active: jet-engine", "summary": "JetEngine is active." },
+      { "id": "dependency.jet_smart_filters", "severity": "error", "kind": "validation_message", "expected": "Native JetSmartFilters content provider is JetEngine.", "summary": "Property filters are available." },
+      { "id": "dependency.jet_form_builder", "severity": "warning", "required": false, "kind": "validation_message", "expected": "Plugin active: jet-form-builder", "summary": "Optional form integration is present when configured." },
+      { "id": "model.property", "severity": "error", "kind": "validation_message", "expected": "CPT exists: property", "summary": "Property records are available." },
+      { "id": "model.purpose", "severity": "error", "kind": "validation_message", "expected": "Taxonomy exists: purpose", "summary": "Property purpose taxonomy is available." },
+      { "id": "model.property_type", "severity": "error", "kind": "validation_message", "expected": "Taxonomy exists: property_type", "summary": "Property type taxonomy is available." },
+      { "id": "model.district", "severity": "error", "kind": "validation_message", "expected": "Taxonomy exists: district", "summary": "District taxonomy is available." },
+      { "id": "model.price", "severity": "error", "kind": "validation_message", "expected": "JetEngine field exists: property.price", "summary": "Price field is available." },
+      { "id": "model.address", "severity": "error", "kind": "validation_message", "expected": "JetEngine field exists: property.address", "summary": "Address field is available." },
+      { "id": "model.bedrooms", "severity": "error", "kind": "validation_message", "expected": "JetEngine field exists: property.bedrooms", "summary": "Bedrooms field is available." },
+      { "id": "model.bathrooms", "severity": "error", "kind": "validation_message", "expected": "JetEngine field exists: property.bathrooms", "summary": "Bathrooms field is available." },
+      { "id": "model.size", "severity": "error", "kind": "validation_message", "expected": "JetEngine field exists: property.property_size", "summary": "Property size field is available." },
+      { "id": "model.district_field", "severity": "error", "kind": "validation_message", "expected": "JetEngine field exists: property.district", "summary": "District field is available." },
+      { "id": "surface.home", "severity": "error", "kind": "generated_url", "expected": "home", "summary": "Homepage resolves." },
+      { "id": "surface.archive", "severity": "error", "kind": "generated_url", "expected": "properties", "summary": "Property archive resolves." },
+      { "id": "surface.single", "severity": "error", "kind": "generated_url", "expected": "single_property", "summary": "Property single resolves." },
+      { "id": "surface.contact", "severity": "error", "kind": "generated_url", "expected": "contact", "summary": "Contact surface resolves." },
+      { "id": "surface.navigation", "severity": "error", "kind": "validation_message", "expected": "Navigation menu ready: Factory Main Menu", "summary": "Required navigation is available." },
+      { "id": "component.property_card", "severity": "error", "kind": "validation_message", "expected": "Listing up-to-date: Property Card", "summary": "Property card is available." },
+      { "id": "component.property_filters", "severity": "error", "kind": "validation_message", "expected": "Native JetEngine Listing Grid block present.", "summary": "Property filter/listing binding is available." },
+      { "id": "component.property_details", "severity": "error", "kind": "validation_message", "expected": "Single template registered for: property", "summary": "Property details are available." },
+      { "id": "records.properties", "severity": "error", "kind": "minimum_count", "expected": "properties", "minimum": 1, "summary": "Property records are available for rendering." },
+      { "id": "ownership.metadata", "severity": "error", "kind": "ownership", "expected": "present", "summary": "Ownership classifications are defined." }
+    ]
+  }
+}
