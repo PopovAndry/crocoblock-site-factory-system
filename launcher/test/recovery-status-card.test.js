@@ -49,6 +49,7 @@ class FakeElement {
 
 function createHarness(fetchImpl) {
   const elements = new Map();
+  const storage = new Map();
   function getElement(id) {
     if (!elements.has(id)) {
       elements.set(id, new FakeElement(id));
@@ -64,6 +65,7 @@ function createHarness(fetchImpl) {
   };
 
   const document = {
+    documentElement: { dataset: {} },
     getElementById: getElement,
     querySelectorAll: () => []
   };
@@ -77,6 +79,11 @@ function createHarness(fetchImpl) {
     location: {
       origin: "http://127.0.0.1:3847"
     },
+    localStorage: {
+      getItem: (key) => storage.has(key) ? storage.get(key) : null,
+      setItem: (key, value) => storage.set(key, String(value))
+    },
+    matchMedia: () => ({ matches: false }),
     crypto: {
       randomUUID: () => "00000000-0000-4000-8000-000000000000"
     },
@@ -106,8 +113,13 @@ function createHarness(fetchImpl) {
   });
   return {
     hooks: window.FactoryLauncherTestHooks.recoveryStatus,
+    presentationHooks: window.FactoryLauncherTestHooks.presentation,
     recoveryStatus: getElement("recovery-status"),
-    generateProjectSlug: getElement("generate-project-slug")
+    generateProjectSlug: getElement("generate-project-slug"),
+    root: document.documentElement,
+    storage,
+    themeToggle: getElement("theme-toggle"),
+    themeToggleLabel: getElement("theme-toggle-label")
   };
 }
 
@@ -142,6 +154,70 @@ function assertNoTechnicalRecoveryDetails(html) {
   assert.equal(/(?:manifest\.json|database\.sql|wordpress\.tar|proof)/i.test(html), false);
   assert.equal(/(?:password|Bearer|access_token|MYSQL_PASSWORD)/i.test(html), false);
 }
+
+test("Launcher presentation maps project states to customer-safe readiness and next actions", () => {
+  const { presentationHooks } = createHarness();
+  const ready = presentationHooks.getProjectPresentation({
+    slug: "internal-project-slug",
+    runtime: { status: "provisioned" },
+    dependency_state: { can_generate: true },
+    generation: { status: "not_generated" },
+    generated_site: { present: false }
+  });
+  assert.equal(ready.status, "Ready to continue");
+  assert.equal(ready.generate, "Ready to generate");
+  assert.equal(JSON.stringify(ready).includes("internal-project-slug"), false);
+
+  const running = presentationHooks.getProjectPresentation({
+    runtime: { status: "provisioned" },
+    dependency_state: { can_generate: true },
+    generation: { status: "running" },
+    generated_site: { present: false }
+  });
+  assert.equal(running.status, "Site in progress");
+
+  const generated = presentationHooks.getProjectPresentation({
+    runtime: { status: "provisioned" },
+    dependency_state: { can_generate: true },
+    generation: { status: "succeeded" },
+    generated_site: { present: true, urls: { home: "http://127.0.0.1:8120" } }
+  });
+  assert.equal(generated.status, "Site ready");
+  assert.equal(generated.edit, "Ready to edit");
+
+  const unavailable = presentationHooks.getProjectPresentation({
+    runtime: { status: "unavailable" },
+    dependency_state: { can_generate: false },
+    generation: {},
+    generated_site: {}
+  });
+  assert.equal(unavailable.status, "Project unavailable");
+});
+
+test("Launcher presentation sanitizes internal paths identifiers and credentials from errors", () => {
+  const { presentationHooks } = createHarness();
+  const fallback = "This action is temporarily unavailable.";
+  assert.equal(presentationHooks.sanitizePublicError("C:\\secret\\proof.json", fallback), fallback);
+  assert.equal(presentationHooks.sanitizePublicError("operation_id: op-2026-07-18-secret", fallback), fallback);
+  assert.equal(presentationHooks.sanitizePublicError("Bearer private-token", fallback), fallback);
+  assert.equal(presentationHooks.sanitizePublicError("Request timed out: http://127.0.0.1:8141", fallback), fallback);
+  assert.equal(presentationHooks.sanitizePublicError("The selected project is unavailable.", fallback), "The selected project is unavailable.");
+});
+
+test("Launcher theme toggle applies and persists light and dark modes", () => {
+  const { root, storage, themeToggle, themeToggleLabel } = createHarness();
+  assert.equal(root.dataset.theme, "light");
+  assert.equal(themeToggleLabel.textContent, "Dark mode");
+
+  themeToggle.listeners.click();
+  assert.equal(root.dataset.theme, "dark");
+  assert.equal(themeToggleLabel.textContent, "Light mode");
+  assert.equal(storage.get("crocoblock-site-factory-theme"), "dark");
+
+  themeToggle.listeners.click();
+  assert.equal(root.dataset.theme, "light");
+  assert.equal(storage.get("crocoblock-site-factory-theme"), "light");
+});
 
 test("Recovery card renders loading, no selected project, and request failure states", async () => {
   const { hooks, recoveryStatus } = createHarness();

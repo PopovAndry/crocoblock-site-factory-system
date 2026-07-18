@@ -44,6 +44,18 @@
   const aiModel = document.getElementById("launcher-ai-model");
   const aiKeyStatus = document.getElementById("launcher-ai-key-status");
   const aiLastEstimate = document.getElementById("launcher-ai-last-estimate");
+  const themeToggle = document.getElementById("theme-toggle");
+  const themeToggleLabel = document.getElementById("theme-toggle-label");
+  const selectedProjectName = document.getElementById("selected-project-name");
+  const selectedProjectStatus = document.getElementById("selected-project-status");
+  const selectedProjectNext = document.getElementById("selected-project-next");
+  const selectedProjectOpen = document.getElementById("selected-project-open");
+  const projectCount = document.getElementById("project-count");
+  const generateCapabilityStatus = document.getElementById("generate-capability-status");
+  const editCapabilityStatus = document.getElementById("edit-capability-status");
+  const recoveryCapabilityStatus = document.getElementById("recovery-capability-status");
+
+  const THEME_STORAGE_KEY = "crocoblock-site-factory-theme";
 
   function escapeHtml(value) {
     return String(value)
@@ -56,6 +68,54 @@
 
   function normalizeDisplayText(value) {
     return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  }
+
+  function sanitizePublicError(value, fallback) {
+    const safeFallback = normalizeDisplayText(fallback || "Something went wrong. Review the details and try again.");
+    const message = normalizeDisplayText(value);
+    if (!message || message.length > 180) {
+      return safeFallback;
+    }
+    if (
+      /[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|var|tmp|etc|opt|srv|mnt)\//i.test(message)
+      || /https?:\/\/[^\s/:]+:\d{2,5}(?:\/[\S]*)?/i.test(message)
+      || /(?:password|secret|authorization|bearer|access[_-]?token|api[_-]?key)/i.test(message)
+      || /\b(?:operation|plan|proof|snapshot|run)[_-]?(?:id)?\s*[:=]\s*[A-Za-z0-9._:-]{6,}/i.test(message)
+      || /\b[a-z][a-z0-9]*(?:_[a-z0-9]+){2,}\b/.test(message)
+    ) {
+      return safeFallback;
+    }
+    return message;
+  }
+
+  function applyTheme(theme) {
+    const normalizedTheme = theme === "dark" ? "dark" : "light";
+    if (document.documentElement && document.documentElement.dataset) {
+      document.documentElement.dataset.theme = normalizedTheme;
+    }
+    if (themeToggle) {
+      themeToggle.setAttribute("aria-pressed", String(normalizedTheme === "dark"));
+      themeToggle.setAttribute("aria-label", normalizedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+    }
+    if (themeToggleLabel) {
+      themeToggleLabel.textContent = normalizedTheme === "dark" ? "Light mode" : "Dark mode";
+    }
+    return normalizedTheme;
+  }
+
+  function initializeTheme() {
+    let preferredTheme = "light";
+    try {
+      const storedTheme = window.localStorage && window.localStorage.getItem(THEME_STORAGE_KEY);
+      if (storedTheme === "dark" || storedTheme === "light") {
+        preferredTheme = storedTheme;
+      } else if (typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        preferredTheme = "dark";
+      }
+    } catch (error) {
+      preferredTheme = "light";
+    }
+    applyTheme(preferredTheme);
   }
 
   function titleCaseWords(value) {
@@ -204,6 +264,21 @@
     ].join("\n");
   }
 
+  function buildWarningDetails(title, warnings) {
+    const safeWarnings = Array.from(new Set((Array.isArray(warnings) ? warnings : [])
+      .map((warning) => sanitizePublicError(warning, "A website check needs review."))
+      .filter(Boolean)));
+    if (!safeWarnings.length) {
+      return "";
+    }
+    return [
+      "<details class=\"technical-details\">",
+      "  <summary>" + escapeHtml(title || "Review details") + "</summary>",
+      "  <ul class=\"warning-list\">" + safeWarnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>",
+      "</details>"
+    ].join("\n");
+  }
+
   function buildActionLinks(links) {
     return Array.isArray(links)
       ? links.filter(Boolean).join("")
@@ -282,6 +357,113 @@
     rollback: null,
     error: null
   };
+
+  function getProjectPresentation(project) {
+    if (!project) {
+      return {
+        status: "Start here",
+        next: "Create a project or choose one from your portfolio to begin.",
+        generate: "Choose a project",
+        edit: "Waiting for a site",
+        websiteUrl: ""
+      };
+    }
+
+    const runtimeStatus = String(project.runtime && project.runtime.status || "unknown");
+    const dependencyState = project.dependency_state || {};
+    const generationState = project.generation || {};
+    const generatedSite = project.generated_site || {};
+    const generatedUrls = generatedSite.urls || {};
+    const generationStatus = String(generationState.status || "");
+    const websiteUrl = generatedUrls.home || generatedUrls.root || "";
+
+    if (["requested", "running"].includes(generationStatus)) {
+      return {
+        status: "Site in progress",
+        next: "Generation is running. Review current activity in the Generate site card.",
+        generate: "Generation running",
+        edit: generatedSite.present ? "Site available" : "Available after generation",
+        websiteUrl
+      };
+    }
+    if (["failed", "interrupted"].includes(generationStatus)) {
+      return {
+        status: "Action required",
+        next: "The latest generation needs attention. Review the Generate site card before trying again.",
+        generate: "Review latest issue",
+        edit: generatedSite.present ? "Existing site available" : "Waiting for a site",
+        websiteUrl
+      };
+    }
+    if (generatedSite.present) {
+      return {
+        status: "Site ready",
+        next: "Your website is ready. Open it or prepare the next focused edit.",
+        generate: dependencyState.can_generate === true ? "Ready for a new version" : "Review setup before generating",
+        edit: "Ready to edit",
+        websiteUrl
+      };
+    }
+    if (dependencyState.can_generate === true) {
+      return {
+        status: "Ready to continue",
+        next: "Describe the site you want, review the plan, and generate when you are ready.",
+        generate: "Ready to generate",
+        edit: "Available after generation",
+        websiteUrl
+      };
+    }
+    if (["unavailable", "missing", "error"].includes(runtimeStatus)) {
+      return {
+        status: "Project unavailable",
+        next: "Project details are temporarily unavailable. Review setup in Technical details.",
+        generate: "Project unavailable",
+        edit: "Project unavailable",
+        websiteUrl
+      };
+    }
+    return {
+      status: "Action required",
+      next: "Complete project setup in Technical details before generating the site.",
+      generate: "Setup required",
+      edit: "Available after generation",
+      websiteUrl
+    };
+  }
+
+  function renderSelectedProjectPresentation(projects) {
+    const selectedSlug = String(generateProjectSlug.value || "").trim();
+    const selectedProject = Array.isArray(projects)
+      ? projects.find((project) => String(project.slug || "") === selectedSlug) || null
+      : null;
+    const presentation = getProjectPresentation(selectedProject);
+    if (projectCount) {
+      projectCount.textContent = String(Array.isArray(projects) ? projects.length : 0);
+    }
+    if (selectedProjectName) {
+      selectedProjectName.textContent = selectedProject ? normalizeDisplayText(selectedProject.site_name || "Untitled site") : "No project selected";
+    }
+    if (selectedProjectStatus) {
+      selectedProjectStatus.textContent = presentation.status;
+    }
+    if (selectedProjectNext) {
+      selectedProjectNext.textContent = presentation.next;
+    }
+    if (generateCapabilityStatus) {
+      generateCapabilityStatus.textContent = presentation.generate;
+    }
+    if (editCapabilityStatus) {
+      editCapabilityStatus.textContent = presentation.edit;
+    }
+    if (selectedProjectOpen) {
+      selectedProjectOpen.hidden = !presentation.websiteUrl;
+      if (presentation.websiteUrl) {
+        selectedProjectOpen.setAttribute("href", presentation.websiteUrl);
+      } else {
+        selectedProjectOpen.setAttribute("href", "#");
+      }
+    }
+  }
 
   function slugifyProjectName(value) {
     return String(value || "")
@@ -608,18 +790,30 @@
     recoveryStatus.dataset.projectSlug = recoveryStatusView.slug || "";
     recoveryStatus.dataset.requestId = String(recoveryStatusView.requestId || 0);
     if (!recoveryStatusView.slug) {
+      if (recoveryCapabilityStatus) {
+        recoveryCapabilityStatus.textContent = "Choose a project";
+      }
       setRecoveryStatusEmpty("Select a project to view Recovery status.");
       return;
     }
     if (recoveryStatusView.loading && !recoveryStatusView.payload) {
+      if (recoveryCapabilityStatus) {
+        recoveryCapabilityStatus.textContent = "Checking protection";
+      }
       setRecoveryStatusEmpty("Loading Recovery status...");
       return;
     }
     if (recoveryStatusView.error && !recoveryStatusView.payload) {
+      if (recoveryCapabilityStatus) {
+        recoveryCapabilityStatus.textContent = "Status unavailable";
+      }
       setRecoveryStatusEmpty("Recovery status is temporarily unavailable.");
       return;
     }
     if (recoveryStatusView.payload) {
+      if (recoveryCapabilityStatus) {
+        recoveryCapabilityStatus.textContent = humanizeRecoveryAvailability(recoveryStatusView.payload.availability);
+      }
       recoveryStatus.innerHTML = buildRecoveryStatusCardHtml(recoveryStatusView.payload);
       const confirmationInput = document.getElementById("recovery-restore-confirmation");
       const confirmationButton = recoveryStatus.querySelector("[data-recovery-action=\"confirm-restore\"]");
@@ -630,6 +824,9 @@
         });
       }
       return;
+    }
+    if (recoveryCapabilityStatus) {
+      recoveryCapabilityStatus.textContent = "Ready for review";
     }
     setRecoveryStatusEmpty("Recovery status has not been loaded yet.");
   }
@@ -711,11 +908,11 @@
       return;
     }
     if (stateChangeView.loading && !payload) {
-      setManagedStateEmpty("Loading AI site change status for " + stateChangeView.slug + "...");
+      setManagedStateEmpty("Loading edit readiness...");
       return;
     }
     if (stateChangeView.error && !payload) {
-      setManagedStateEmpty("Unable to load AI site change status: " + stateChangeView.error);
+      setManagedStateEmpty(sanitizePublicError(stateChangeView.error, "Edit readiness is temporarily unavailable."));
       return;
     }
     if (payload) {
@@ -811,56 +1008,26 @@
   function renderProjectList(projects) {
     const selectedGenerateSlug = String(generateProjectSlug.value || "").trim();
     projectList.innerHTML = projects.map((project) => {
-      const runtimeStatus = project.runtime && project.runtime.status ? project.runtime.status : "not_provisioned";
       const dependencyState = project.dependency_state || null;
       const generationState = project.generation || null;
       const generatedSite = project.generated_site || null;
-      const countsState = resolveProjectSummaryCounts(project, selectedGenerateSlug);
       const isSelected = project.slug === selectedGenerateSlug;
-      const blockerSummary = dependencyState && Array.isArray(dependencyState.blockers) && dependencyState.blockers.length
-        ? dependencyState.blockers.join(" | ")
-        : "Not checked yet";
-      const overallReadiness = dependencyState
-        ? (dependencyState.can_generate ? "Project ready" : "Needs setup")
-        : "Unknown";
-      const siteHealth = generatedSite && generatedSite.present
-        ? "Healthy"
-        : (generationState && generationState.status && generationState.status !== "not_generated"
-          ? humanizeOperationStatus(generationState.status)
-          : "Not generated yet");
-      const lastMeaningfulOperation = generationState && generationState.status && generationState.status !== "not_generated"
-        ? humanizeOperationType(generationState.status === "succeeded" ? "controlled_generate" : generationState.status)
-        : "None";
-      const actionLinks = isSelected
-        ? buildActionLinks([
-          generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
-            ? "<a class=\"button\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
-            : "",
-          "<a class=\"button\" href=\"#state-plan-form\">Ask AI to Change</a>"
-        ])
-        : (generatedSite && generatedSite.present && generatedSite.urls && generatedSite.urls.home
-          ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedSite.urls.home) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
-          : "");
+      const presentation = getProjectPresentation(project);
+      const secondaryStatus = generatedSite && generatedSite.present
+        ? "Website ready"
+        : (generationState && ["requested", "running"].includes(String(generationState.status || ""))
+          ? "Work in progress"
+          : (dependencyState && dependencyState.can_generate ? "Ready to generate" : "Setup required"));
       return [
-        "<article class=\"project-card" + (isSelected ? " project-card--selected" : "") + "\">",
+        "<button type=\"button\" class=\"project-card project-choice" + (isSelected ? " project-card--selected" : "") + "\" data-project-select=\"" + escapeHtml(project.slug) + "\" aria-pressed=\"" + String(isSelected) + "\">",
         "  <div class=\"project-card__header\">",
         "    <div>",
         "      <h3>" + escapeHtml(project.site_name) + "</h3>",
-        "      <p class=\"project-note project-note--compact\">" + escapeHtml(project.slug) + "</p>",
+        "      <p class=\"project-choice__meta\">" + escapeHtml(secondaryStatus) + "</p>",
         "    </div>",
-        "    <span class=\"status-pill\">" + escapeHtml(isSelected ? "Selected" : ("Runtime " + runtimeStatus.replace(/_/g, " "))) + "</span>",
+        "    <span class=\"status-pill\">" + escapeHtml(isSelected ? "Current" : presentation.status) + "</span>",
         "  </div>",
-        "  <dl>",
-        "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(overallReadiness) + "</dd></div>",
-        "    <div><dt>Site health</dt><dd>" + escapeHtml(siteHealth) + "</dd></div>",
-        "    <div><dt>Pages</dt><dd>" + escapeHtml(formatProjectSummaryCount(countsState, "pages")) + "</dd></div>",
-        "    <div><dt>Properties</dt><dd>" + escapeHtml(formatProjectSummaryCount(countsState, "properties")) + "</dd></div>",
-        "    <div><dt>Attachments</dt><dd>" + escapeHtml(formatProjectSummaryCount(countsState, "attachments")) + "</dd></div>",
-        "    <div><dt>Last operation</dt><dd>" + escapeHtml(lastMeaningfulOperation) + "</dd></div>",
-        "  </dl>",
-        dependencyState ? "  <p class=\"project-note\">" + escapeHtml(dependencyState.next_action || (dependencyState.can_generate ? "This project is ready for the next step." : blockerSummary)) + "</p>" : "",
-        actionLinks ? "  <div class=\"site-links\">" + actionLinks + "</div>" : "",
-        "</article>"
+        "</button>"
       ].join("\n");
     }).join("\n");
   }
@@ -869,7 +1036,7 @@
     projectsCache = projects.slice();
 
     if (!projects.length) {
-      projectList.innerHTML = "<p class=\"empty-state\">No projects yet. Create the first scaffold to prepare a runtime folder.</p>";
+      projectList.innerHTML = "<p class=\"empty-state\">No projects yet. Use Create project to start your first site.</p>";
       setupProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
       setupProjectSlug.disabled = true;
       planProjectSlug.innerHTML = "<option value=\"\">Create a project first</option>";
@@ -891,6 +1058,7 @@
       aiModel.textContent = "balanced";
       aiKeyStatus.textContent = "not_required";
       aiLastEstimate.textContent = "Not recorded";
+      renderSelectedProjectPresentation([]);
       updateGenerateActionState();
       return;
     }
@@ -902,7 +1070,8 @@
     planProjectSlug.disabled = false;
     generateProjectSlug.disabled = false;
     const projectOptions = projects.map((project) => {
-      return "<option value=\"" + escapeHtml(project.slug) + "\">" + escapeHtml(project.site_name + " (" + project.slug + ")") + "</option>";
+      const presentation = getProjectPresentation(project);
+      return "<option value=\"" + escapeHtml(project.slug) + "\">" + escapeHtml(project.site_name + " — " + presentation.status) + "</option>";
     }).join("");
     setupProjectSlug.innerHTML = projectOptions;
     planProjectSlug.innerHTML = projectOptions;
@@ -935,9 +1104,10 @@
     aiLastEstimate.textContent = selectedEstimate
       ? String(selectedEstimate.estimated_total_tokens || selectedEstimate.total || 0) + " tokens"
       : "Not recorded";
-    milestoneGenerate.disabled = !(selectedProject.dependency_state && selectedProject.dependency_state.can_generate && selectedProject.current_run_id);
+    milestoneGenerate.disabled = !(selectedProject.dependency_state && selectedProject.dependency_state.can_generate);
 
     renderProjectList(projects);
+    renderSelectedProjectPresentation(projects);
 
     const latestProject = projects
       .filter((project) => project.current_run_id)
@@ -1232,7 +1402,7 @@
     target.className = isError ? "result-box result-box-error" : "result-box result-box-success";
 
     if (isError) {
-      target.innerHTML = "<strong>Request failed.</strong><p>" + escapeHtml(payload.error || "Unknown error") + "</p>";
+      target.innerHTML = "<strong>Action required.</strong><p>" + escapeHtml(sanitizePublicError(payload && payload.error, "This action could not be completed. Review the details and try again.")) + "</p>";
       return;
     }
 
@@ -1483,7 +1653,7 @@
         ["Prompt hash", safeResult.prompt_hash || "Unavailable"],
         ["Provider called", String(safeResult.provider_called === true)]
       ]),
-      warnings.length ? "<ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : ""
+      buildWarningDetails("Preview warnings", warnings)
       ].join("")
     };
   }
@@ -1513,7 +1683,9 @@
       ? "Healthy"
       : (site.controlled_generate_status === "ok" || site.generation_status === "succeeded"
         ? "Healthy"
-        : (site.controlled_generate_status || site.generation_status || "Not generated yet"));
+        : (["failed", "interrupted"].includes(String(site.controlled_generate_status || site.generation_status || ""))
+          ? "Action required"
+          : "Not generated yet"));
     const lastMeaningfulOperation = site.controlled_generate_status === "ok" || site.generated_site_present
       ? humanizeOperationType("controlled_generate")
       : (latestOperation && latestOperation.operation_type ? humanizeOperationType(latestOperation.operation_type) : "None");
@@ -1522,7 +1694,7 @@
       generatedUrls.home || generatedUrls.root
         ? "<a class=\"button\" href=\"" + escapeHtml(generatedUrls.home || generatedUrls.root) + "\" target=\"_blank\" rel=\"noreferrer\">Open Website</a>"
         : "",
-      "<a class=\"button\" href=\"#state-plan-form\">Ask AI to Change</a>"
+      "<a class=\"button button-secondary\" href=\"#edit-site\">Edit site</a>"
     ]);
     const secondaryLinks = buildActionLinks([
       generatedUrls.properties ? "<a class=\"site-link\" href=\"" + escapeHtml(generatedUrls.properties) + "\" target=\"_blank\" rel=\"noreferrer\">Open Properties</a>" : "",
@@ -1536,21 +1708,21 @@
       "    <span class=\"status-pill\">" + escapeHtml(humanizeReadinessStatus(setup.ready_to_generate ? "ready" : "blocked")) + "</span>",
       "  </div>",
       "  <dl>",
-      "    <div><dt>Overall readiness</dt><dd>" + escapeHtml(overallReadiness) + "</dd></div>",
-      "    <div><dt>Site health</dt><dd>" + escapeHtml(siteHealth) + "</dd></div>",
-      "    <div><dt>Pages</dt><dd>" + escapeHtml(siteCounts.pages != null ? String(siteCounts.pages) : "Unavailable") + "</dd></div>",
-      "    <div><dt>Properties</dt><dd>" + escapeHtml(siteCounts.properties != null ? String(siteCounts.properties) : "Unavailable") + "</dd></div>",
-      "    <div><dt>Attachments</dt><dd>" + escapeHtml(siteCounts.attachments != null ? String(siteCounts.attachments) : "Unavailable") + "</dd></div>",
-      "    <div><dt>Last operation</dt><dd>" + escapeHtml(lastMeaningfulOperation) + "</dd></div>",
+      "    <div><dt>Readiness</dt><dd>" + escapeHtml(overallReadiness) + "</dd></div>",
+      "    <div><dt>Website</dt><dd>" + escapeHtml(siteHealth) + "</dd></div>",
       "  </dl>",
       primaryLinks ? "  <div class=\"site-links\">" + primaryLinks + "</div>" : "",
       secondaryLinks ? "  <div class=\"site-links\">" + secondaryLinks + "</div>" : "",
-      blockers.length ? "  <p class=\"project-note\">Blockers: " + escapeHtml(blockers.join(" | ")) + "</p>" : "  <p class=\"project-note\">" + escapeHtml(setup.ready_to_generate === true ? "Open the real site, then ask AI to change it, review the plan, and explicitly confirm generate when ready." : "Finish Project Setup before previewing or running Generate.") + "</p>",
+      blockers.length ? "  <p class=\"project-note\">Action required: review project setup before generating.</p>" : "  <p class=\"project-note\">" + escapeHtml(setup.ready_to_generate === true ? "Describe your site, review the plan, and generate when you are ready." : "Finish Project Setup before previewing or running Generate.") + "</p>",
       buildTechnicalDetails("Advanced details", [
         ["Project", payload.project.slug],
         ["WordPress", payload.project.wp_url || "Unavailable"],
         ["Dependencies", setup.dependencies && setup.dependencies.status || "unknown"],
         ["Ready to Generate", String(setup.ready_to_generate === true)],
+        ["Pages", siteCounts.pages != null ? String(siteCounts.pages) : "Unavailable"],
+        ["Properties", siteCounts.properties != null ? String(siteCounts.properties) : "Unavailable"],
+        ["Attachments", siteCounts.attachments != null ? String(siteCounts.attachments) : "Unavailable"],
+        ["Last operation", lastMeaningfulOperation],
         ["Latest plan", latestPlan && latestPlan.plan_id || "None"],
         ["Interpreter", latestPlan && latestPlan.personalization_source || "local_interpreter"],
         ["Latest operation", latestOperation && latestOperation.status || "none"],
@@ -1811,20 +1983,18 @@
         "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
       "    <span class=\"status-pill\">" + escapeHtml(site.generated_site_present ? "Website generated" : "Generated site unavailable") + "</span>",
       "  </div>",
-      "  <dl>",
-      "    <div><dt>Status</dt><dd>" + escapeHtml(site.controlled_generate_status || site.generation_status || "unknown") + "</dd></div>",
-      "    <div><dt>Pages</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.pages, afterCounts.pages)) + "</dd></div>",
-      "    <div><dt>Properties</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.properties, afterCounts.properties)) + "</dd></div>",
-      "    <div><dt>Attachments</dt><dd>" + escapeHtml(formatCountChange(beforeCounts.attachments, afterCounts.attachments)) + "</dd></div>",
-      "    <div><dt>Frontend Edit</dt><dd>" + escapeHtml(site.frontend_edit_available ? "Available" : "Unavailable") + "</dd></div>",
-      "    <div><dt>Auth</dt><dd>" + escapeHtml(site.frontend_edit_auth_required ? "WordPress admin login required" : "No extra login required") + "</dd></div>",
-      "    <div><dt>Personalization</dt><dd>" + escapeHtml(personalization ? (personalization.source || "local_interpreter") : "Unavailable") + "</dd></div>",
-      "    <div><dt>Applied fields</dt><dd>" + escapeHtml(personalization ? ((personalization.applied_fields || []).join(", ") || "None") : "Unavailable") + "</dd></div>",
-      "  </dl>",
       links ? "  <div class=\"site-links\">" + links + "</div>" : "",
       site.frontend_edit_available ? "  <p class=\"project-note\">Frontend editing requires a WordPress admin browser session.</p>" : "",
       "  <p class=\"project-note\">" + escapeHtml(site.next_suggested_action || "Review the generated site.") + "</p>",
       buildTechnicalDetails("Advanced details", [
+        ["Status", site.controlled_generate_status || site.generation_status || "unknown"],
+        ["Pages", formatCountChange(beforeCounts.pages, afterCounts.pages)],
+        ["Properties", formatCountChange(beforeCounts.properties, afterCounts.properties)],
+        ["Attachments", formatCountChange(beforeCounts.attachments, afterCounts.attachments)],
+        ["Frontend Edit", site.frontend_edit_available ? "Available" : "Unavailable"],
+        ["Authentication", site.frontend_edit_auth_required ? "WordPress admin login required" : "No extra login required"],
+        ["Personalization", personalization ? (personalization.source || "local_interpreter") : "Unavailable"],
+        ["Applied fields", personalization ? ((personalization.applied_fields || []).join(", ") || "None") : "Unavailable"],
         ["Proof", site.latest_generate_proof_id || "Unavailable"],
         ["Proof path", site.latest_generate_proof_path || "Unavailable"],
         ["Code", site.controlled_generate_code || "Unavailable"],
@@ -1833,13 +2003,15 @@
         ["Properties URL", urls.properties || "Unavailable"],
         ["Contact URL", urls.contact || "Unavailable"]
       ]),
-      warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
+      warnings.length ? "  <p class=\"project-note\">Some website checks need review.</p>" : "",
+      buildWarningDetails("Website check details", warnings),
       "</article>"
     ].join("\n");
   }
 
   function renderGenerationSurface() {
     const selectedSlug = String(generationView.slug || "");
+    renderSelectedProjectPresentation(projectsCache);
     generationStatus.dataset.projectSlug = selectedSlug;
     generationStatus.dataset.requestId = String(generationView.requestId || 0);
     projectOperations.dataset.projectSlug = selectedSlug;
@@ -1870,7 +2042,7 @@
     }
 
     if (generationView.loading && !generationView.statusPayload) {
-      setGenerationStatusEmpty("Loading generate readiness for " + selectedSlug + "...");
+      setGenerationStatusEmpty("Loading generate readiness...");
     } else if (
       generationView.statusPayload
       && generationView.statusPayload.project
@@ -1878,13 +2050,13 @@
     ) {
       generationStatus.innerHTML = buildGenerationStatusHtml(generationView.statusPayload);
     } else if (generationView.error) {
-      generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(generationView.error) + "</p>";
+      generationStatus.innerHTML = "<p class=\"empty-state\">" + escapeHtml(sanitizePublicError(generationView.error, "Generate status is temporarily unavailable.")) + "</p>";
     } else {
       setGenerationStatusEmpty("Generate readiness has not been loaded yet.");
     }
 
     if (generationView.loading && !generationView.sitePayload) {
-      setSiteStatusEmpty("Loading generated site status for " + selectedSlug + "...");
+      setSiteStatusEmpty("Loading website status...");
     } else if (
       generationView.sitePayload
       && generationView.sitePayload.project
@@ -1925,34 +2097,16 @@
     managedState.innerHTML = [
       "<article class=\"project-card\">",
       "  <div class=\"project-card__header\">",
-      "    <h3>" + escapeHtml(payload.project.site_name) + "</h3>",
-      "    <span class=\"status-pill\">Managed state</span>",
+      "    <h3>Edit protection</h3>",
+      "    <span class=\"status-pill\">Ready to review</span>",
       "  </div>",
+      "  <p class=\"project-note project-note--compact\">Factory has a current site snapshot and will protect manually edited content.</p>",
       "  <dl>",
-      "    <div><dt>State</dt><dd>Available</dd></div>",
       "    <div><dt>Updated</dt><dd>" + escapeHtml(formatReadableTime(summary.last_updated || "Unknown")) + "</dd></div>",
-      "    <div><dt>Pages</dt><dd>" + escapeHtml(String(summary.pages)) + "</dd></div>",
-      "    <div><dt>Properties</dt><dd>" + escapeHtml(String(summary.property_count)) + "</dd></div>",
-      "    <div><dt>Attachments</dt><dd>" + escapeHtml(String(summary.attachment_count)) + "</dd></div>",
-      "    <div><dt>Personalization</dt><dd>" + escapeHtml(summary.personalization_source || "unknown") + "</dd></div>",
-      "    <div><dt>User overrides</dt><dd>" + escapeHtml(String(summary.user_overrides_count)) + "</dd></div>",
-      "    <div><dt>Protected fields</dt><dd>" + escapeHtml(protectedFieldsText) + "</dd></div>",
-      "    <div><dt>Last meaningful operation</dt><dd>" + escapeHtml(lastApplyLabel) + "</dd></div>",
-      "    <div><dt>Active task</dt><dd>" + escapeHtml(activeTaskLabel) + "</dd></div>",
-      "    <div><dt>Effective fields</dt><dd>" + escapeHtml(String(summary.effective_safe_fields_count || 0)) + "</dd></div>",
+      "    <div><dt>Protected content</dt><dd>" + escapeHtml(protectedFieldsText) + "</dd></div>",
+      "    <div><dt>Latest change</dt><dd>" + escapeHtml(lastApplyLabel) + "</dd></div>",
+      "    <div><dt>Current activity</dt><dd>" + escapeHtml(activeTaskLabel) + "</dd></div>",
       "  </dl>",
-      effectiveSafeFields.length
-        ? "  <ul class=\"warning-list\">" + effectiveSafeFields.map((field) => {
-          const fieldLabel = humanizeFieldKey(field.field_key);
-          const sourceLabel = humanizeFieldKey(field.source || "unknown");
-          const tags = [
-            sourceLabel,
-            field.protected ? "protected" : null,
-            field.rendered_check ? "render:" + field.rendered_check : null
-          ].filter(Boolean).join(", ");
-          return "<li><strong>" + escapeHtml(fieldLabel) + ":</strong> " + escapeHtml(field.value || "Unavailable") + " <em>[" + escapeHtml(tags) + "]</em></li>";
-        }).join("") + "</ul>"
-        : "",
       summary.protected_fields.length
         ? "  <p class=\"project-note\">Factory protects content edited manually and will not replace it without your confirmation.</p>"
         : "",
@@ -1974,15 +2128,18 @@
       buildTechnicalDetails("Advanced details", [
         ["State path", summary.state_path || "Unavailable"],
         ["State version", String(summary.version)],
+        ["Pages", String(summary.pages)],
+        ["Properties", String(summary.property_count)],
+        ["Attachments", String(summary.attachment_count)],
+        ["Personalization", summary.personalization_source || "unknown"],
         ["Last apply method", summary.latest_apply_method || "None"],
         ["Latest rollback proof", summary.latest_rollback_proof_path || "Unavailable"],
         ["Active operation type", activeOperation && activeOperation.operation_type || "None"],
         ["Active operation status", activeOperation && activeOperation.status || "None"],
         ["User overrides", String(summary.user_overrides_count)],
-        ["Effective fields", String(summary.effective_safe_fields_count || 0)]
+        ["Effective fields", effectiveSafeFields.length ? effectiveSafeFields.map((field) => humanizeFieldKey(field.field_key)).join(", ") : "None"]
       ]),
-      effectiveWarnings.length ? "  <ul class=\"warning-list\">" + effectiveWarnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
-      warnings.length ? "  <ul class=\"warning-list\">" + warnings.map((warning) => "<li>" + escapeHtml(warning) + "</li>").join("") + "</ul>" : "",
+      buildWarningDetails("Edit readiness details", effectiveWarnings.concat(warnings)),
       "</article>"
     ].join("\n");
 
@@ -3557,7 +3714,59 @@
     });
   }
 
+  if (projectList) {
+    projectList.addEventListener("click", (event) => {
+      const projectButton = event.target && typeof event.target.closest === "function"
+        ? event.target.closest("[data-project-select]")
+        : null;
+      if (!projectButton) {
+        return;
+      }
+      const nextSlug = String(projectButton.getAttribute("data-project-select") || "").trim();
+      if (!nextSlug || nextSlug === String(generateProjectSlug.value || "").trim()) {
+        return;
+      }
+      generateProjectSlug.value = nextSlug;
+      if (typeof generateProjectSlug.dispatchEvent === "function" && typeof window.Event === "function") {
+        generateProjectSlug.dispatchEvent(new window.Event("change", { bubbles: true }));
+      }
+    });
+  }
+
+  if (milestoneGenerate) {
+    milestoneGenerate.addEventListener("click", () => {
+      const generateSection = document.getElementById("generate-site");
+      if (generateSection && typeof generateSection.scrollIntoView === "function") {
+        generateSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      if (generatePrompt && typeof generatePrompt.focus === "function") {
+        generatePrompt.focus({ preventScroll: true });
+      }
+    });
+  }
+
+  initializeTheme();
+  if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+      const currentTheme = document.documentElement && document.documentElement.dataset
+        ? document.documentElement.dataset.theme
+        : "light";
+      const nextTheme = applyTheme(currentTheme === "dark" ? "light" : "dark");
+      try {
+        if (window.localStorage) {
+          window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+        }
+      } catch (error) {
+        // Theme still applies for the current session when persistence is unavailable.
+      }
+    });
+  }
+
   if (config.testMode && window.FactoryLauncherTestHooks) {
+    window.FactoryLauncherTestHooks.presentation = {
+      getProjectPresentation,
+      sanitizePublicError
+    };
     window.FactoryLauncherTestHooks.recoveryStatus = {
       buildRecoveryStatusCardHtml,
       cancelRecoveryPointCreate,
