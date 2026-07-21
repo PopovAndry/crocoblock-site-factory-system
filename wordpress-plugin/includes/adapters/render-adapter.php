@@ -3253,7 +3253,8 @@ class Factory_Render_Adapter {
 		$surface      = $style_tokens['surface'];
 		$muted        = $style_tokens['muted'];
 		$border       = $style_tokens['border'];
-		$title        = $contact['title'] ?? 'Contact Kyiv Turquoise Realty';
+		$brand        = factory_rest_get_real_estate_public_brand( $blueprint );
+		$title        = factory_rest_build_real_estate_contact_title( $brand );
 		$text         = $contact['text'] ?? '';
 		$phone        = $contact['phone'] ?? '';
 		$email        = $contact['email'] ?? '';
@@ -3262,7 +3263,7 @@ class Factory_Render_Adapter {
 		$cta_label    = $contact['cta_label'] ?? 'Browse properties';
 		$cta_url      = $this->resolve_frontend_url( $contact['cta_url'] ?? '', '/properties/' );
 
-		$html  = $this->render_home_site_header( $blueprint, factory_rest_get_real_estate_public_brand( $blueprint ) );
+		$html  = $this->render_home_site_header( $blueprint, $brand );
 		$html .= '<section class="factory-contact-page" style="background: ' . esc_attr( $background ) . '; margin: 0; padding: 58px 24px 44px; color: ' . esc_attr( $style_tokens['text'] ) . ';">';
 		$html .= '<div class="factory-contact-page__inner">';
 		$html .= '<span style="display: inline-flex; border-radius: 999px; background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 900; margin-bottom: 18px;">Kyiv agency</span>';

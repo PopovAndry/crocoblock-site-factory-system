@@ -53,6 +53,8 @@ test("real estate public fallbacks stay aligned to the Kyiv story", () => {
   assert.ok(restApi.includes("function factory_rest_get_real_estate_public_brand( array $blueprint ): string"));
   assert.ok(restApi.includes("function factory_rest_get_real_estate_footer_description( array $blueprint ): string"));
   assert.ok(restApi.includes("function factory_rest_build_real_estate_contact_title( string $brand ): string"));
+	assert.match(restApi, /\$blueprint\['pages'\]\['contact'\]\['title'\]\s*=\s*factory_rest_build_real_estate_contact_title\( \(string\) \$variables\['agency_name'\] \)/);
+	assert.match(restApi, /if \( isset\( \$variables\['contact_title'\] \) && ! isset\( \$variables\['agency_name'\] \) \)/);
 });
 
 test("real estate home renderer keeps theme page titles out of the public body content", () => {

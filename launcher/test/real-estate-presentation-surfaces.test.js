@@ -35,6 +35,8 @@ test("Contact renders actionable agency details without an unavailable form", ()
   const contactEnd = renderAdapter.indexOf("public function render_request_viewing_shortcode", contactStart);
   const contactRenderer = renderAdapter.slice(contactStart, contactEnd);
 
+	assert.match(contactRenderer, /\$brand\s*=\s*factory_rest_get_real_estate_public_brand\( \$blueprint \)/);
+	assert.match(contactRenderer, /\$title\s*=\s*factory_rest_build_real_estate_contact_title\( \$brand \)/);
   assert.match(contactRenderer, /href="tel:/);
   assert.match(contactRenderer, /esc_url\( \$email_href \)/);
   assert.match(contactRenderer, /Location/);

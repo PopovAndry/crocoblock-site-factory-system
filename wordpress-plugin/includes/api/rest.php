@@ -758,9 +758,7 @@ function factory_register_rest_routes(): void {
             $blueprint['site']['name'] = $variables['agency_name'];
             $blueprint['pages']['home']['title'] = $variables['agency_name'];
 
-            if ( ! isset( $variables['contact_title'] ) ) {
-                $blueprint['pages']['contact']['title'] = factory_rest_build_real_estate_contact_title( (string) $variables['agency_name'] );
-            }
+            $blueprint['pages']['contact']['title'] = factory_rest_build_real_estate_contact_title( (string) $variables['agency_name'] );
         }
 
         foreach ( $blueprint['pages']['home']['sections'] ?? [] as $index => $section ) {
@@ -783,7 +781,7 @@ function factory_register_rest_routes(): void {
             break;
         }
 
-        if ( isset( $variables['contact_title'] ) ) {
+        if ( isset( $variables['contact_title'] ) && ! isset( $variables['agency_name'] ) ) {
             $blueprint['pages']['contact']['title'] = $variables['contact_title'];
         }
 

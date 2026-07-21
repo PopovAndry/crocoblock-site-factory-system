@@ -719,12 +719,12 @@
     const headline = blocked
       ? "Attention required."
       : (unavailable
-        ? "No verified Recovery Point is available yet."
+        ? "No verified Recovery Point yet."
         : (warning
           ? "A verified Recovery Point is available, with items to review."
           : "A verified Recovery Point is available."));
     const note = unavailable
-      ? "Create one before making major changes."
+      ? "Create one before making risky changes."
       : humanizeRecoveryRecommendation(payload && payload.recommended_action);
     const creating = recoveryCreateView.phase === "creating";
     const confirming = recoveryCreateView.phase === "confirming";
@@ -775,7 +775,7 @@
       "  <dl>",
       "    <div><dt>Availability</dt><dd>" + escapeHtml(humanizeRecoveryAvailability(payload && payload.availability)) + "</dd></div>",
       "    <div><dt>Recovery Point</dt><dd>" + escapeHtml(latest ? formatRecoveryPointTime(latest.created_at) : "Not available") + "</dd></div>",
-      "    <div><dt>Restore</dt><dd>" + escapeHtml(humanizeRestoreReadiness(payload && payload.restore_status)) + "</dd></div>",
+      "    <div><dt>Restore</dt><dd>" + escapeHtml(unavailable ? "Create a Recovery Point first." : humanizeRestoreReadiness(payload && payload.restore_status)) + "</dd></div>",
       "    <div><dt>Storage</dt><dd>" + escapeHtml(humanizeRecoveryStorage(payload && payload.storage_status)) + "</dd></div>",
       "  </dl>",
       "  <p class=\"project-note\">" + escapeHtml(note) + "</p>",

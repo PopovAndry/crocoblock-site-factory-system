@@ -254,8 +254,10 @@ test("Recovery card renders healthy, unavailable, warning, and blocked human sta
       blockers: [{ code: "recovery_point_not_available", message: "No usable Recovery Point is available." }]
     })
   });
-  assert.match(recoveryStatus.innerHTML, /No verified Recovery Point is available yet/);
-  assert.match(recoveryStatus.innerHTML, /Create one before making major changes/);
+  assert.match(recoveryStatus.innerHTML, /No verified Recovery Point yet/);
+  assert.match(recoveryStatus.innerHTML, /Create one before making risky changes/);
+  assert.match(recoveryStatus.innerHTML, /Create a Recovery Point first/);
+  assert.doesNotMatch(recoveryStatus.innerHTML, /Website restore is ready/);
 
   hooks.renderState({
     slug: "card-project",
