@@ -29,6 +29,15 @@ test("instruction verbs do not become part of agency_name", () => {
   assert.ok(!result.fields.agency_name.startsWith("Generate "));
 });
 
+test("generic create instructions do not reduce the agency name to an article", () => {
+  const result = derivePromptPersonalization(
+    "Create a real estate site for Kyiv apartments"
+  );
+
+  assert.equal(result.fields.agency_name, "Kyiv Realty");
+  assert.equal(result.fields.hero_title, "Kyiv Realty - Premium Real Estate in Kyiv");
+});
+
 test("quoted agency names remain exact", () => {
   const result = derivePromptPersonalization(
     "Build a real estate website for agency \"Aurora Estates\" in Lviv with premium apartments."
@@ -36,4 +45,30 @@ test("quoted agency names remain exact", () => {
 
   assert.equal(result.fields.agency_name, "Aurora Estates");
   assert.equal(result.fields.hero_title, "Aurora Estates - Premium Real Estate in Lviv");
+});
+
+test("agency named syntax excludes the syntax token from the agency name", () => {
+  const result = derivePromptPersonalization(
+    "Create a professional Kyiv real estate website for an agency named Kyiv Realty."
+  );
+
+  assert.equal(result.fields.agency_name, "Kyiv Realty");
+  assert.notEqual(result.fields.agency_name, "named Kyiv Realty");
+});
+
+test("invalid explicit agency named candidates fail closed without generic fallback parsing", () => {
+  const result = derivePromptPersonalization(
+    "Create a professional Kyiv real estate website for an agency named A."
+  );
+
+  assert.equal(result.fields.agency_name, "Kyiv Realty");
+  assert.notEqual(result.fields.agency_name, "named A");
+});
+
+test("generic one-letter agency candidates remain rejected", () => {
+  const result = derivePromptPersonalization(
+    "Create a professional Kyiv real estate website for an agency A."
+  );
+
+  assert.equal(result.fields.agency_name, "Kyiv Realty");
 });

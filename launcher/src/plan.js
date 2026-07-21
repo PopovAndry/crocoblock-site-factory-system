@@ -63,7 +63,6 @@ const STAGE_DEFINITIONS = [
         prompt: input.prompt,
         site_type: "real_estate",
         vertical: "real_estate",
-        site_plan: results.site_plan,
         blueprint_candidate: results.blueprint_candidate,
         context: input.context
       };
@@ -78,8 +77,6 @@ const STAGE_DEFINITIONS = [
         prompt: input.prompt,
         site_type: "real_estate",
         vertical: "real_estate",
-        site_plan: results.site_plan,
-        blueprint_candidate: results.blueprint_candidate,
         preview_diff: results.preview_diff,
         context: input.context
       };
@@ -94,9 +91,6 @@ const STAGE_DEFINITIONS = [
         prompt: input.prompt,
         site_type: "real_estate",
         vertical: "real_estate",
-        site_plan: results.site_plan,
-        blueprint_candidate: results.blueprint_candidate,
-        preview_diff: results.preview_diff,
         generate_gate: results.generate_gate,
         context: input.context
       };
@@ -111,10 +105,6 @@ const STAGE_DEFINITIONS = [
         prompt: input.prompt,
         site_type: "real_estate",
         vertical: "real_estate",
-        site_plan: results.site_plan,
-        blueprint_candidate: results.blueprint_candidate,
-        preview_diff: results.preview_diff,
-        generate_gate: results.generate_gate,
         generate_preflight: results.generate_preflight,
         context: input.context
       };

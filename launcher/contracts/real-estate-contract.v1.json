@@ -55,6 +55,13 @@
     { "id": "contact_section", "surfaces": ["homepage", "property_single", "contact"], "required": true, "inputs": ["contact"], "responsibility": "Viewing/contact handoff", "compatibility": ["wordpress"] },
     { "id": "site_footer", "surfaces": ["homepage", "property_archive", "property_single", "contact"], "required": true, "inputs": ["navigation"], "responsibility": "Secondary navigation", "compatibility": ["wordpress"] }
   ],
+  "homepage_components": [
+    { "id": "site-header", "version": 1, "contract_slot": "site_header", "bindings_source": "contract_slot.inputs", "editable_fields": ["agency_name"], "protected_fields": [], "implementation_ref": "includes/adapters/render-adapter.php#render-home-site-header" },
+    { "id": "hero", "version": 1, "contract_slot": "hero", "bindings_source": "contract_slot.inputs", "editable_fields": ["agency_name"], "protected_fields": ["hero_title"], "implementation_ref": "includes/adapters/render-adapter.php#render-home-hero-section" },
+    { "id": "property-listing", "version": 1, "contract_slot": "property_listing", "bindings_source": "contract_slot.inputs", "editable_fields": [], "protected_fields": [], "implementation_ref": "includes/adapters/render-adapter.php#render-home-property-listing" },
+    { "id": "property-card", "version": 1, "contract_slot": "property_card", "bindings_source": "contract_slot.inputs", "editable_fields": [], "protected_fields": [], "implementation_ref": "includes/adapters/render-adapter.php#render-property-card" },
+    { "id": "site-footer", "version": 1, "contract_slot": "site_footer", "bindings_source": "contract_slot.inputs", "editable_fields": ["agency_name"], "protected_fields": [], "implementation_ref": "includes/adapters/render-adapter.php#render-generated-footer" }
+  ],
   "ownership": [
     { "id": "property_structure", "class": "factory_managed" },
     { "id": "agency_name", "class": "owner_editable" },

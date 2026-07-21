@@ -7,6 +7,7 @@ const { readProjectBySlug, resolveProjectsRoot, validateExplicitSlug } = require
 const CONTRACT_PATH = path.join(__dirname, "..", "contracts", "real-estate-contract.v1.json");
 const OWNERSHIP_CLASSES = new Set(["factory_managed", "owner_editable", "protected", "derived_runtime_only"]);
 const CHECK_KINDS = new Set(["runtime_status", "validation_message", "generated_url", "minimum_count", "ownership"]);
+const HOMEPAGE_COMPONENT_IDS = new Set(["site-header", "hero", "property-listing", "property-card", "site-footer"]);
 
 function contractError(message, code) {
   const error = new Error(message);
@@ -86,6 +87,37 @@ function validateRealEstateContract(contract) {
       throw contractError("Component references an unknown surface.", "real_estate_contract_invalid_component_surface");
     }
   }
+  const componentSlots = new Map(contract.component_slots.map((slot) => [slot.id, slot]));
+  const ownership = new Map(contract.ownership.map((entry) => [entry.id, entry.class]));
+  const homepageComponentIds = contract.homepage_components.map((component) => component.id);
+  const homepageIds = new Set(homepageComponentIds);
+  if (homepageIds.size !== homepageComponentIds.length) {
+    throw contractError("Homepage contains a duplicate component ID.", "real_estate_contract_duplicate_id");
+  }
+  if (homepageIds.size !== HOMEPAGE_COMPONENT_IDS.size || [...HOMEPAGE_COMPONENT_IDS].some((id) => !homepageIds.has(id))) {
+    throw contractError("Required Homepage component is missing.", "real_estate_contract_missing_homepage_component");
+  }
+  for (const component of contract.homepage_components) {
+    const slot = componentSlots.get(component.contract_slot);
+    if (!slot || !slot.surfaces.includes("homepage")) {
+      throw contractError("Homepage component references an invalid contract slot.", "real_estate_contract_invalid_homepage_slot");
+    }
+    if (!Number.isInteger(component.version) || component.version < 1 || component.bindings_source !== "contract_slot.inputs") {
+      throw contractError("Homepage component identity or binding source is invalid.", "real_estate_contract_invalid_homepage_component");
+    }
+    if (!Array.isArray(component.editable_fields) || component.editable_fields.some((field) => ownership.get(field) !== "owner_editable")) {
+      throw contractError("Homepage component contains an invalid editable field.", "real_estate_contract_invalid_component_field");
+    }
+    if (!Array.isArray(component.protected_fields) || component.protected_fields.some((field) => ownership.get(field) !== "protected")) {
+      throw contractError("Homepage component contains an invalid protected field.", "real_estate_contract_invalid_component_field");
+    }
+    if (Object.hasOwn(component, "required_bindings") && (!Array.isArray(component.required_bindings) || component.required_bindings.some((binding) => !slot.inputs.includes(binding)))) {
+      throw contractError("Homepage component contains an invalid binding.", "real_estate_contract_invalid_component_binding");
+    }
+    if (typeof component.implementation_ref !== "string" || !/^[a-z0-9_./-]+\.php#[a-z0-9-]+$/i.test(component.implementation_ref)) {
+      throw contractError("Homepage component implementation reference is invalid.", "real_estate_contract_invalid_component_implementation");
+    }
+  }
   for (const check of contract.proof.checks) {
     if (!CHECK_KINDS.has(check.kind) || !["error", "warning"].includes(check.severity) || typeof check.summary !== "string") {
       throw contractError("Proof check is invalid.", "real_estate_contract_invalid_check");
@@ -103,6 +135,11 @@ function normalizeContract(contract) {
   sortById(clone.data_model.fields);
   sortById(clone.surfaces);
   sortById(clone.component_slots);
+  sortById(clone.homepage_components);
+  const componentSlots = new Map(clone.component_slots.map((slot) => [slot.id, slot]));
+  for (const component of clone.homepage_components) {
+    component.required_bindings = componentSlots.get(component.contract_slot).inputs.slice();
+  }
   sortById(clone.ownership);
   sortById(clone.proof.checks);
   return clone;

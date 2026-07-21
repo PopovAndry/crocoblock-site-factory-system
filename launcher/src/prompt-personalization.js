@@ -70,19 +70,32 @@ function buildCanonicalHeroCtaText() {
 
 function detectAgencyName(prompt, city) {
   const sourcePrompt = String(prompt || "");
+  const fallbackAgencyName = city ? clampText(city + " Realty", 80) : "Prime Realty";
 
   for (const pattern of QUOTED_VALUE_PATTERNS) {
     const match = sourcePrompt.match(pattern);
     if (match && match[1]) {
       const cleaned = cleanAgencyName(match[1]);
-      if (cleaned) {
+      if (cleaned.length >= 2) {
         return cleaned;
       }
+
+      return fallbackAgencyName;
     }
   }
 
+  const explicitNamedMatch = sourcePrompt.match(/\bagency\s+named\s+([\p{L}0-9 &'’`.-]{1,80})/iu);
+  if (explicitNamedMatch && explicitNamedMatch[1]) {
+    const cleaned = cleanAgencyName(explicitNamedMatch[1]);
+    if (cleaned.length >= 2) {
+      return cleaned;
+    }
+
+    return fallbackAgencyName;
+  }
+
   const patterns = [
-    /(?:agency|brand|company|name)\s+([\p{Lu}][\p{L}0-9 &'’`.-]{2,80})/iu,
+    /(?:agency|brand|company|name)\s+([\p{Lu}][\p{L}0-9 &'’`.-]{0,80})/iu,
     /([\p{Lu}][\p{L}0-9 &'’`.-]{2,80})\s+(?:agency|realty|properties|real estate)/iu
   ];
 
@@ -90,17 +103,15 @@ function detectAgencyName(prompt, city) {
     const match = sourcePrompt.match(pattern);
     if (match && match[1]) {
       const cleaned = cleanAgencyName(match[1]);
-      if (cleaned) {
+      if (cleaned.length >= 2) {
         return cleaned;
       }
+
+      return fallbackAgencyName;
     }
   }
 
-  if (city) {
-    return clampText(city + " Realty", 80);
-  }
-
-  return "Prime Realty";
+  return fallbackAgencyName;
 }
 
 function detectToneAndStyle(lowerPrompt) {

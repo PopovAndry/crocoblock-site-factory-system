@@ -134,6 +134,7 @@ class Factory_Render_Adapter {
 
 		if ( $this->is_generated_home_page_request() ) {
 			$styles[] = '.factory-generated-home-page .entry-title,.factory-generated-home-page .page-title,.factory-generated-home-page .post-title,.factory-generated-home-page .page-header,.factory-generated-home-page .entry-header,.factory-generated-home-page .site-main > h1,.factory-generated-home-page main > h1{display:none!important;}';
+			$styles[] = '.factory-generated-home-page #masthead,.factory-generated-home-page header.site-header{display:none!important}.factory-generated-home-page .site-content{padding-top:0!important}.factory-generated-home-page .site-main,.factory-generated-home-page .page-content{padding-top:0!important}.factory-home-site-header{position:relative;z-index:5;width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);background:#fff;border-bottom:1px solid rgba(16,32,29,.1)}.factory-home-site-header__inner{max-width:1120px;min-height:78px;margin:0 auto;padding:0 24px;display:flex;align-items:center;justify-content:space-between;gap:24px}.factory-home-site-header__brand{color:' . $primary . ';font-size:20px;font-weight:900;letter-spacing:-.02em;text-decoration:none}.factory-home-site-header__nav{display:flex;align-items:center;gap:26px}.factory-home-site-header__nav a{color:#10201d!important;font-size:14px;font-weight:800;text-decoration:none}.factory-home-site-header__nav a:hover,.factory-home-site-header__nav a:focus-visible{color:' . $primary . '!important}.factory-home-page{width:100%;overflow:hidden}.factory-home-hero__inner{position:relative;z-index:1;max-width:1120px;margin:0 auto;padding:0 24px}.factory-home-hero__copy{max-width:700px}.factory-home-hero--centered-overlay .factory-home-hero__copy{max-width:760px;margin:0 auto;text-align:center}.factory-home-property-listing{max-width:1120px;margin:0 auto;padding:64px 24px 76px}.factory-home-property-listing__header{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:28px}.factory-home-page .factory-listing-grid{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:24px!important}.factory-home-page .factory-property-card{height:100%;display:flex;flex-direction:column}.factory-home-page .factory-property-card>a:first-child{display:block;position:relative;min-height:232px}.factory-home-page .factory-property-card>a:first-child img{display:block;width:100%;height:232px;object-fit:cover}.factory-home-page .factory-property-card>div:last-child{display:flex;flex:1;flex-direction:column}.factory-home-page .factory-property-card .factory-property-action{margin-top:auto}.factory-generated-home-page .factory-generated-footer [style*="grid-template-columns"]{display:grid!important}.factory-generated-home-page .factory-generated-footer a,.factory-generated-home-page .factory-generated-footer span,.factory-generated-home-page .factory-generated-footer strong{display:block}.factory-generated-home-page .factory-generated-footer a{margin-bottom:7px}@media(max-width:900px){.factory-home-page .factory-listing-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}@media(max-width:620px){.factory-home-site-header__inner{min-height:auto;padding-top:18px;padding-bottom:18px;align-items:flex-start;flex-direction:column;gap:14px}.factory-home-site-header__brand{font-size:18px}.factory-home-site-header__nav{width:100%;justify-content:space-between;gap:12px}.factory-home-hero{min-height:560px!important;padding:90px 0!important}.factory-home-hero__copy{text-align:left!important}.factory-home-property-listing{padding:46px 18px 58px}.factory-home-property-listing__header{align-items:flex-start;flex-direction:column;margin-bottom:22px}.factory-home-page .factory-listing-grid{grid-template-columns:1fr!important}.factory-home-page .factory-property-card>a:first-child,.factory-home-page .factory-property-card>a:first-child img{min-height:218px;height:218px}.factory-generated-home-page .factory-generated-footer{padding-left:18px!important;padding-right:18px!important}}';
 		}
 
 		if ( $this->is_generated_home_page_request() || $this->is_generated_archive_page_request() || $this->is_generated_contact_page_request() || is_singular( 'property' ) ) {
@@ -582,12 +583,7 @@ class Factory_Render_Adapter {
 			);
 		}
 
-		$target_state = [
-			'post_title'   => $page_title,
-			'post_name'    => $page_slug,
-			'post_status'  => 'publish',
-			'post_content' => $content,
-		];
+		$target_state = $this->get_page_target_state( $page_slug, $page_title, $content );
 		$current_state = $this->get_current_page_state( $existing );
 
 		if ( factory_is_post_user_modified( $existing->ID, $current_state, $target_state ) ) {
@@ -656,12 +652,7 @@ class Factory_Render_Adapter {
 
 		$existing = get_page_by_path( $page_slug );
 
-		$target_state = [
-			'post_title'   => $page_title,
-			'post_name'    => $page_slug,
-			'post_status'  => 'publish',
-			'post_content' => $content,
-		];
+		$target_state = $this->get_page_target_state( $page_slug, $page_title, $content );
 
 		if ( $existing ) {
 			$current_state = $this->get_current_page_state( $existing );
@@ -726,7 +717,7 @@ class Factory_Render_Adapter {
 			'post_title'   => $page_title,
 			'post_name'    => $page_slug,
 			'post_status'  => 'publish',
-			'post_content' => $content,
+			'post_content' => $target_state['post_content'],
 		] );
 
 		$this->log( "{$label} created: {$page_slug}" );
@@ -762,15 +753,29 @@ class Factory_Render_Adapter {
 	}
 
 	private function mark_page_factory_managed( int $post_id, string $page_key, array $target_state ): void {
+		$persisted_post = get_post( $post_id );
+		$hash_state     = $persisted_post instanceof WP_Post
+			? $this->get_current_page_state( $persisted_post )
+			: $target_state;
+
 		factory_mark_post_managed(
 			$post_id,
 			[
 				'source'      => 'real-estate',
 				'entity_type' => 'page',
 				'page_key'    => $page_key,
-				'hash'        => factory_ownership_hash_state( $target_state ),
+				'hash'        => factory_ownership_hash_state( $hash_state ),
 			]
 		);
+	}
+
+	private function get_page_target_state( string $page_slug, string $page_title, string $content ): array {
+		return [
+			'post_title'   => $page_title,
+			'post_name'    => $page_slug,
+			'post_status'  => 'publish',
+			'post_content' => wp_kses_post( $content ),
+		];
 	}
 
 	private function sync_front_page( array $blueprint ): ?array {
@@ -851,12 +856,7 @@ class Factory_Render_Adapter {
 			return null;
 		}
 
-		$target_state = [
-			'post_title'   => $page_title,
-			'post_name'    => $page_slug,
-			'post_status'  => 'publish',
-			'post_content' => $content,
-		];
+		$target_state = $this->get_page_target_state( $page_slug, $page_title, $content );
 
 		$existing = get_page_by_path( $page_slug );
 
@@ -956,12 +956,7 @@ class Factory_Render_Adapter {
 			];
 		}
 
-		$target_state = [
-			'post_title'   => $page_title,
-			'post_name'    => $page_slug,
-			'post_status'  => 'publish',
-			'post_content' => $content,
-		];
+		$target_state = $this->get_page_target_state( $page_slug, $page_title, $content );
 
 		$current_state = $this->get_current_page_state( $existing );
 
@@ -1771,7 +1766,7 @@ class Factory_Render_Adapter {
 					$query->the_post();
 
 					if ( $is_property_listing ) {
-						echo $this->render_property_card( get_the_ID(), $style_tokens, $is_property_archive ? 'row' : 'grid' );
+						echo $this->render_property_card( get_the_ID(), $style_tokens, $is_property_archive ? 'row' : 'grid', $this->get_homepage_component_version( $blueprint, 'property-card' ) );
 						continue;
 					}
 					?>
@@ -2358,7 +2353,7 @@ class Factory_Render_Adapter {
 		return array_values( array_unique( $slugs ) );
 	}
 
-	private function render_property_card( int $post_id, array $style_tokens, string $variant = 'grid' ): string {
+	private function render_property_card( int $post_id, array $style_tokens, string $variant = 'grid', int $component_version = 0 ): string {
 		$primary       = $style_tokens['primary'];
 		$accent        = $style_tokens['accent'];
 		$background    = $style_tokens['background'];
@@ -2484,7 +2479,7 @@ class Factory_Render_Adapter {
 		endif;
 		?>
 
-		<article class="factory-property-card" style="background: <?php echo esc_attr( $surface ); ?>; border: 1px solid <?php echo esc_attr( $border ); ?>; border-radius: 20px; overflow: hidden; box-shadow: 0 16px 38px rgba(15, 118, 110, 0.11);">
+		<article class="factory-property-card" data-factory-component="property-card" data-factory-component-version="<?php echo esc_attr( (string) $component_version ); ?>" style="background: <?php echo esc_attr( $surface ); ?>; border: 1px solid <?php echo esc_attr( $border ); ?>; border-radius: 20px; overflow: hidden; box-shadow: 0 16px 38px rgba(15, 118, 110, 0.11);">
 			<a href="<?php echo esc_url( $permalink ); ?>" style="display: block; position: relative; min-height: 232px; background: <?php echo esc_attr( $background ); ?>; text-decoration: none;">
 				<?php if ( has_post_thumbnail( $post_id ) ) : ?>
 					<?php
@@ -2828,7 +2823,8 @@ class Factory_Render_Adapter {
 		$footer_description = factory_rest_get_real_estate_footer_description( $blueprint );
 		$year               = gmdate( 'Y' );
 
-		$html  = '<footer class="factory-generated-footer" style="width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); background: ' . esc_attr( $style_tokens['heading'] ) . '; color: #fff; padding: 38px 24px 22px;">';
+		$component_version = $this->get_homepage_component_version( $blueprint, 'site-footer' );
+		$html  = '<footer class="factory-generated-footer" data-factory-component="site-footer" data-factory-component-version="' . esc_attr( (string) $component_version ) . '" style="width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); background: ' . esc_attr( $style_tokens['heading'] ) . '; color: #fff; padding: 38px 24px 22px;">';
 		$html .= '<div style="max-width: 1120px; margin: 0 auto;">';
 		$html .= '<div style="display: grid; grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(150px, 0.75fr)); gap: 24px; align-items: start;">';
 		$html .= '<div>';
@@ -2843,6 +2839,30 @@ class Factory_Render_Adapter {
 		$html .= '</footer>';
 
 		return $html;
+	}
+
+	private function render_home_site_header( array $blueprint, string $brand ): string {
+		$version = $this->get_homepage_component_version( $blueprint, 'site-header' );
+		$html  = '<header class="factory-home-site-header" data-factory-component="site-header" data-factory-component-version="' . esc_attr( (string) $version ) . '">';
+		$html .= '<div class="factory-home-site-header__inner">';
+		$html .= '<a class="factory-home-site-header__brand" href="' . esc_url( home_url( '/' ) ) . '">' . esc_html( $brand ) . '</a>';
+		$html .= '<nav class="factory-home-site-header__nav" aria-label="Primary navigation">';
+		$html .= '<a href="' . esc_url( home_url( '/' ) ) . '">Home</a>';
+		$html .= '<a href="' . esc_url( home_url( '/properties/' ) ) . '">Properties</a>';
+		$html .= '<a href="' . esc_url( home_url( '/contact/' ) ) . '">Contact</a>';
+		$html .= '</nav></div></header>';
+
+		return $html;
+	}
+
+	private function get_homepage_component_version( array $blueprint, string $component_id ): int {
+		foreach ( $blueprint['homepage_components'] ?? [] as $component ) {
+			if ( is_array( $component ) && $component_id === ( $component['id'] ?? '' ) ) {
+				return max( 1, absint( $component['version'] ?? 1 ) );
+			}
+		}
+
+		return 0;
 	}
 
 	private function decorate_home_safe_field_content( string $content, array $blueprint ): string {
@@ -2988,7 +3008,9 @@ class Factory_Render_Adapter {
 		$muted        = $style_tokens['muted'];
 		$border       = $style_tokens['border'];
 		$hero_image   = plugins_url( '../../assets/real-estate/hero/kyiv-panorama.png', __FILE__ );
-		$html         = '<div class="factory-home-page" style="background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $text ) . '; margin: -40px 0 0;">';
+		$html         = $this->render_home_site_header( $blueprint, (string) $brand );
+		$html        .= '<div class="factory-home-page" style="background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $text ) . ';">';
+		$listing_rendered = false;
 
 		foreach ( $sections as $section ) {
 			if ( ! is_array( $section ) ) {
@@ -3017,12 +3039,18 @@ class Factory_Render_Adapter {
 			}
 
 			if ( 'listing' === $type ) {
+				if ( $listing_rendered ) {
+					continue;
+				}
+
+				$listing_rendered = true;
 				$title   = $section['title'] ?? 'Properties';
 				$query   = $section['query'] ?? '';
 				$listing = $section['listing'] ?? 'property-card';
 
-				$html .= '<section style="max-width: 1120px; margin: 0 auto; padding: 34px 24px;">';
-				$html .= '<header style="display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 22px;">';
+				$listing_version = $this->get_homepage_component_version( $blueprint, 'property-listing' );
+				$html .= '<section class="factory-home-property-listing" data-factory-component="property-listing" data-factory-component-version="' . esc_attr( (string) $listing_version ) . '">';
+				$html .= '<header class="factory-home-property-listing__header">';
 				$html .= '<div>';
 				$html .= '<span style="color: ' . esc_attr( $primary ) . '; font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0;">Kyiv catalog</span>';
 				$html .= '<h2 style="font-size: clamp(28px, 4vw, 44px); line-height: 1.08; margin: 6px 0 0; color: ' . esc_attr( $style_tokens['heading'] ) . ';">' . esc_html( $title ) . '</h2>';
@@ -3043,7 +3071,6 @@ class Factory_Render_Adapter {
 			}
 		}
 
-		$html .= $this->render_home_benefits_section( $blueprint );
 		$html .= '</div>';
 		$html .= $this->render_generated_footer( $blueprint );
 
@@ -3065,14 +3092,15 @@ class Factory_Render_Adapter {
 		$button = $style_tokens['button'] ?? $primary;
 		$button_text = $style_tokens['button_text'] ?? '#ffffff';
 		$heading = $style_tokens['heading'] ?? '#0f172a';
+		$component_version = $this->get_homepage_component_version( factory_get_blueprint(), 'hero' );
 		$section_class = 'factory-home-hero factory-home-hero--' . str_replace( '_', '-', $allowed_variant );
-		$html  = '<section class="' . esc_attr( $section_class ) . '" data-factory-hero-variant="' . esc_attr( $allowed_variant ) . '" style="position: relative; width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); min-height: clamp(520px, 72vw, 720px); padding: clamp(96px, 12vw, 150px) 0 clamp(92px, 10vw, 130px); overflow: hidden; background: ' . esc_attr( $heading ) . ';">';
+		$html  = '<section class="' . esc_attr( $section_class ) . '" data-factory-component="hero" data-factory-component-version="' . esc_attr( (string) $component_version ) . '" data-factory-hero-variant="' . esc_attr( $allowed_variant ) . '" style="position: relative; width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); min-height: clamp(520px, 72vw, 720px); padding: clamp(96px, 12vw, 150px) 0 clamp(92px, 10vw, 130px); overflow: hidden; background: ' . esc_attr( $heading ) . ';">';
 		$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background-image: url(\'' . esc_url( $hero_image ) . '\'); background-size: cover; background-position: center; opacity: 1;"></div>';
 
 		if ( 'centered_overlay' === $allowed_variant ) {
 			$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: radial-gradient(circle at 50% 38%, rgba(15, 23, 42, 0.18) 0%, rgba(15, 23, 42, 0.42) 28%, rgba(15, 23, 42, 0.16) 58%, rgba(15, 23, 42, 0.02) 100%);"></div>';
-			$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
-			$html .= '<div style="max-width: 760px; margin: 0 auto; text-align: center;">';
+			$html .= '<div class="factory-home-hero__inner">';
+			$html .= '<div class="factory-home-hero__copy">';
 			$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">' . esc_html( $brand ) . '</span>';
 			$html .= '<h1 style="font-size: clamp(40px, 5.2vw, 70px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
 			$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.94); margin: 0 auto 28px; max-width: 620px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';
@@ -3085,8 +3113,8 @@ class Factory_Render_Adapter {
 		}
 
 		$html .= '<div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5, 30, 28, 0.55) 0%, rgba(7, 47, 43, 0.38) 32%, rgba(15, 118, 110, 0.1) 58%, rgba(15, 118, 110, 0) 100%);"></div>';
-		$html .= '<div style="position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px;">';
-		$html .= '<div style="max-width: 700px;">';
+		$html .= '<div class="factory-home-hero__inner">';
+		$html .= '<div class="factory-home-hero__copy">';
 		$html .= '<span style="display: inline-flex; border-radius: 999px; background: rgba(255,255,255,0.92); color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 800; margin-bottom: 18px;">' . esc_html( $brand ) . '</span>';
 		$html .= '<h1 style="font-size: clamp(38px, 5vw, 68px); line-height: 1.02; margin: 0 0 18px; letter-spacing: 0; color: #fff; text-wrap: balance; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $title ) . '</h1>';
 		$html .= '<p style="font-size: clamp(18px, 2.4vw, 26px); line-height: 1.45; color: rgba(255,255,255,0.92); margin: 0 0 28px; max-width: 640px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);">' . esc_html( $subtitle ) . '</p>';

@@ -25,6 +25,8 @@ function factory_apply_real_estate_preset_internal( array $args = [] ): array {
 		$blueprint,
 		(string) ( $style_context['context']['hero_variant'] ?? 'image_left_scrim' )
 	);
+	$homepage_components = factory_real_estate_apply_service_homepage_components();
+	$blueprint['homepage_components'] = $homepage_components;
 	$prompt = $prompt_context['prompt'];
 	$dependencies = factory_rest_get_real_estate_dependency_status();
 
@@ -44,6 +46,11 @@ function factory_apply_real_estate_preset_internal( array $args = [] ): array {
 	}
 
 	$execution = factory_apply_blueprint( $blueprint );
+	$personalization_outcomes = factory_real_estate_apply_service_personalization_outcomes(
+		$prompt_context['applied_variables'],
+		$execution,
+		factory_real_estate_apply_service_persisted_personalization_fields( $prompt_context['applied_variables'] )
+	);
 	$plan      = factory_rest_build_plan( $blueprint );
 	$report    = factory_validate_blueprint_state( $blueprint, false );
 	$manifest_metadata = [
@@ -51,6 +58,8 @@ function factory_apply_real_estate_preset_internal( array $args = [] ): array {
 		'style_context'  => $style_context,
 		'image_context'  => $image_context,
 		'apply_source'   => $source,
+		'personalization_outcomes' => $personalization_outcomes,
+		'homepage_components' => factory_real_estate_apply_service_homepage_component_summary( $homepage_components ),
 	];
 
 	if ( is_array( $args['manifest_metadata'] ?? null ) ) {
@@ -99,12 +108,14 @@ function factory_apply_real_estate_preset_internal( array $args = [] ): array {
 			'prompt'            => $prompt,
 			'preset_variables'  => $prompt_context['preset_variables'],
 			'applied_variables' => $prompt_context['applied_variables'],
+			'personalization_outcomes' => $personalization_outcomes,
 			'prompt_notes'      => $prompt_context['notes'],
 			'style_context'     => $style_context['context'],
 			'style_tokens'      => $style_context['tokens'],
 			'hero_variant'      => factory_real_estate_apply_service_find_home_hero_variant( $blueprint ),
 			'image_context'     => $image_context['context'],
 			'image_notes'       => $image_context['notes'],
+			'homepage_components' => factory_real_estate_apply_service_homepage_component_summary( $homepage_components ),
 			'file'              => basename( $manifest_path ),
 			'plan_summary'      => $plan['summary'] ?? [],
 			'execution_count'   => count( $execution ),
@@ -112,6 +123,111 @@ function factory_apply_real_estate_preset_internal( array $args = [] ): array {
 			'results_summary'   => $results['summary'] ?? [],
 		],
 	];
+}
+
+function factory_real_estate_apply_service_persisted_personalization_fields( array $variables ): array {
+	$allowed_fields = [ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
+	$blueprint      = factory_get_blueprint();
+	$current_values = factory_rest_get_real_estate_variable_defaults( $blueprint );
+	$home_slug      = sanitize_title( (string) ( $blueprint['pages']['home']['slug'] ?? 'home' ) );
+	$home           = get_page_by_path( '' !== $home_slug ? $home_slug : 'home' );
+
+	if ( ! $home instanceof WP_Post ) {
+		return [];
+	}
+
+	$content = html_entity_decode( wp_strip_all_tags( (string) $home->post_content ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+	$matched = [];
+
+	foreach ( $allowed_fields as $field ) {
+		if ( ! array_key_exists( $field, $variables ) ) {
+			continue;
+		}
+
+		$expected = trim( (string) $variables[ $field ] );
+		$stored   = trim( (string) ( $current_values[ $field ] ?? '' ) );
+		$in_page  = '' !== $expected && false !== strpos( $content, $expected );
+
+		if ( $expected !== $stored || ! $in_page ) {
+			continue;
+		}
+
+		if ( 'agency_name' === $field ) {
+			$site_name = trim( (string) get_option( 'blogname', '' ) );
+			$page_name = trim( (string) $home->post_title );
+
+			if ( $expected !== $site_name || $expected !== $page_name ) {
+				continue;
+			}
+		}
+
+		$matched[] = $field;
+	}
+
+	return $matched;
+}
+
+function factory_real_estate_apply_service_personalization_outcomes( array $variables, array $execution, array $persisted_fields ): array {
+	$allowed_fields = [ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
+	$requested      = array_values( array_intersect( $allowed_fields, array_keys( $variables ) ) );
+	$persisted      = array_fill_keys( array_intersect( $allowed_fields, $persisted_fields ), true );
+	$home_result    = null;
+
+	foreach ( $execution as $item ) {
+		if ( is_array( $item ) && 'page' === ( $item['type'] ?? '' ) && 'home' === ( $item['entity'] ?? '' ) ) {
+			$home_result = $item;
+			break;
+		}
+	}
+
+	$outcomes = [
+		'applied_fields'   => [],
+		'preserved_fields' => [],
+		'skipped_fields'   => [],
+		'failed_fields'    => [],
+	];
+
+	foreach ( $requested as $field ) {
+		$status = sanitize_key( (string) ( $home_result['status'] ?? 'error' ) );
+		$action = sanitize_key( (string) ( $home_result['action'] ?? 'error' ) );
+
+		if ( 'warning' === $status && 'skip' === $action ) {
+			$outcomes['preserved_fields'][] = $field;
+		} elseif ( 'ok' === $status && 'skip' === $action ) {
+			$outcomes['skipped_fields'][] = $field;
+		} elseif ( 'ok' === $status && in_array( $action, [ 'create', 'update' ], true ) && isset( $persisted[ $field ] ) ) {
+			$outcomes['applied_fields'][] = $field;
+		} else {
+			$outcomes['failed_fields'][] = $field;
+		}
+	}
+
+	return $outcomes;
+}
+
+function factory_real_estate_apply_service_homepage_components(): array {
+	return [
+		[ 'id' => 'site-header', 'version' => 1, 'contract_slot' => 'site_header', 'bindings_source' => 'real-estate-contract@1#component_slots.site_header.inputs', 'editable_fields' => [ 'agency_name' ], 'protected_fields' => [], 'implementation_ref' => 'includes/adapters/render-adapter.php#render-home-site-header' ],
+		[ 'id' => 'hero', 'version' => 1, 'contract_slot' => 'hero', 'bindings_source' => 'real-estate-contract@1#component_slots.hero.inputs', 'editable_fields' => [ 'agency_name' ], 'protected_fields' => [ 'hero_title' ], 'implementation_ref' => 'includes/adapters/render-adapter.php#render-home-hero-section' ],
+		[ 'id' => 'property-listing', 'version' => 1, 'contract_slot' => 'property_listing', 'bindings_source' => 'real-estate-contract@1#component_slots.property_listing.inputs', 'editable_fields' => [], 'protected_fields' => [], 'implementation_ref' => 'includes/adapters/render-adapter.php#render-home-property-listing' ],
+		[ 'id' => 'property-card', 'version' => 1, 'contract_slot' => 'property_card', 'bindings_source' => 'real-estate-contract@1#component_slots.property_card.inputs', 'editable_fields' => [], 'protected_fields' => [], 'implementation_ref' => 'includes/adapters/render-adapter.php#render-property-card' ],
+		[ 'id' => 'site-footer', 'version' => 1, 'contract_slot' => 'site_footer', 'bindings_source' => 'real-estate-contract@1#component_slots.site_footer.inputs', 'editable_fields' => [ 'agency_name' ], 'protected_fields' => [], 'implementation_ref' => 'includes/adapters/render-adapter.php#render-generated-footer' ],
+	];
+}
+
+function factory_real_estate_apply_service_homepage_component_summary( array $components ): array {
+	return array_values(
+		array_map(
+			static function ( array $component ): array {
+				return [
+					'id'            => sanitize_key( (string) ( $component['id'] ?? '' ) ),
+					'version'       => absint( $component['version'] ?? 0 ),
+					'contract_slot' => sanitize_key( (string) ( $component['contract_slot'] ?? '' ) ),
+				];
+			},
+			$components
+		)
+	);
 }
 
 function factory_real_estate_apply_service_normalize_prompt_context( $prompt_context, array $base_blueprint, string $fallback_prompt ): array {

@@ -665,6 +665,7 @@ function factory_ai_build_controlled_generate( array $input = [] ): array {
 				'plan_summary'    => is_array( $apply_result['response']['plan_summary'] ?? null ) ? $apply_result['response']['plan_summary'] : [],
 				'results_summary' => is_array( $apply_result['response']['results_summary'] ?? null ) ? $apply_result['response']['results_summary'] : [],
 			],
+			'personalization_outcomes'              => $apply_result['response']['personalization_outcomes'] ?? [],
 			'manifest_path'                        => $apply_result['manifest_path'] ?? null,
 			'validation_count'                     => count( $apply_result['report']['checks'] ?? [] ),
 			'execution_count'                      => count( $apply_result['execution'] ?? [] ),
@@ -711,6 +712,7 @@ function factory_ai_controlled_generate_response( array $overrides = [] ): array
 		'warnings'                           => factory_ai_normalize_string_list( $overrides['warnings'] ?? [], 220 ),
 		'risks'                              => factory_ai_controlled_generate_text_list( $overrides['risks'] ?? [], 220 ),
 		'generation_result'                  => is_array( $overrides['generation_result'] ?? null ) ? $overrides['generation_result'] : null,
+		'personalization_outcomes'            => factory_ai_controlled_generate_normalize_personalization_outcomes( $overrides['personalization_outcomes'] ?? [] ),
 		'manifest_path'                      => is_scalar( $overrides['manifest_path'] ?? null ) ? sanitize_text_field( (string) $overrides['manifest_path'] ) : null,
 		'validation_count'                   => isset( $overrides['validation_count'] ) ? max( 0, (int) $overrides['validation_count'] ) : null,
 		'execution_count'                    => isset( $overrides['execution_count'] ) ? max( 0, (int) $overrides['execution_count'] ) : null,
@@ -718,6 +720,31 @@ function factory_ai_controlled_generate_response( array $overrides = [] ): array
 		'next_step'                          => sanitize_key( (string) ( $overrides['next_step'] ?? 'submit_exact_confirmation_with_execute' ) ),
 		'usage'                              => null,
 	];
+}
+
+function factory_ai_controlled_generate_normalize_personalization_outcomes( $outcomes ): array {
+	$outcomes = is_array( $outcomes ) ? $outcomes : [];
+	$allowed  = [ 'agency_name', 'hero_title', 'hero_subtitle', 'hero_cta_text' ];
+	$result   = [];
+	$assigned = [];
+
+	foreach ( [ 'failed_fields', 'preserved_fields', 'skipped_fields', 'applied_fields' ] as $outcome_key ) {
+		$fields = is_array( $outcomes[ $outcome_key ] ?? null ) ? $outcomes[ $outcome_key ] : [];
+		$result[ $outcome_key ] = [];
+
+		foreach ( $fields as $field ) {
+			$field = sanitize_key( is_scalar( $field ) ? (string) $field : '' );
+
+			if ( ! in_array( $field, $allowed, true ) || isset( $assigned[ $field ] ) ) {
+				continue;
+			}
+
+			$result[ $outcome_key ][] = $field;
+			$assigned[ $field ] = true;
+		}
+	}
+
+	return $result;
 }
 
 function factory_ai_controlled_generate_normalize_runtime_snapshot( $snapshot ): array {
