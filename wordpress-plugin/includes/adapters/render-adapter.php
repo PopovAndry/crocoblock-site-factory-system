@@ -138,6 +138,7 @@ class Factory_Render_Adapter {
 		}
 
 		if ( $this->is_generated_home_page_request() || $this->is_generated_archive_page_request() || $this->is_generated_contact_page_request() || is_singular( 'property' ) ) {
+			$styles[] = '.factory-generated-properties-page #masthead,.factory-generated-properties-page header.site-header,.factory-generated-contact-page #masthead,.factory-generated-contact-page header.site-header,.factory-generated-property-single-page #masthead,.factory-generated-property-single-page header.site-header,.factory-generated-properties-page .site-breadcrumbs,.factory-generated-contact-page .site-breadcrumbs,.factory-generated-property-single-page .site-breadcrumbs{display:none!important}.factory-generated-properties-page .site-content,.factory-generated-contact-page .site-content,.factory-generated-property-single-page .site-content{padding-top:0!important}.factory-generated-properties-page .factory-home-site-header,.factory-generated-contact-page .factory-home-site-header,.factory-generated-property-single-page .factory-home-site-header{position:relative;z-index:5;width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);background:#fff;border-bottom:1px solid rgba(16,32,29,.1)}.factory-generated-properties-page .factory-home-site-header__inner,.factory-generated-contact-page .factory-home-site-header__inner,.factory-generated-property-single-page .factory-home-site-header__inner{max-width:1120px;min-height:78px;margin:0 auto;padding:0 24px;display:flex;align-items:center;justify-content:space-between;gap:24px}.factory-generated-properties-page .factory-home-site-header__brand,.factory-generated-contact-page .factory-home-site-header__brand,.factory-generated-property-single-page .factory-home-site-header__brand{color:' . $primary . ';font-size:20px;font-weight:900;letter-spacing:0;text-decoration:none}.factory-generated-properties-page .factory-home-site-header__nav,.factory-generated-contact-page .factory-home-site-header__nav,.factory-generated-property-single-page .factory-home-site-header__nav{display:flex;align-items:center;gap:26px}.factory-generated-properties-page .factory-home-site-header__nav a,.factory-generated-contact-page .factory-home-site-header__nav a,.factory-generated-property-single-page .factory-home-site-header__nav a{color:#10201d!important;font-size:14px;font-weight:800;text-decoration:none}.factory-generated-properties-page .factory-home-site-header__nav a:hover,.factory-generated-properties-page .factory-home-site-header__nav a:focus-visible,.factory-generated-contact-page .factory-home-site-header__nav a:hover,.factory-generated-contact-page .factory-home-site-header__nav a:focus-visible,.factory-generated-property-single-page .factory-home-site-header__nav a:hover,.factory-generated-property-single-page .factory-home-site-header__nav a:focus-visible{color:' . $primary . '!important}.factory-generated-properties-page .factory-listing-grid{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:24px!important}.factory-generated-properties-page .factory-property-card{height:100%;display:flex;flex-direction:column}.factory-generated-properties-page .factory-property-card>div:last-child{display:flex;flex:1;flex-direction:column}.factory-generated-properties-page .factory-property-card .factory-property-action{margin-top:auto}.factory-generated-contact-page .factory-contact-page__inner{max-width:920px;margin:0 auto}.factory-generated-contact-page .factory-contact-page__info-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-bottom:32px}.factory-generated-contact-page .factory-contact-page__panel{background:' . $surface . ';border:1px solid ' . $border . ';border-radius:20px;padding:22px}.factory-generated-contact-page .factory-contact-page__label,.factory-generated-contact-page .factory-contact-page__value,.factory-generated-footer a,.factory-generated-footer span,.factory-generated-footer strong{display:block}.factory-generated-contact-page .factory-contact-page__label{color:' . $primary . ';font-weight:800;margin-bottom:6px}.factory-generated-contact-page .factory-contact-page__actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.factory-generated-contact-page .factory-contact-page__panel a{color:' . $primary . ';font-weight:800;overflow-wrap:anywhere}@media(max-width:900px){.factory-generated-properties-page .factory-listing-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.factory-generated-contact-page .factory-contact-page__info-grid{grid-template-columns:1fr}}@media(max-width:620px){.factory-generated-properties-page .factory-home-site-header__inner,.factory-generated-contact-page .factory-home-site-header__inner,.factory-generated-property-single-page .factory-home-site-header__inner{min-height:auto;padding-top:18px;padding-bottom:18px;align-items:flex-start;flex-direction:column;gap:14px}.factory-generated-properties-page .factory-home-site-header__brand,.factory-generated-contact-page .factory-home-site-header__brand,.factory-generated-property-single-page .factory-home-site-header__brand{font-size:18px}.factory-generated-properties-page .factory-home-site-header__nav,.factory-generated-contact-page .factory-home-site-header__nav,.factory-generated-property-single-page .factory-home-site-header__nav{width:100%;justify-content:space-between;gap:12px}.factory-generated-properties-page .factory-listing-wrap{margin-top:26px!important;padding-left:18px!important;padding-right:18px!important}.factory-generated-properties-page .factory-listing-grid{grid-template-columns:1fr!important}.factory-generated-contact-page .factory-contact-page{padding-left:18px!important;padding-right:18px!important}.factory-generated-properties-page .factory-property-card>a:first-child,.factory-generated-properties-page .factory-property-card>a:first-child img{min-height:218px;height:218px}}';
 			$styles[] = '.factory-generated-home-page .site-title,.factory-generated-home-page .site-title a,.factory-generated-home-page .site-logo,.factory-generated-home-page .site-logo a,.factory-generated-home-page .site-logo__link,.factory-generated-home-page .site-branding a,.factory-generated-home-page .custom-logo-link,.factory-generated-properties-page .site-title,.factory-generated-properties-page .site-title a,.factory-generated-properties-page .site-logo,.factory-generated-properties-page .site-logo a,.factory-generated-properties-page .site-logo__link,.factory-generated-properties-page .site-branding a,.factory-generated-properties-page .custom-logo-link,.factory-generated-contact-page .site-title,.factory-generated-contact-page .site-title a,.factory-generated-contact-page .site-logo,.factory-generated-contact-page .site-logo a,.factory-generated-contact-page .site-logo__link,.factory-generated-contact-page .site-branding a,.factory-generated-contact-page .custom-logo-link,.factory-generated-property-single-page .site-title,.factory-generated-property-single-page .site-title a,.factory-generated-property-single-page .site-logo,.factory-generated-property-single-page .site-logo a,.factory-generated-property-single-page .site-logo__link,.factory-generated-property-single-page .site-branding a,.factory-generated-property-single-page .custom-logo-link{color:' . $primary . '!important;}';
 			$styles[] = '.factory-generated-home-page .main-navigation a,.factory-generated-home-page .menu a,.factory-generated-home-page nav a,.factory-generated-properties-page .main-navigation a,.factory-generated-properties-page .menu a,.factory-generated-properties-page nav a,.factory-generated-contact-page .main-navigation a,.factory-generated-contact-page .menu a,.factory-generated-contact-page nav a,.factory-generated-property-single-page .main-navigation a,.factory-generated-property-single-page .menu a,.factory-generated-property-single-page nav a{color:' . $primary . '!important;}';
 			$styles[] = '.factory-generated-home-page .main-navigation a:hover,.factory-generated-home-page .menu a:hover,.factory-generated-home-page nav a:hover,.factory-generated-home-page .current-menu-item > a,.factory-generated-properties-page .main-navigation a:hover,.factory-generated-properties-page .menu a:hover,.factory-generated-properties-page nav a:hover,.factory-generated-properties-page .current-menu-item > a,.factory-generated-contact-page .main-navigation a:hover,.factory-generated-contact-page .menu a:hover,.factory-generated-contact-page nav a:hover,.factory-generated-contact-page .current-menu-item > a,.factory-generated-property-single-page .main-navigation a:hover,.factory-generated-property-single-page .menu a:hover,.factory-generated-property-single-page nav a:hover,.factory-generated-property-single-page .current-menu-item > a{color:' . $accent . '!important;}';
@@ -1720,6 +1721,10 @@ class Factory_Render_Adapter {
 		ob_start();
 		?>
 
+		<?php if ( $is_property_archive ) : ?>
+			<?php echo $this->render_home_site_header( $blueprint, factory_rest_get_real_estate_public_brand( $blueprint ) ); ?>
+		<?php endif; ?>
+
 		<?php if ( '' === $query_key ) : ?>
 			<section class="factory-listing-wrap" style="max-width: 1160px; margin: 38px auto 34px; padding: 0 24px;">
 				<?php if ( $is_property_archive ) : ?>
@@ -1760,13 +1765,13 @@ class Factory_Render_Adapter {
 		<?php endif; ?>
 
 		<?php if ( $query->have_posts() ) : ?>
-			<div class="factory-listing-grid" style="display: grid; grid-template-columns: <?php echo $is_property_archive ? '1fr' : 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))'; ?>; gap: 24px;">
+			<div class="factory-listing-grid" style="display: grid; grid-template-columns: <?php echo $is_property_archive ? 'repeat(3, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))'; ?>; gap: 24px;">
 				<?php
 				while ( $query->have_posts() ) :
 					$query->the_post();
 
 					if ( $is_property_listing ) {
-						echo $this->render_property_card( get_the_ID(), $style_tokens, $is_property_archive ? 'row' : 'grid', $this->get_homepage_component_version( $blueprint, 'property-card' ) );
+						echo $this->render_property_card( get_the_ID(), $style_tokens, 'grid', $this->get_homepage_component_version( $blueprint, 'property-card' ) );
 						continue;
 					}
 					?>
@@ -2817,7 +2822,7 @@ class Factory_Render_Adapter {
 		return is_string( $page['content'] ?? null ) ? $page['content'] : '';
 	}
 
-	private function render_generated_footer( array $blueprint ): string {
+	public function render_generated_footer( array $blueprint ): string {
 		$style_tokens       = $this->get_site_style_tokens( $blueprint );
 		$brand              = factory_rest_get_real_estate_public_brand( $blueprint );
 		$footer_description = factory_rest_get_real_estate_footer_description( $blueprint );
@@ -2841,7 +2846,7 @@ class Factory_Render_Adapter {
 		return $html;
 	}
 
-	private function render_home_site_header( array $blueprint, string $brand ): string {
+	public function render_home_site_header( array $blueprint, string $brand ): string {
 		$version = $this->get_homepage_component_version( $blueprint, 'site-header' );
 		$html  = '<header class="factory-home-site-header" data-factory-component="site-header" data-factory-component-version="' . esc_attr( (string) $version ) . '">';
 		$html .= '<div class="factory-home-site-header__inner">';
@@ -3252,20 +3257,28 @@ class Factory_Render_Adapter {
 		$text         = $contact['text'] ?? '';
 		$phone        = $contact['phone'] ?? '';
 		$email        = $contact['email'] ?? '';
+		$phone_href   = preg_replace( '/[^0-9+]/', '', (string) $phone );
+		$email_href   = is_email( $email ) ? 'mailto:' . $email : '';
 		$cta_label    = $contact['cta_label'] ?? 'Browse properties';
 		$cta_url      = $this->resolve_frontend_url( $contact['cta_url'] ?? '', '/properties/' );
 
-		$html  = '<section class="factory-contact-page" style="background: ' . esc_attr( $background ) . '; margin: 0; padding: 58px 24px 44px; color: ' . esc_attr( $style_tokens['text'] ) . ';">';
-		$html .= '<div style="max-width: 920px; margin: 0 auto;">';
+		$html  = $this->render_home_site_header( $blueprint, factory_rest_get_real_estate_public_brand( $blueprint ) );
+		$html .= '<section class="factory-contact-page" style="background: ' . esc_attr( $background ) . '; margin: 0; padding: 58px 24px 44px; color: ' . esc_attr( $style_tokens['text'] ) . ';">';
+		$html .= '<div class="factory-contact-page__inner">';
 		$html .= '<span style="display: inline-flex; border-radius: 999px; background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $primary ) . '; padding: 8px 12px; font-size: 13px; font-weight: 900; margin-bottom: 18px;">Kyiv agency</span>';
 		$html .= '<h1 style="font-size: clamp(30px, 3.2vw, 44px); line-height: 1.08; margin: 0 0 18px; color: ' . esc_attr( $style_tokens['heading'] ) . ';">' . esc_html( $title ) . '</h1>';
 		$html .= '<p style="max-width: 680px; color: ' . esc_attr( $muted ) . '; font-size: 19px; line-height: 1.6; margin: 0 0 34px;">' . esc_html( $text ) . '</p>';
-		$html .= '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; margin-bottom: 32px;">';
-		$html .= '<div style="background: ' . esc_attr( $surface ) . '; border: 1px solid ' . esc_attr( $border ) . '; border-radius: 20px; padding: 22px;"><strong style="display: block; color: ' . esc_attr( $primary ) . '; margin-bottom: 6px;">Phone</strong><span>' . esc_html( $phone ) . '</span></div>';
-		$html .= '<div style="background: ' . esc_attr( $surface ) . '; border: 1px solid ' . esc_attr( $border ) . '; border-radius: 20px; padding: 22px;"><strong style="display: block; color: ' . esc_attr( $primary ) . '; margin-bottom: 6px;">Email</strong><span>' . esc_html( $email ) . '</span></div>';
+		$html .= '<div class="factory-contact-page__info-grid">';
+		$html .= '<div class="factory-contact-page__panel"><strong class="factory-contact-page__label">Phone</strong>' . ( '' !== $phone_href ? '<a class="factory-contact-page__value" href="tel:' . esc_attr( $phone_href ) . '">' . esc_html( $phone ) . '</a>' : '<span class="factory-contact-page__value">' . esc_html( $phone ) . '</span>' ) . '</div>';
+		$html .= '<div class="factory-contact-page__panel"><strong class="factory-contact-page__label">Email</strong>' . ( '' !== $email_href ? '<a class="factory-contact-page__value" href="' . esc_url( $email_href ) . '">' . esc_html( $email ) . '</a>' : '<span class="factory-contact-page__value">' . esc_html( $email ) . '</span>' ) . '</div>';
+		$html .= '<div class="factory-contact-page__panel"><strong class="factory-contact-page__label">Location</strong><span class="factory-contact-page__value">Kyiv, Ukraine</span></div>';
 		$html .= '</div>';
-		$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; border-radius: 999px; background: ' . esc_attr( $style_tokens['button'] ?: $accent ) . '; color: ' . esc_attr( $style_tokens['button_text'] ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';
-		$html .= '[factory_request_viewing]';
+		$html .= '<div class="factory-contact-page__actions">';
+		if ( '' !== $email_href ) {
+			$html .= '<a class="factory-button-link" href="' . esc_url( $email_href ) . '" style="display: inline-flex; align-items: center; border-radius: 999px; background: ' . esc_attr( $style_tokens['button'] ?: $accent ) . '; color: ' . esc_attr( $style_tokens['button_text'] ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">Email Kyiv Realty</a>';
+		}
+		$html .= '<a class="factory-button-link" href="' . esc_url( $cta_url ) . '" style="display: inline-flex; align-items: center; border-radius: 999px; background: ' . esc_attr( $surface ) . '; color: ' . esc_attr( $primary ) . '; border: 1px solid ' . esc_attr( $border ) . '; padding: 14px 20px; font-size: 15px; font-weight: 900; text-decoration: none;">' . esc_html( $cta_label ) . '</a>';
+		$html .= '</div>';
 		$html .= '</div>';
 		$html .= '</section>';
 		$html .= $this->render_generated_footer( $blueprint );
@@ -3819,10 +3832,14 @@ class Factory_Render_Adapter {
 		$slug    = $contact['slug'] ?? '';
 		$page    = $slug ? get_page_by_path( $slug ) : null;
 
-		if ( ! $page || false === strpos( $page->post_content, '[factory_request_viewing]' ) ) {
+		$has_contact_inquiry_cta = $page
+			&& false !== strpos( $page->post_content, 'factory-contact-page__actions' )
+			&& false !== strpos( $page->post_content, 'mailto:' );
+
+		if ( ! $has_contact_inquiry_cta ) {
 			return [
 				'status'  => 'error',
-				'message' => 'Request Viewing section missing from Contact page.',
+				'message' => 'Contact inquiry CTA missing from Contact page.',
 			];
 		}
 
@@ -3848,7 +3865,7 @@ class Factory_Render_Adapter {
 
 		return [
 			'status'  => 'ok',
-			'message' => 'Request Viewing fallback rendered on Contact page. JetFormBuilder is optional for this beta flow.',
+			'message' => 'Contact email inquiry CTA rendered on Contact page. JetFormBuilder is optional for this flow.',
 		];
 	}
 

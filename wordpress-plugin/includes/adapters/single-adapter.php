@@ -228,6 +228,8 @@ class Factory_Single_Adapter {
 
 	private function render_property_single( array $config, array $blueprint ): string {
 		$post_id       = get_the_ID();
+		$presentation  = new Factory_Render_Adapter();
+		$brand         = factory_rest_get_real_estate_public_brand( $blueprint );
 		$style_tokens  = $this->get_site_style_tokens( $blueprint );
 		$primary       = $style_tokens['primary'];
 		$accent        = $style_tokens['accent'];
@@ -287,6 +289,7 @@ class Factory_Single_Adapter {
 
 		ob_start();
 		?>
+		<?php echo $presentation->render_home_site_header( $blueprint, $brand ); ?>
 
 		<style>
 			.factory-property-gallery-trigger {
@@ -393,6 +396,7 @@ class Factory_Single_Adapter {
 		<main class="factory-single-wrap factory-property-single-wrap" style="max-width: 1180px; margin: 40px auto 36px; padding: 0 24px;">
 			<article <?php post_class( 'factory-single factory-property-single', $post_id ); ?>>
 				<header style="margin-bottom: 34px;">
+					<a href="<?php echo esc_url( home_url( '/properties/' ) ); ?>" style="display: inline-flex; color: <?php echo esc_attr( $primary ); ?>; font-size: 14px; font-weight: 900; margin-bottom: 18px; text-decoration: none;">Back to properties</a>
 					<?php if ( ! empty( $gallery_images ) ) : ?>
 						<div class="factory-property-hero-image" style="margin-bottom: 20px; border-radius: 28px; overflow: hidden; background: <?php echo esc_attr( $background ); ?>; box-shadow: 0 22px 52px rgba(15, 118, 110, 0.14);">
 							<button type="button" class="factory-property-gallery-trigger" data-factory-gallery-index="0" aria-label="<?php echo esc_attr( 'Open property image' ); ?>">
@@ -640,7 +644,7 @@ class Factory_Single_Adapter {
 				})();
 			</script>
 		<?php endif; ?>
-		<?php echo $this->render_generated_footer( $blueprint ); ?>
+		<?php echo $presentation->render_generated_footer( $blueprint ); ?>
 
 		<?php
 		return ob_get_clean();
@@ -679,26 +683,6 @@ class Factory_Single_Adapter {
 		}
 
 		return preg_match( '/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/', $value ) ? $value : $fallback;
-	}
-
-	private function render_generated_footer( array $blueprint ): string {
-		$style_tokens       = $this->get_site_style_tokens( $blueprint );
-		$brand              = factory_rest_get_real_estate_public_brand( $blueprint );
-		$footer_description = factory_rest_get_real_estate_footer_description( $blueprint );
-		$year               = gmdate( 'Y' );
-
-		$html  = '<footer class="factory-generated-footer" style="width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); background: ' . esc_attr( $style_tokens['heading'] ) . '; color: #fff; padding: 38px 24px 22px;">';
-		$html .= '<div style="max-width: 1120px; margin: 0 auto;">';
-		$html .= '<div style="display: grid; grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(150px, 0.75fr)); gap: 24px; align-items: start;">';
-		$html .= '<div><strong style="display: block; font-size: 22px; line-height: 1.2; margin-bottom: 10px; color: #fff;">' . esc_html( $brand ) . '</strong><p style="color: rgba(255,255,255,0.88); font-size: 14px; line-height: 1.6; margin: 0;">' . esc_html( $footer_description ) . '</p></div>';
-		$html .= '<div><strong style="display: block; color: ' . esc_attr( $style_tokens['accent'] ) . '; font-size: 13px; text-transform: uppercase; margin-bottom: 10px;">Pages</strong><a href="' . esc_url( home_url( '/' ) ) . '" style="display: block; color: rgba(255,255,255,0.94); text-decoration: none; margin-bottom: 7px;">Home</a><a href="' . esc_url( home_url( '/properties/' ) ) . '" style="display: block; color: rgba(255,255,255,0.94); text-decoration: none; margin-bottom: 7px;">Properties</a><a href="' . esc_url( home_url( '/contact/' ) ) . '" style="display: block; color: rgba(255,255,255,0.94); text-decoration: none;">Contact</a></div>';
-		$html .= '<div><strong style="display: block; color: ' . esc_attr( $style_tokens['accent'] ) . '; font-size: 13px; text-transform: uppercase; margin-bottom: 10px;">Services</strong><span style="display: block; color: rgba(255,255,255,0.9); margin-bottom: 7px;">Property search</span><span style="display: block; color: rgba(255,255,255,0.9); margin-bottom: 7px;">Request viewing</span><span style="display: block; color: rgba(255,255,255,0.9);">Contact agency</span></div>';
-		$html .= '</div>';
-		$html .= '<div style="border-top: 1px solid rgba(255,255,255,0.22); color: rgba(255,255,255,0.78); font-size: 13px; margin-top: 24px; padding-top: 16px;">&copy; ' . esc_html( $year ) . ' ' . esc_html( $brand ) . '.</div>';
-		$html .= '</div>';
-		$html .= '</footer>';
-
-		return $html;
 	}
 
 	private function get_property_meta_or_term( int $post_id, string $key ): string {
