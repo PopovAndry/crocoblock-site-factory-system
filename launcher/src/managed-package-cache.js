@@ -145,7 +145,7 @@ function createManagedDependencyInstallPlan(options) {
     throw error;
   }
 
-  const approvedSource = resolveApprovedDependencySource(dependency.slug);
+  const approvedSource = resolveApprovedDependencySource(dependency.slug, options.dependencySourceOptions);
   if (!approvedSource.exists) {
     const error = new Error("Approved dependency ZIP is missing for " + dependency.slug + ".");
     error.code = "approved_dependency_zip_missing";
@@ -161,6 +161,7 @@ function createManagedDependencyInstallPlan(options) {
     provider,
     key: dependency.slug,
     filename: approvedSource.filename,
+    source_mode: approvedSource.mode,
     byte_size: approvedSource.size
   };
 

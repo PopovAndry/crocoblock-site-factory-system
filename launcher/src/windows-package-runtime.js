@@ -4,32 +4,42 @@ const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const net = require("net");
-const os = require("os");
 const path = require("path");
-const { spawn, spawnSync } = require("child_process");
+const { spawnSync } = require("child_process");
+const {
+  openExternalUrl,
+  resolvePlatformDirectories
+} = require("./platform-runtime");
+const { collectSystemCheck } = require("./system-check");
 
 const PACKAGE_CONFIG_FILE = "launcher-config.json";
 const RUNTIME_STATE_FILE = "launcher-runtime.json";
 const LOG_FILE = "launcher.log";
 const DEFAULT_LAUNCHER_PORT = 3847;
 
-function defaultDataRoot(environment) {
-  const env = environment || process.env;
-  return path.join(env.LOCALAPPDATA || os.homedir(), "Crocoblock Site Factory");
+function defaultDataRoot(environment, options) {
+  return resolvePlatformDirectories(Object.assign({}, options || {}, {
+    environment: environment || process.env
+  })).applicationData;
 }
 
-function defaultProjectsRoot(environment) {
-  const env = environment || process.env;
-  return path.join(env.USERPROFILE || os.homedir(), "Documents", "Factory Projects");
+function defaultProjectsRoot(environment, options) {
+  return resolvePlatformDirectories(Object.assign({}, options || {}, {
+    environment: environment || process.env
+  })).projects;
 }
 
 function resolveRuntimePaths(options) {
-  const dataRoot = path.resolve(options && options.dataRoot || defaultDataRoot(options && options.environment));
+  const platformDirectories = resolvePlatformDirectories(options);
+  const dataRoot = path.resolve(options && options.dataRoot || platformDirectories.applicationData);
   return {
     dataRoot,
     configDirectory: path.join(dataRoot, "config"),
-    logDirectory: path.join(dataRoot, "logs"),
+    cacheDirectory: options && options.cacheDirectory || options && options.dataRoot && path.join(dataRoot, "cache") || platformDirectories.cache,
+    logDirectory: options && options.logDirectory || options && options.dataRoot && path.join(dataRoot, "logs") || platformDirectories.logs,
     runtimeDirectory: path.join(dataRoot, "runtime"),
+    packagedResourceDirectory: platformDirectories.packagedResources,
+    developmentResourceDirectory: platformDirectories.developmentResources,
     configPath: path.join(dataRoot, "config", PACKAGE_CONFIG_FILE),
     logPath: path.join(dataRoot, "logs", LOG_FILE),
     runtimeStatePath: path.join(dataRoot, "runtime", RUNTIME_STATE_FILE)
@@ -85,7 +95,7 @@ function loadPackageConfig(runtimePaths, options) {
   const requestedPort = options && options.port;
   return {
     schema_version: 1,
-    projects_root: path.resolve(requestedProjectsRoot || stored.projects_root || defaultProjectsRoot(options && options.environment)),
+    projects_root: path.resolve(requestedProjectsRoot || stored.projects_root || defaultProjectsRoot(options && options.environment, options)),
     preferred_port: normalizePort(requestedPort || stored.preferred_port || DEFAULT_LAUNCHER_PORT)
   };
 }
@@ -191,9 +201,28 @@ async function collectRuntimeDiagnostics(config, runtimePaths, options) {
       : { label: "Launcher port", status: "fallback", message: "Preferred Launcher port is in use. A local fallback port will be used." }
   ];
   const attentionRequired = diagnostics.some((diagnostic) => ["missing", "stopped", "unavailable"].includes(diagnostic.status));
+  const systemCheck = collectSystemCheck({
+    platform: options && options.platform,
+    arch: options && options.arch,
+    applicationDataDirectory: runtimePaths.dataRoot,
+    projectsDirectory: config.projects_root,
+    ensureWritableDirectory: options && options.ensureWritableDirectory || ensureWritableDirectory,
+    statfsSync: options && options.statfsSync,
+    totalMemory: options && options.totalMemory,
+    spawnSync: options && options.spawnSync,
+    dependencySources: options && options.dependencySources,
+    dependencySourceOptions: {
+      environment: options && options.environment,
+      packagedResourceDirectory: runtimePaths.packagedResourceDirectory,
+      applicationDataDirectory: runtimePaths.dataRoot,
+      developmentResourceDirectory: runtimePaths.developmentResourceDirectory
+    },
+    initializationFailure: options && options.initializationFailure
+  });
   return {
     diagnostics,
     listeningPort: portAvailability.port,
+    systemCheck,
     summary: attentionRequired ? "Some local services need attention." : "Runtime checks completed."
   };
 }
@@ -253,14 +282,10 @@ function requestRuntimeShutdown(state, requestImplementation) {
   });
 }
 
-function openBrowser(url, spawnImplementation) {
-  const spawnBrowser = spawnImplementation || spawn;
-  const child = spawnBrowser("cmd", ["/d", "/s", "/c", "start", "", url], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true
-  });
-  child.unref();
+function openBrowser(url, spawnImplementation, options) {
+  return openExternalUrl(url, Object.assign({}, options || {}, {
+    spawn: spawnImplementation
+  }));
 }
 
 module.exports = {

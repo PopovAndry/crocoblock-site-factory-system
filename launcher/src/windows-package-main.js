@@ -82,7 +82,14 @@ async function startPackagedLauncher(options) {
     projectsRoot: config.projects_root,
     packagedRuntime: {
       summary: runtimeDiagnostics.summary,
-      diagnostics: runtimeDiagnostics.diagnostics
+      diagnostics: runtimeDiagnostics.diagnostics,
+      systemCheck: runtimeDiagnostics.systemCheck
+    },
+    dependencySourceOptions: {
+      environment: options && options.environment,
+      packagedResourceDirectory: runtimePaths.packagedResourceDirectory,
+      applicationDataDirectory: runtimePaths.dataRoot,
+      developmentResourceDirectory: runtimePaths.developmentResourceDirectory
     },
     skipRestoreReconciliation: true
   });
@@ -100,7 +107,7 @@ async function startPackagedLauncher(options) {
 
   const url = "http://" + details.host + ":" + String(details.port);
   if (!options || options.openBrowser !== false) {
-    openBrowser(url, options && options.spawn);
+    openBrowser(url, options && options.spawn, options);
   }
 
   return {

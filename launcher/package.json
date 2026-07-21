@@ -1,0 +1,18 @@
+{
+  "name": "crocoblock-site-factory-launcher",
+  "version": "0.1.0",
+  "private": true,
+  "factoryDesktop": {
+    "applicationName": "Crocoblock Site Factory",
+    "bundleIdentifier": "com.crocoblock.sitefactory"
+  },
+  "scripts": {
+    "validate:mac-package": "node ../scripts/validate-macos-package-config.js",
+    "package:mac:arm64": "node ../scripts/build-macos-launcher-package.js --arch arm64 --mode evaluation",
+    "package:mac:x64": "node ../scripts/build-macos-launcher-package.js --arch x64 --mode evaluation",
+    "package:mac": "npm run package:mac:arm64 && npm run package:mac:x64",
+    "package:mac:arm64:unsigned-engineering": "node ../scripts/build-macos-launcher-package.js --arch arm64 --mode unsigned-engineering",
+    "package:mac:x64:unsigned-engineering": "node ../scripts/build-macos-launcher-package.js --arch x64 --mode unsigned-engineering",
+    "verify:mac-package": "node ../scripts/verify-macos-launcher-package.js"
+  }
+}

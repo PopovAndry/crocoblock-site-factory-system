@@ -136,6 +136,8 @@ test("packaged Launcher serves a path-safe first screen and shuts down through i
     const projects = await requestText(runtime.url + "/api/projects");
     assert.equal(home.status, 200);
     assert.equal(home.body.includes(projectsRoot), false);
+    assert.equal(home.body.includes("System Check"), true);
+    assert.equal(home.body.includes("Recheck"), true);
     assert.equal(home.body.includes("Factory runtime"), true);
     assert.equal(projects.body.includes(projectsRoot), false);
     assert.equal(fs.readFileSync(projectPath, "utf8"), before);

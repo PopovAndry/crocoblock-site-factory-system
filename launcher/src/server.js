@@ -183,6 +183,42 @@ function renderHomePage(config) {
   const cspNonce = config.cspNonce || "";
   const packagedRuntime = config.packagedRuntime || null;
   const projectsRootLabel = packagedRuntime ? "Factory-managed project location" : escapeHtml(config.projectsRoot);
+  const systemCheck = packagedRuntime && packagedRuntime.systemCheck;
+  const systemCheckMarkup = systemCheck && Array.isArray(systemCheck.checks)
+    ? (() => {
+      const actionable = systemCheck.checks.filter((check) => check.state !== "PASS");
+      const visibleChecks = actionable.length ? actionable : [{
+        id: "ready",
+        label: "Readiness",
+        state: "PASS",
+        message: "All required system checks passed."
+      }];
+      const actions = systemCheck.checks
+        .filter((check) => check.action && check.action.url)
+        .map((check) => "          <a class=\"button button-secondary\" href=\"" + escapeHtml(check.action.url) + "\" target=\"_blank\" rel=\"noreferrer\">" + escapeHtml(check.action.label) + "</a>")
+        .join("\n");
+      return [
+        "    <section class=\"system-check\" id=\"system-check\" data-state=\"" + escapeHtml(systemCheck.state) + "\" aria-labelledby=\"system-check-title\">",
+        "      <div class=\"system-check__summary\">",
+        "        <div><p class=\"section-kicker\">System Check</p><h2 id=\"system-check-title\">" + escapeHtml(systemCheck.title) + "</h2><p>" + escapeHtml(systemCheck.message) + "</p></div>",
+        "        <span class=\"system-check__state\">" + escapeHtml(systemCheck.state) + "</span>",
+        "      </div>",
+        "      <ul class=\"system-check__actions\">",
+        visibleChecks.map((check) => "        <li data-state=\"" + escapeHtml(check.state) + "\"><strong>" + escapeHtml(check.label) + "</strong><span>" + escapeHtml(check.message) + "</span></li>").join("\n"),
+        "      </ul>",
+        "      <div class=\"system-check__buttons\">",
+        actions,
+        "        <a class=\"button\" href=\"" + escapeHtml(systemCheck.recheckPath || "/") + "\">Recheck</a>",
+        "      </div>",
+        systemCheck.checks.some((check) => check.id === "docker_application" && check.state !== "PASS")
+          ? "      <p class=\"system-check__note\">System permission prompts may appear during Docker Desktop installation. " + escapeHtml(systemCheck.dockerLicensingNote || "") + "</p>"
+          : "",
+        "      <details class=\"system-check__details\"><summary>Technical details</summary><dl>",
+        systemCheck.checks.map((check) => "        <div><dt>" + escapeHtml(check.label) + "</dt><dd>" + escapeHtml(check.state) + "</dd></div>").join("\n"),
+        "      </dl></details>",
+        "    </section>"
+      ].join("\n");
+    })() : "";
   const runtimeDiagnosticsMarkup = packagedRuntime && Array.isArray(packagedRuntime.diagnostics)
     ? [
       "          <section class=\"technical-section runtime-diagnostics\">",
@@ -216,11 +252,12 @@ function renderHomePage(config) {
     "      </a>",
     "      <nav class=\"product-nav\" aria-label=\"Product navigation\">",
     "        <a href=\"#projects\">Projects</a>",
-    "        <a href=\"#workspace\">Workspace</a>",
+    systemCheckMarkup ? "        <a href=\"#system-check\">System Check</a>" : "        <a href=\"#workspace\">Workspace</a>",
     "        <a href=\"#technical-details\">Technical details</a>",
     "      </nav>",
     "      <button type=\"button\" class=\"icon-button\" id=\"theme-toggle\" aria-label=\"Switch color theme\" aria-pressed=\"false\"><span aria-hidden=\"true\">◐</span><span id=\"theme-toggle-label\">Dark mode</span></button>",
     "    </header>",
+    systemCheckMarkup,
     "    <section class=\"project-hero\" id=\"workspace\" aria-labelledby=\"selected-project-name\">",
     "      <div class=\"project-hero__content\">",
     "        <p class=\"section-kicker\">Current project</p>",
@@ -1075,7 +1112,7 @@ function createLauncherServer(options) {
       if (request.method === "GET" && requestUrl.pathname === "/api/dependency-sources") {
         sendJson(response, 200, {
           ok: true,
-          sources: listApprovedDependencySources()
+          sources: listApprovedDependencySources(options.dependencySourceOptions)
         });
         return;
       }
@@ -1370,7 +1407,8 @@ function createLauncherServer(options) {
         const result = createManagedDependencyInstallPlan({
           slug,
           dependency: payload.dependency,
-          projectsRoot
+          projectsRoot,
+          dependencySourceOptions: options.dependencySourceOptions
         });
 
         sendJson(response, 200, {
@@ -1453,7 +1491,8 @@ function createLauncherServer(options) {
         const planResult = createManagedDependencyInstallPlan({
           slug,
           dependency: payload.dependency,
-          projectsRoot
+          projectsRoot,
+          dependencySourceOptions: options.dependencySourceOptions
         });
 
         const operationResult = await runProjectOperation({

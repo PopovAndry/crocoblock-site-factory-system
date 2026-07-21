@@ -29,6 +29,7 @@ test("Windows development package contains only packaged runtime files and no de
 
   assert.equal(fs.existsSync(path.join(result.packageRoot, "FactoryLauncher.exe")), true);
   assert.equal(fs.existsSync(path.join(result.packageRoot, "app", "launcher", "src", "windows-package-main.js")), true);
+  assert.equal(fs.existsSync(path.join(result.packageRoot, "app", "launcher", "package.json")), true);
   assert.equal(fs.existsSync(path.join(result.packageRoot, "installer", "install.cmd")), true);
   assert.equal(fs.existsSync(path.join(result.packageRoot, "installer", "uninstall.cmd")), true);
   assert.equal(fs.existsSync(path.join(result.packageRoot, "app", "launcher", "src", "cli.js")), false);

@@ -190,6 +190,28 @@ function hardenWindowsCredentialPath(filePath, options) {
   return verifyWindowsCredentialAcl(filePath, currentUserSid, options);
 }
 
+function verifyPosixCredentialPermissions(filePath, expectedDirectory, options) {
+  const statSync = options && options.statSync ? options.statSync : fs.statSync;
+  let stats;
+  try {
+    stats = statSync(filePath);
+  } catch (error) {
+    throw createAgentCredentialError(
+      "agent_signed_posix_permissions_verification_failed",
+      "Credential permissions could not be verified."
+    );
+  }
+  const actualMode = Number(stats.mode) & 0o777;
+  const expectedMode = expectedDirectory ? 0o700 : 0o600;
+  if (Boolean(stats.isDirectory()) !== Boolean(expectedDirectory) || actualMode !== expectedMode) {
+    throw createAgentCredentialError(
+      "agent_signed_posix_permissions_verification_failed",
+      "Credential permissions are not owner-only."
+    );
+  }
+  return { mode: actualMode, type: expectedDirectory ? "directory" : "file" };
+}
+
 function hardenCredentialPath(filePath, options) {
   const platform = options && options.platform ? options.platform : process.platform;
   if (platform === "win32") {
@@ -199,11 +221,15 @@ function hardenCredentialPath(filePath, options) {
   try {
     const statSync = options && options.statSync ? options.statSync : fs.statSync;
     const chmodSync = options && options.chmodSync ? options.chmodSync : fs.chmodSync;
-    chmodSync(filePath, statSync(filePath).isDirectory() ? 0o700 : 0o600);
+    const isDirectory = statSync(filePath).isDirectory();
+    chmodSync(filePath, isDirectory ? 0o700 : 0o600);
+    return verifyPosixCredentialPermissions(filePath, isDirectory, options);
   } catch (error) {
+    if (error && error.code === "agent_signed_posix_permissions_verification_failed") {
+      throw error;
+    }
     throw createAgentCredentialError("agent_signed_acl_apply_failed", "Credential permissions could not be restricted.");
   }
-  return null;
 }
 
 function hardenAgentSecretContainer(filePath, options) {
@@ -463,6 +489,7 @@ module.exports = {
   agentAuthSecretPath,
   agentAuthRotationStatePath,
   hardenCredentialPath,
+  verifyPosixCredentialPermissions,
   parseWhoamiCsvSid,
   resolveCurrentWindowsUserSid,
   ensureAgentSigningCredential,

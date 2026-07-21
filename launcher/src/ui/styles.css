@@ -128,6 +128,123 @@ textarea {
   border-radius: var(--radius-md);
 }
 
+.system-check {
+  margin-top: 18px;
+  padding: 22px 24px;
+  border-top: 3px solid var(--success);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-solid);
+}
+
+.system-check[data-state="ACTION_REQUIRED"],
+.system-check[data-state="WARNING"] {
+  border-top-color: var(--warning);
+}
+
+.system-check[data-state="ERROR"],
+.system-check[data-state="UNSUPPORTED"] {
+  border-top-color: var(--danger);
+}
+
+.system-check__summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.system-check__summary h2,
+.system-check__summary p {
+  margin: 0;
+}
+
+.system-check__summary h2 {
+  color: var(--text-strong);
+  font-size: 24px;
+}
+
+.system-check__summary p {
+  margin-top: 5px;
+  color: var(--muted);
+}
+
+.system-check__state {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.system-check__actions {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.system-check__actions li {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.32fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--success);
+  background: var(--surface-soft);
+}
+
+.system-check__actions li[data-state="ACTION_REQUIRED"],
+.system-check__actions li[data-state="WARNING"] {
+  border-left-color: var(--warning);
+}
+
+.system-check__actions li[data-state="ERROR"],
+.system-check__actions li[data-state="UNSUPPORTED"] {
+  border-left-color: var(--danger);
+}
+
+.system-check__actions span,
+.system-check__note {
+  color: var(--muted);
+}
+
+.system-check__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.system-check__note {
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+.system-check__details {
+  margin-top: 15px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.system-check__details summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.system-check__details dl {
+  display: grid;
+  gap: 5px;
+}
+
+.system-check__details dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.system-check__details dd {
+  margin: 0;
+}
+
 .product-brand {
   display: inline-flex;
   align-items: center;
@@ -950,6 +1067,20 @@ button.project-card {
   .product-bar {
     padding: 9px 10px;
     border-radius: 15px;
+  }
+
+  .system-check {
+    margin-top: 12px;
+    padding: 18px;
+  }
+
+  .system-check__summary,
+  .system-check__actions li {
+    grid-template-columns: 1fr;
+  }
+
+  .system-check__summary {
+    display: grid;
   }
 
   .icon-button #theme-toggle-label {

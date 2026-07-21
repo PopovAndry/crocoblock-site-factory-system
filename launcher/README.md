@@ -35,6 +35,28 @@ The generated archive contains `installer\install.cmd`, a Start menu shortcut he
 
 This development package does not install or configure Docker, WordPress, databases, plugins, or dependencies. On launch it presents safe status labels for Docker availability, project storage, application-data storage, and the Launcher port. The package runs the copied executable and packaged application files, not the source checkout.
 
+## macOS evaluation package foundation
+
+The Launcher keeps its existing Node sidecar architecture. macOS arm64 and x64
+targets, `.app`/`.dmg` layout, hardened-runtime signing hooks, notarization,
+stapling, and Gatekeeper verification commands are configured in
+`launcher/package.json` and `launcher/macos/package-config.json`.
+
+On a Mac or macOS CI runner:
+
+```sh
+cd launcher
+npm run validate:mac-package
+npm run package:mac:arm64
+npm run package:mac:x64
+```
+
+Evaluation builds require a Developer ID identity in the keychain, an external
+notarytool keychain profile, and the approved `.icns` icon. The explicit
+`unsigned-engineering` scripts are internal-only and cannot produce an artifact
+named as a CEO evaluation build. No Apple credentials or proprietary package
+archives belong in this repository.
+
 What this does today:
 - writes `factory-project.json`
 - writes `.env`

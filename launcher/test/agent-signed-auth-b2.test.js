@@ -211,15 +211,17 @@ test("non-Windows hardening keeps chmod-based behavior", () => {
   const filePath = path.join(projectsRoot(), "credential.json");
   fs.writeFileSync(filePath, "{}\n", "utf8");
   const chmodCalls = [];
+  let hardened = false;
 
   hardenCredentialPath(filePath, {
     platform: "linux",
     statSync(target) {
       assert.equal(target, filePath);
-      return { isDirectory: () => false };
+      return { isDirectory: () => false, mode: hardened ? 0o100600 : 0o100644 };
     },
     chmodSync(target, mode) {
       chmodCalls.push({ target, mode });
+      hardened = true;
     }
   });
 

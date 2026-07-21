@@ -17,6 +17,10 @@ function copyPackageSources(repositoryRoot, packageRoot, nodeExecutable) {
       return path.basename(sourcePath) !== "cli.js";
     }
   });
+  fs.copyFileSync(
+    path.join(repositoryRoot, "launcher", "package.json"),
+    path.join(packageRoot, "app", "launcher", "package.json")
+  );
   fs.cpSync(installerSource, installerDestination, { recursive: true });
   fs.copyFileSync(nodeExecutable, path.join(packageRoot, "FactoryLauncher.exe"));
 }

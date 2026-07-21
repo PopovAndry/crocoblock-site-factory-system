@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "version_source": "launcher/package.json",
+  "identity_source": "launcher/package.json#factoryDesktop",
+  "targets": ["arm64", "x64"],
+  "artifacts": ["app", "dmg"],
+  "entry": "launcher/src/macos-package-main.js",
+  "icon_path": "launcher/macos/assets/CrocoblockSiteFactory.icns",
+  "hardened_runtime": true,
+  "entitlements_path": "launcher/macos/entitlements.plist",
+  "release": {
+    "signing_required": true,
+    "notarization_required": true,
+    "stapling_required": true,
+    "gatekeeper_verification_required": true
+  },
+  "unsigned_engineering_mode": "unsigned-engineering"
+}
