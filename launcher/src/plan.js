@@ -230,7 +230,9 @@ async function planProject(options) {
   const estimatedInputTokens = estimateInputTokens(prompt);
   const estimatedOutputTokens = estimateOutputTokens(modelProfile);
   const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens;
-  const promptPersonalization = derivePromptPersonalization(prompt);
+  const promptPersonalization = options.structuredPersonalization && typeof options.structuredPersonalization === "object"
+    ? JSON.parse(JSON.stringify(options.structuredPersonalization))
+    : derivePromptPersonalization(prompt);
   const appliedFieldKeys = summarizeAppliedFieldKeys(promptPersonalization);
   const context = buildPlanningContextFromPersonalization(promptPersonalization);
   const results = {};

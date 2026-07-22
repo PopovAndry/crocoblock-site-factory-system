@@ -134,6 +134,10 @@ function defaultGeneratedSiteMetadata() {
   };
 }
 
+function defaultCreateWebsiteMetadata() {
+  return null;
+}
+
 function ensureDirectory(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -233,6 +237,7 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
     ai: defaultAiMetadata(),
     generation: defaultGenerationMetadata(),
     generated_site: defaultGeneratedSiteMetadata(),
+    create_website: defaultCreateWebsiteMetadata(),
     usage: {
       total_tokens: 0,
       total_cost_estimate: null
@@ -265,6 +270,9 @@ function toStoredProject(project) {
     ai: Object.assign(defaultAiMetadata(), project.ai || {}),
     generation: Object.assign(defaultGenerationMetadata(), project.generation || {}),
     generated_site: Object.assign(defaultGeneratedSiteMetadata(), project.generated_site || {}),
+    create_website: project.create_website && typeof project.create_website === "object"
+      ? JSON.parse(JSON.stringify(project.create_website))
+      : defaultCreateWebsiteMetadata(),
     usage: project.usage,
     created_at: project.created_at,
     updated_at: project.updated_at
@@ -289,6 +297,19 @@ function sanitizeProject(project) {
     ai: Object.assign(defaultAiMetadata(), stored.ai || {}),
     generation: Object.assign(defaultGenerationMetadata(), stored.generation || {}),
     generated_site: Object.assign(defaultGeneratedSiteMetadata(), stored.generated_site || {}),
+    create_website: stored.create_website && typeof stored.create_website === "object"
+      ? {
+        status: stored.create_website.status || null,
+        profile: stored.create_website.profile || null,
+        business: stored.create_website.business || {},
+        internal_stage: stored.create_website.internal_stage || null,
+        created_at: stored.create_website.created_at || null,
+        updated_at: stored.create_website.updated_at || null,
+        completed_at: stored.create_website.completed_at || null,
+        result: stored.create_website.result || null,
+        failure: stored.create_website.failure || null
+      }
+      : defaultCreateWebsiteMetadata(),
     usage: stored.usage,
     created_at: stored.created_at,
     updated_at: stored.updated_at
@@ -373,6 +394,7 @@ function readProjectRecord(runtimePath) {
     data.ai = Object.assign(defaultAiMetadata(), data.ai || {});
     data.generation = Object.assign(defaultGenerationMetadata(), data.generation || {});
     data.generated_site = Object.assign(defaultGeneratedSiteMetadata(), data.generated_site || {});
+    data.create_website = data.create_website && typeof data.create_website === "object" ? data.create_website : null;
     return sanitizeProject(data);
   } catch (error) {
     return {
@@ -413,6 +435,7 @@ function readProjectBySlug(slug, projectsRoot) {
   project.ai = Object.assign(defaultAiMetadata(), project.ai || {});
   project.generation = Object.assign(defaultGenerationMetadata(), project.generation || {});
   project.generated_site = Object.assign(defaultGeneratedSiteMetadata(), project.generated_site || {});
+  project.create_website = project.create_website && typeof project.create_website === "object" ? project.create_website : null;
 
   return {
     project,
@@ -460,6 +483,7 @@ module.exports = {
   slugifyProjectName,
   defaultAiMetadata,
   defaultGeneratedSiteMetadata,
+  defaultCreateWebsiteMetadata,
   defaultGenerationMetadata,
   writeJsonFile
 };

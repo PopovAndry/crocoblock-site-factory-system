@@ -35,7 +35,8 @@ const ALLOWED_OPERATION_TYPES = new Set([
   "structural_snapshot_create",
   "structural_restore_execute",
   "agent_auth_rotate",
-  "agent_auth_revoke"
+  "agent_auth_revoke",
+  "create_website"
 ]);
 
 function stableStringify(value) {

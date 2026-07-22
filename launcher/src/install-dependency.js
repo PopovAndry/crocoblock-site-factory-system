@@ -150,7 +150,7 @@ async function installDependency(options) {
     throw new Error("Launcher project must be provisioned before dependency install.");
   }
 
-  if ((projectState.project.agent && projectState.project.agent.status) !== "installed") {
+  if ((projectState.project.agent && projectState.project.agent.status) !== "installed" && options.allowBeforeAgent !== true) {
     throw new Error("Site Factory Agent must be installed before dependency install.");
   }
 
@@ -188,9 +188,27 @@ async function installDependency(options) {
     warnings
   );
 
-  const dependencyStatus = await fetchDependencyStatus(projectState, warnings);
-  const summary = dependencyStatus.summary;
-  const payload = dependencyStatus.payload;
+  const agentInstalled = projectState.project.agent && projectState.project.agent.status === "installed";
+  const dependencyStatus = agentInstalled ? await fetchDependencyStatus(projectState, warnings) : null;
+  const summary = dependencyStatus ? dependencyStatus.summary : {
+    site_type: "real_estate",
+    dependencies: [{
+      slug: dependency.slug,
+      name: dependency.label,
+      installed: installStatus.installed,
+      active: installStatus.active,
+      blocking: !installStatus.active,
+      notes: installStatus.active ? "Installed; signed Agent verification is pending." : "Installation did not activate the dependency."
+    }],
+    blockers: installStatus.active ? ["Site Factory Agent verification is pending."] : [dependency.label + ": installation is not active."],
+    can_generate: false,
+    legal_handoff_required: false
+  };
+  const payload = dependencyStatus ? dependencyStatus.payload : {
+    status: "pending_agent_verification",
+    code: "dependency_verification_pending",
+    site_type: "real_estate"
+  };
 
   const proof = {
     proof_id: proofId,
@@ -210,6 +228,7 @@ async function installDependency(options) {
     blockers_after: summary.blockers,
     can_generate_after: summary.can_generate,
     legal_source: "managed_trusted_catalog",
+    agent_verification_pending: !agentInstalled,
     applies_changes: true,
     mutation_scope: "launcher_project_runtime_only",
     warnings,

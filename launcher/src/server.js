@@ -26,6 +26,11 @@ const { installDependency } = require("./install-dependency");
 const { listApprovedDependencySources } = require("./dependency-sources");
 const { createManagedDependencyInstallPlan } = require("./managed-package-cache");
 const { getSetupStatus } = require("./setup");
+const { collectSystemCheck } = require("./system-check");
+const {
+  getCreateWebsiteStatus,
+  startCreateWebsite
+} = require("./create-website");
 const { planProject } = require("./plan");
 const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
 const { assertPlanningRunReady, generateProject, readRunFile } = require("./generate");
@@ -182,8 +187,13 @@ async function readJsonPayload(request, options) {
 function renderHomePage(config) {
   const cspNonce = config.cspNonce || "";
   const packagedRuntime = config.packagedRuntime || null;
-  const projectsRootLabel = packagedRuntime ? "Factory-managed project location" : escapeHtml(config.projectsRoot);
   const systemCheck = packagedRuntime && packagedRuntime.systemCheck;
+  const createWebsiteSystemCheck = config.createWebsiteSystemCheck || systemCheck || {
+    state: "ERROR",
+    title: "Action required",
+    message: "System Check is unavailable.",
+    checks: []
+  };
   const systemCheckMarkup = systemCheck && Array.isArray(systemCheck.checks)
     ? (() => {
       const actionable = systemCheck.checks.filter((check) => check.state !== "PASS");
@@ -278,19 +288,15 @@ function renderHomePage(config) {
     "        <label class=\"field-label\" for=\"generate-project-slug\">Current project</label>",
     "        <select name=\"slug\" id=\"generate-project-slug\" class=\"project-switcher\"></select>",
     "        <div id=\"project-list\" class=\"project-list project-list--navigation\"></div>",
-    "        <details class=\"secondary-disclosure\">",
-    "          <summary>Create project</summary>",
-    "          <form id=\"create-project-form\" class=\"project-form\">",
-    "            <label><span>Site name</span><input name=\"name\" type=\"text\" required placeholder=\"Kyiv Realty\"></label>",
-    "            <label><span>Project slug</span><input name=\"slug\" type=\"text\" required placeholder=\"kyiv-realty\" pattern=\"[a-z0-9]+(?:-[a-z0-9]+)*\"></label>",
-    "            <label><span>WordPress port</span><input name=\"port\" type=\"number\" min=\"1024\" max=\"65535\" value=\"8120\" required></label>",
-    "            <p class=\"project-note\">Real Estate project · " + projectsRootLabel + "</p>",
-    "            <button type=\"submit\" class=\"button\">Create project</button>",
-    "          </form>",
-    "          <div id=\"create-result\" class=\"result-box\" hidden></div>",
-    "        </details>",
+    "        <button type=\"button\" class=\"button create-website-entry\" id=\"create-website-button\"" + (["PASS", "WARNING"].includes(createWebsiteSystemCheck.state) ? "" : " disabled") + ">Create Website</button>",
+    "        <p class=\"project-note\" id=\"create-website-disabled-reason\">" + escapeHtml(["PASS", "WARNING"].includes(createWebsiteSystemCheck.state) ? "Real Estate · Existing design · English" : createWebsiteSystemCheck.message) + "</p>",
     "      </aside>",
     "      <div class=\"primary-workspace\">",
+    "        <section class=\"panel create-website-flow\" id=\"create-website-flow\" hidden aria-live=\"polite\">",
+    "          <div class=\"create-website-flow__header\"><div><p class=\"section-kicker\">Create Website</p><h2 id=\"create-website-title\">Choose website type</h2></div><button type=\"button\" class=\"icon-button\" id=\"create-website-close\" aria-label=\"Close Create Website\">×</button></div>",
+    "          <ol class=\"create-website-steps\" id=\"create-website-steps\"><li data-step=\"type\">Type</li><li data-step=\"details\">Details</li><li data-step=\"review\">Review</li><li data-step=\"progress\">Create</li></ol>",
+    "          <div id=\"create-website-content\"></div>",
+    "        </section>",
     "        <section class=\"capability-grid\" aria-label=\"Site actions\">",
     "          <section class=\"panel capability-card capability-card--generate\" id=\"generate-site\">",
     "            <div class=\"capability-card__icon\" aria-hidden=\"true\">✦</div>",
@@ -346,6 +352,7 @@ function renderHomePage(config) {
     "          <summary><span><span class=\"section-kicker\">Secondary</span><strong>Technical details &amp; setup</strong></span><span aria-hidden=\"true\">＋</span></summary>",
     "          <div class=\"technical-grid\">",
     "            <section class=\"technical-section\"><div class=\"panel-header\"><h3>Project setup</h3><p>Provision WordPress and prepare approved dependencies.</p></div><form id=\"setup-project-form\" class=\"project-form compact-form\"><label><span>Project</span><select name=\"slug\" id=\"setup-project-slug\"></select></label></form><div id=\"setup-status\" class=\"project-list\"></div><div id=\"setup-result\" class=\"result-box\" hidden></div></section>",
+    "            <section class=\"technical-section\"><div class=\"panel-header\"><h3>Legacy project scaffold</h3><p>Developer-only compatibility control.</p></div><form id=\"create-project-form\" class=\"project-form compact-form\"><label><span>Site name</span><input name=\"name\" type=\"text\" required></label><label><span>Project slug</span><input name=\"slug\" type=\"text\" required pattern=\"[a-z0-9]+(?:-[a-z0-9]+)*\"></label><label><span>WordPress port</span><input name=\"port\" type=\"number\" min=\"1024\" max=\"65535\" value=\"8120\" required></label><button type=\"submit\" class=\"button button-secondary\">Create scaffold</button></form><div id=\"create-result\" class=\"result-box\" hidden></div></section>",
     "            <section class=\"technical-section\"><div class=\"panel-header\"><h3>Read-only planning</h3><p>Prepare a diagnostic plan without changing the website.</p></div><form id=\"plan-project-form\" class=\"project-form\"><label><span>Project</span><select name=\"slug\" id=\"plan-project-slug\"></select></label><label><span>Prompt</span><textarea name=\"prompt\" rows=\"4\" required placeholder=\"Create a real estate site for Kyiv apartments\"></textarea></label><button type=\"submit\" class=\"button button-secondary\">Run read-only plan</button></form><div id=\"plan-result\" class=\"result-box\" hidden></div></section>",
     "            <section class=\"technical-section\"><div class=\"panel-header\"><h3>Project history</h3><p>Recent task status and detailed operation records.</p></div><div id=\"project-operations\" class=\"project-list\"></div><div id=\"latest-run\" class=\"project-list\"></div></section>",
     "            <section class=\"technical-section\"><div class=\"panel-header\"><h3>AI diagnostics</h3><p>Model and usage metadata for this local configuration.</p></div><div class=\"placeholder-grid\"><div><span>Mode</span><strong id=\"launcher-ai-mode\">mock</strong></div><div><span>Provider</span><strong id=\"launcher-ai-provider\">mock</strong></div><div><span>Model profile</span><strong id=\"launcher-ai-model\">balanced</strong></div><div><span>Key status</span><strong id=\"launcher-ai-key-status\">not_required</strong></div><div><span>Last estimate</span><strong id=\"launcher-ai-last-estimate\">Not recorded</strong></div><div><span>Total tokens</span><strong id=\"launcher-total-tokens\">0</strong></div></div></section>",
@@ -359,10 +366,16 @@ function renderHomePage(config) {
     "  <script nonce=\"" + escapeHtml(cspNonce) + "\">window.FactoryLauncherConfig = " + JSON.stringify({
       projectsRoot: packagedRuntime ? null : config.projectsRoot,
       packagedRuntime: Boolean(packagedRuntime),
-      sessionPath: "/api/security/session"
+      sessionPath: "/api/security/session",
+      createWebsiteSystemCheck: {
+        state: createWebsiteSystemCheck.state,
+        title: createWebsiteSystemCheck.title,
+        message: createWebsiteSystemCheck.message
+      }
     }) + ";</script>",
     "  <script src=\"/assets/project-summary-counts.js\"></script>",
     "  <script src=\"/assets/app.js\"></script>",
+    "  <script src=\"/assets/create-website-ui.js\"></script>",
     "</body>",
     "</html>"
   ].join("\n");
@@ -1034,6 +1047,26 @@ function createLauncherServer(options) {
     mutationRateLimitMax: options.mutationRateLimitMax,
     mutationRateLimitWindowMs: options.mutationRateLimitWindowMs
   });
+  const createWebsiteService = options.createWebsiteService || {
+    start: startCreateWebsite,
+    status: getCreateWebsiteStatus
+  };
+  const resolveCreateWebsiteSystemCheck = () => {
+    if (typeof options.systemCheckProvider === "function") {
+      return options.systemCheckProvider();
+    }
+    if (options.packagedRuntime && options.packagedRuntime.systemCheck) {
+      return options.packagedRuntime.systemCheck;
+    }
+    return collectSystemCheck({
+      applicationDataDirectory: projectsRoot,
+      projectsDirectory: projectsRoot,
+      ensureWritableDirectory(directory) {
+        fs.accessSync(directory, fs.constants.W_OK);
+      },
+      dependencySourceOptions: options.dependencySourceOptions
+    });
+  };
 
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url, "http://" + DEFAULT_LAUNCHER_HOST + ":" + String(port));
@@ -1050,7 +1083,8 @@ function createLauncherServer(options) {
         sendText(response, 200, renderHomePage({
           projectsRoot,
           cspNonce,
-          packagedRuntime: options.packagedRuntime
+          packagedRuntime: options.packagedRuntime,
+          createWebsiteSystemCheck: resolveCreateWebsiteSystemCheck()
         }), "text/html; charset=utf-8", {
           "Content-Security-Policy": [
             "default-src 'self'",
@@ -1080,6 +1114,11 @@ function createLauncherServer(options) {
 
       if (request.method === "GET" && requestUrl.pathname === "/assets/project-summary-counts.js") {
         serveAsset(response, "project-summary-counts.js");
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/assets/create-website-ui.js") {
+        serveAsset(response, "create-website-ui.js");
         return;
       }
 
@@ -1790,6 +1829,27 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && requestUrl.pathname === "/api/create-websites") {
+        const payload = await readJsonPayload(request);
+        const result = await createWebsiteService.start({
+          request: payload,
+          projectsRoot,
+          idempotencyKey: getRequestIdempotencyKey(request),
+          systemCheck: resolveCreateWebsiteSystemCheck(),
+          projectSlug: options.createWebsiteProjectSlug,
+          services: options.createWebsiteServices
+        });
+        sendJson(response, result.status === "ready" ? 200 : 202, result);
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/create-websites\/[^/]+$/.test(requestUrl.pathname)) {
+        const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+        const result = createWebsiteService.status({ slug, projectsRoot });
+        sendJson(response, 200, result);
+        return;
+      }
+
       if (request.method === "GET" && /^\/api\/projects\/[^/]+\/recovery\/status$/.test(requestUrl.pathname)) {
         try {
           const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
@@ -2366,6 +2426,7 @@ function createLauncherServer(options) {
     } catch (error) {
       const statusCode = error.statusCode || (request.method === "POST" && (
         requestUrl.pathname === "/api/projects" ||
+        requestUrl.pathname === "/api/create-websites" ||
         /^\/api\/projects\/[^/]+\/provision$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/install-agent$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/agent-auth\/rotate$/.test(requestUrl.pathname) ||
@@ -2410,7 +2471,9 @@ function createLauncherServer(options) {
         required_fields: isSecurityBoundary ? [] : (error.required_fields || []),
         proof_path: isSecurityBoundary ? null : (error.proofPath || null),
         blockers: isSecurityBoundary ? [] : (error.blockers || []),
-        rejected_fields: isSecurityBoundary ? [] : (error.rejected_fields || [])
+        rejected_fields: isSecurityBoundary ? [] : (error.rejected_fields || []),
+        field_errors: isSecurityBoundary ? {} : (error.field_errors || {}),
+        customer_action: isSecurityBoundary ? null : (error.customer_action || null)
       }, responseHeaders);
     }
   });

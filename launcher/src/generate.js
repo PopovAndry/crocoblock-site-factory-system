@@ -622,7 +622,10 @@ async function generateProject(options) {
       throw new Error("Latest planning run prompt is missing.");
     }
 
-    promptPersonalization = derivePromptPersonalization(prompt);
+    promptPersonalization = preconditions.runState.run.prompt_personalization
+      && typeof preconditions.runState.run.prompt_personalization === "object"
+      ? preconditions.runState.run.prompt_personalization
+      : derivePromptPersonalization(prompt);
     previousGenerateProof = readPreviousGenerateProof(projectState);
     beforeCounts = await readRuntimeCounts(projectState, proofId, warnings);
     const rerun = await rerunPlanningChain(projectState, prompt, promptPersonalization, proofId, warnings);

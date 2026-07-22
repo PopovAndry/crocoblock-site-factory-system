@@ -236,7 +236,9 @@ function buildPlanningContextFromPersonalization(personalization) {
       agency_name: clampText(fields.agency_name || "", 80),
       hero_title: clampText(fields.hero_title || "", 120),
       hero_subtitle: clampText(fields.hero_subtitle || "", 240),
-      hero_cta_text: clampText(fields.hero_cta_text || "", 60)
+      hero_cta_text: clampText(fields.hero_cta_text || "", 60),
+      phone: clampText(fields.phone || "", 60),
+      email: clampText(fields.email || "", 120)
     },
     style_context: {
       tone: clampText(designProfile.tone || "premium", 40),
@@ -246,6 +248,32 @@ function buildPlanningContextFromPersonalization(personalization) {
       source: "demo_pool",
       mode: "round_robin"
     }
+  };
+}
+
+function buildStructuredPersonalization(values) {
+  const agencyName = clampText(values && values.agency_name || "", 80);
+  const city = clampText(values && values.city || "", 80);
+  const phone = clampText(values && values.phone || "", 60);
+  const email = clampText(values && values.email || "", 120);
+  return {
+    source: "structured_create_request",
+    applies_changes: true,
+    provider_called: false,
+    fields: {
+      agency_name: agencyName,
+      city,
+      hero_title: buildHeroTitle(agencyName, city, "premium"),
+      hero_subtitle: buildHeroSubtitle(city, {}, "premium"),
+      hero_cta_text: buildHeroCtaText(city, {}),
+      phone,
+      email
+    },
+    design_profile: {
+      tone: "premium",
+      style_slug: "turquoise"
+    },
+    warnings: []
   };
 }
 
@@ -259,6 +287,7 @@ function summarizeAppliedFieldKeys(personalization) {
 
 module.exports = {
   buildPlanningContextFromPersonalization,
+  buildStructuredPersonalization,
   derivePromptPersonalization,
   summarizeAppliedFieldKeys
 };
