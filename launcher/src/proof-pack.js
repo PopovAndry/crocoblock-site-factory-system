@@ -11,6 +11,7 @@ const {
 } = require("./project-store");
 const { readStateStatus } = require("./state");
 const { getSiteStatus } = require("./site");
+const { collectRuntimeSourceFingerprint } = require("./source-fingerprint");
 
 const PROOF_PACK_SCHEMA = "factory_alpha_proof_pack";
 const PROOF_PACK_VERSION = 1;
@@ -661,6 +662,7 @@ async function generateProofPack(options) {
     project_id: projectState.project.project_id,
     wp_url: projectState.project.wp_url,
     generated_at: createdAt,
+    source_fingerprint: collectRuntimeSourceFingerprint(),
     current_state_summary: currentStateSummary,
     site_summary: siteSummary,
     proof_chain: proofChain,

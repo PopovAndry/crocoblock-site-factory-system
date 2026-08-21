@@ -761,7 +761,7 @@ async function executeFullCapture(context, options) {
           status: "same_project_compatible",
           blocking: false,
           blockers: [],
-          warnings: ["restore_execution_not_implemented"]
+          warnings: []
         },
         provenance: {
           source: "launcher_structural_snapshot_capture_20a3b",

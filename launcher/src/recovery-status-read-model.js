@@ -141,6 +141,11 @@ function sortByRelevantTime(left, right) {
   return String(right.operation_id || "").localeCompare(String(left.operation_id || ""));
 }
 
+function isSuccessfulVerifiedRestore(operation) {
+  return operation && operation.status === "succeeded"
+    && operation.result_summary && operation.result_summary.restore_verified === true;
+}
+
 function readOperationsReadOnly(runtimePath) {
   const operationsDirectory = getOperationsDirectory(runtimePath);
   const operations = [];
@@ -350,41 +355,57 @@ function resolveRestoreStatus(input) {
       return { restore_status: "unknown", recommended_action: "contact_support", warnings, blockers };
     }
   }
-  if (reconciliationOperation) {
+  const nonExpiredPlans = input.plans.filter((plan) => !plan.expired);
+  const newestActionablePlan = nonExpiredPlans
+    .filter((plan) => plan.readiness === "ready" || plan.readiness === "ready_with_emergency_confirmation")
+    .sort((left, right) => parseTime(right.created_at || right.expires_at) - parseTime(left.created_at || left.expires_at))[0] || null;
+  const latestRestoreOperation = operations.slice().sort(sortByRelevantTime)[0] || null;
+  const planIsNewer = newestActionablePlan && (
+    !latestRestoreOperation
+    || parseTime(newestActionablePlan.created_at || newestActionablePlan.expires_at)
+      > parseTime(latestRestoreOperation.completed_at || latestRestoreOperation.started_at || latestRestoreOperation.requested_at)
+  );
+
+  if (!planIsNewer && latestRestoreOperation && latestRestoreOperation.stage === "interrupted_recovery_required") {
     addIssue(warnings, "restore_reconciliation_required", WARNING_CODES);
     return { restore_status: "reconciliation_required", recommended_action: "resume_reconciliation", warnings, blockers };
   }
-  if (activeOperation && activeOperation.status === "interrupted") {
+  if (!planIsNewer && latestRestoreOperation && latestRestoreOperation.status === "interrupted") {
     addIssue(warnings, "restore_interrupted", WARNING_CODES);
     return { restore_status: "interrupted", recommended_action: "resume_reconciliation", warnings, blockers };
   }
-  if (activeOperation && (activeOperation.status === "requested" || activeOperation.status === "running")) {
+  if (!planIsNewer && latestRestoreOperation && (latestRestoreOperation.status === "requested" || latestRestoreOperation.status === "running")) {
     addIssue(warnings, "restore_running", WARNING_CODES);
     return { restore_status: "running", recommended_action: "review_restore", warnings, blockers };
   }
-  const nonExpiredPlans = input.plans.filter((plan) => !plan.expired);
-  const awaiting = nonExpiredPlans.find((plan) => plan.readiness === "ready_with_emergency_confirmation");
+  if (!planIsNewer && isSuccessfulVerifiedRestore(latestRestoreOperation)) {
+    addIssue(warnings, "restore_completed", WARNING_CODES);
+    return { restore_status: "completed", recommended_action: "none", warnings, blockers };
+  }
+  if (!planIsNewer && latestRestoreOperation && latestRestoreOperation.status === "failed") {
+    addIssue(warnings, "restore_failed", WARNING_CODES);
+    return { restore_status: "failed", recommended_action: "review_restore", warnings, blockers };
+  }
+  if (!planIsNewer && latestRestoreOperation && latestRestoreOperation.status === "succeeded") {
+    addIssue(warnings, "restore_failed", WARNING_CODES);
+    return { restore_status: "failed", recommended_action: "review_restore", warnings, blockers };
+  }
+  const awaiting = planIsNewer && newestActionablePlan.readiness === "ready_with_emergency_confirmation"
+    ? newestActionablePlan
+    : null;
   if (awaiting) {
     addIssue(warnings, "restore_awaiting_confirmation", WARNING_CODES);
     return { restore_status: "awaiting_confirmation", recommended_action: "review_restore", warnings, blockers };
   }
-  const ready = nonExpiredPlans.find((plan) => plan.readiness === "ready");
+  const ready = planIsNewer && newestActionablePlan.readiness === "ready"
+    ? newestActionablePlan
+    : null;
   if (ready) {
     addIssue(warnings, "restore_plan_ready", WARNING_CODES);
     return { restore_status: "plan_ready", recommended_action: "review_restore", warnings, blockers };
   }
   if (input.plans.some((plan) => plan.expired)) {
     addIssue(warnings, "expired_restore_plan_ignored", WARNING_CODES);
-  }
-  const latestFailed = operations.find((operation) => operation.status === "failed");
-  const latestSucceeded = operations.find((operation) => operation.status === "succeeded");
-  if (latestFailed && (!latestSucceeded || sortByRelevantTime(latestFailed, latestSucceeded) < 0)) {
-    addIssue(warnings, "restore_failed", WARNING_CODES);
-    return { restore_status: "failed", recommended_action: "review_restore", warnings, blockers };
-  }
-  if (latestSucceeded) {
-    addIssue(warnings, "restore_completed", WARNING_CODES);
-    return { restore_status: "completed", recommended_action: "none", warnings, blockers };
   }
   return { restore_status: "idle", recommended_action: "none", warnings, blockers };
 }

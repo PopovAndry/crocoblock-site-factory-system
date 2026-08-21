@@ -137,6 +137,7 @@ test("full capture runs through one coordinator operation and creates one verifi
   assert.equal(result.result.manifest.status, "verified");
   assert.equal(result.result.summary.restorable, true);
   assert.equal(toBrowserSafeSummary(result.result.manifest).restorable, true);
+  assert.deepEqual(result.result.manifest.restore_compatibility.warnings, []);
 });
 
 test("DB and filesystem artifacts share one snapshot ID and manifest", async () => {

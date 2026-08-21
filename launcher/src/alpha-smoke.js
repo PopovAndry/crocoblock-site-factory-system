@@ -2,7 +2,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
 const {
   assertSafeRuntimePath,
   readProjectBySlug,
@@ -12,6 +11,7 @@ const {
 const { refreshState } = require("./state");
 const { getSiteStatus } = require("./site");
 const { generateProofPack } = require("./proof-pack");
+const { collectRuntimeSourceFingerprint } = require("./source-fingerprint");
 
 const ALPHA_SMOKE_SCHEMA = "factory_alpha_smoke_summary";
 const ALPHA_SMOKE_VERSION = 1;
@@ -42,22 +42,6 @@ function asArray(value) {
 
 function uniqueStrings(values) {
   return Array.from(new Set(asArray(values).filter((value) => typeof value === "string" && value.trim()))).sort();
-}
-
-function getRepoRoot() {
-  return path.resolve(__dirname, "..", "..");
-}
-
-function readGitValue(args) {
-  try {
-    return execFileSync("git", args, {
-      cwd: getRepoRoot(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
-  } catch (error) {
-    return null;
-  }
 }
 
 function ensureRequirement(value) {
@@ -208,9 +192,10 @@ async function runAlphaSmoke(options) {
   const safeRuntimePath = assertSafeRuntimePath(projectState.runtimePath, projectsRoot);
   const createdAt = nowIso();
 
+  const sourceFingerprint = collectRuntimeSourceFingerprint();
   const repo = {
-    head: readGitValue(["rev-parse", "--short", "HEAD"]),
-    branch: readGitValue(["rev-parse", "--abbrev-ref", "HEAD"])
+    head: sourceFingerprint.head ? sourceFingerprint.head.slice(0, 7) : null,
+    branch: sourceFingerprint.branch
   };
 
   const stateRefreshResult = await refreshState({
@@ -247,6 +232,7 @@ async function runAlphaSmoke(options) {
     project_root: safeRuntimePath,
     wp_url: projectState.project.wp_url,
     repo,
+    source_fingerprint: sourceFingerprint,
     requirement,
     status: smokeStatus.status,
     exit_code_recommended: smokeStatus.exitCode,

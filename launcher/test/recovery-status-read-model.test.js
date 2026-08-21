@@ -279,6 +279,138 @@ test("valid non-expired ready restore plan", () => {
   assert.equal(result.recommended_action, "review_restore");
 });
 
+test("a later successful verified restore dominates an older still-valid plan", () => {
+  const projectsRoot = tempRoot();
+  createProject(projectsRoot, "completed-after-plan");
+  const result = evaluate(projectsRoot, "completed-after-plan", {
+    snapshots: [summary(1)],
+    plans: [{
+      plan_id: "restore-plan-2026-07-17t11-00-00-000z-complete",
+      project_slug: "completed-after-plan",
+      readiness: "ready",
+      created_at: "2026-07-17T11:00:00.000Z",
+      expired: false
+    }],
+    operations: [{
+      operation_id: "op-completed-after-plan",
+      operation_type: "structural_restore_execute",
+      project_slug: "completed-after-plan",
+      status: "succeeded",
+      completed_at: "2026-07-17T11:01:00.000Z",
+      result_summary: { restore_verified: true }
+    }]
+  });
+  assert.equal(result.restore_status, "completed");
+  assert.equal(result.recommended_action, "none");
+  assert.ok(result.warnings.some((warning) => warning.code === "restore_completed"));
+});
+
+test("a newer actionable restore plan remains ready after an older verified restore", () => {
+  const projectsRoot = tempRoot();
+  createProject(projectsRoot, "newer-plan-after-restore");
+  const result = evaluate(projectsRoot, "newer-plan-after-restore", {
+    snapshots: [summary(1)],
+    plans: [{
+      plan_id: "restore-plan-2026-07-17t11-02-00-000z-newer",
+      project_slug: "newer-plan-after-restore",
+      readiness: "ready",
+      created_at: "2026-07-17T11:02:00.000Z",
+      expired: false
+    }],
+    operations: [{
+      operation_id: "op-older-verified-restore",
+      operation_type: "structural_restore_execute",
+      project_slug: "newer-plan-after-restore",
+      status: "succeeded",
+      completed_at: "2026-07-17T11:01:00.000Z",
+      result_summary: { restore_verified: true }
+    }]
+  });
+  assert.equal(result.restore_status, "plan_ready");
+  assert.equal(result.recommended_action, "review_restore");
+});
+
+test("a later unverified successful restore does not complete an older plan", () => {
+  const projectsRoot = tempRoot();
+  createProject(projectsRoot, "unverified-after-plan");
+  const result = evaluate(projectsRoot, "unverified-after-plan", {
+    snapshots: [summary(1)],
+    plans: [{
+      plan_id: "restore-plan-2026-07-17t11-00-00-000z-unverified",
+      project_slug: "unverified-after-plan",
+      readiness: "ready",
+      created_at: "2026-07-17T11:00:00.000Z",
+      expired: false
+    }],
+    operations: [{
+      operation_id: "op-unverified-after-plan",
+      operation_type: "structural_restore_execute",
+      project_slug: "unverified-after-plan",
+      status: "succeeded",
+      completed_at: "2026-07-17T11:01:00.000Z",
+      result_summary: { restore_verified: false }
+    }]
+  });
+  assert.equal(result.restore_status, "failed");
+  assert.equal(result.recommended_action, "review_restore");
+  assert.ok(result.warnings.some((warning) => warning.code === "restore_failed"));
+});
+
+test("a later failed restore remains visible over an older verified restore", () => {
+  const projectsRoot = tempRoot();
+  createProject(projectsRoot, "failed-after-verified");
+  const result = evaluate(projectsRoot, "failed-after-verified", {
+    snapshots: [summary(1)],
+    operations: [
+      {
+        operation_id: "op-verified-first",
+        operation_type: "structural_restore_execute",
+        project_slug: "failed-after-verified",
+        status: "succeeded",
+        completed_at: "2026-07-17T11:01:00.000Z",
+        result_summary: { restore_verified: true }
+      },
+      {
+        operation_id: "op-failed-later",
+        operation_type: "structural_restore_execute",
+        project_slug: "failed-after-verified",
+        status: "failed",
+        completed_at: "2026-07-17T11:02:00.000Z"
+      }
+    ]
+  });
+  assert.equal(result.restore_status, "failed");
+  assert.equal(result.recommended_action, "review_restore");
+});
+
+test("a later reconciliation-required restore remains visible over verified success", () => {
+  const projectsRoot = tempRoot();
+  createProject(projectsRoot, "reconciliation-after-verified");
+  const result = evaluate(projectsRoot, "reconciliation-after-verified", {
+    snapshots: [summary(1)],
+    operations: [
+      {
+        operation_id: "op-verified-first",
+        operation_type: "structural_restore_execute",
+        project_slug: "reconciliation-after-verified",
+        status: "succeeded",
+        completed_at: "2026-07-17T11:01:00.000Z",
+        result_summary: { restore_verified: true }
+      },
+      {
+        operation_id: "op-reconciliation-later",
+        operation_type: "structural_restore_execute",
+        project_slug: "reconciliation-after-verified",
+        status: "failed",
+        stage: "interrupted_recovery_required",
+        completed_at: "2026-07-17T11:02:00.000Z"
+      }
+    ]
+  });
+  assert.equal(result.restore_status, "reconciliation_required");
+  assert.equal(result.recommended_action, "resume_reconciliation");
+});
+
 test("plan awaiting confirmation", () => {
   const projectsRoot = tempRoot();
   createProject(projectsRoot, "confirm-project");
@@ -305,7 +437,8 @@ for (const [name, operation, expectedStatus, expectedAction] of [
   ["interrupted restore", { operation_type: "structural_restore_execute", project_slug: "restore-project", status: "interrupted", requested_at: "2026-07-17T11:00:00.000Z" }, "interrupted", "resume_reconciliation"],
   ["reconciliation required", { operation_type: "structural_restore_execute", project_slug: "restore-project", status: "failed", stage: "interrupted_recovery_required", requested_at: "2026-07-17T11:00:00.000Z" }, "reconciliation_required", "resume_reconciliation"],
   ["failed restore", { operation_type: "structural_restore_execute", project_slug: "restore-project", status: "failed", requested_at: "2026-07-17T11:00:00.000Z" }, "failed", "review_restore"],
-  ["completed restore", { operation_type: "structural_restore_execute", project_slug: "restore-project", status: "succeeded", requested_at: "2026-07-17T11:00:00.000Z" }, "completed", "none"]
+  ["unverified successful restore", { operation_type: "structural_restore_execute", project_slug: "restore-project", status: "succeeded", requested_at: "2026-07-17T11:00:00.000Z" }, "failed", "review_restore"],
+  ["completed verified restore", { operation_type: "structural_restore_execute", project_slug: "restore-project", status: "succeeded", requested_at: "2026-07-17T11:00:00.000Z", result_summary: { restore_verified: true } }, "completed", "none"]
 ]) {
   test(name, () => {
     const projectsRoot = tempRoot();
