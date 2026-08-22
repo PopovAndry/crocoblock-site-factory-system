@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("node:child_process");
@@ -19,9 +20,11 @@ const AGENT_AUTH_SECRET_RELATIVE_PATH = path.join("secrets", "agent-auth.json");
 const AGENT_AUTH_ROTATION_RELATIVE_PATH = path.join("secrets", "agent-auth-rotation.json");
 const WINDOWS_SYSTEM_SID = "S-1-5-18";
 const WINDOWS_ADMINISTRATORS_SID = "S-1-5-32-544";
-const WINDOWS_USERS_SID = "S-1-5-32-545";
-const WINDOWS_AUTHENTICATED_USERS_SID = "S-1-5-11";
-const WINDOWS_EVERYONE_SID = "S-1-1-0";
+const WINDOWS_CANONICAL_DACL_FLAGS = "PAI";
+const WINDOWS_SDDL_SID_ALIASES = Object.freeze({
+  BA: WINDOWS_ADMINISTRATORS_SID,
+  SY: WINDOWS_SYSTEM_SID
+});
 
 function timestampIso() {
   return new Date().toISOString();
@@ -80,86 +83,142 @@ function parseWhoamiCsvSid(output) {
   return String(parts[parts.length - 1] || "").replace(/^"|"$/g, "").trim();
 }
 
-function resolveCurrentWindowsUserSid(options) {
-  if (options && options.currentUserSid) {
-    return String(options.currentUserSid);
-  }
-
-  const result = runWindowsAclCommand("whoami.exe", ["/user", "/fo", "csv", "/nh"], options);
-  const sid = parseWhoamiCsvSid(result.stdout);
-  if (!/^S-\d-\d+-.+/.test(sid)) {
-    throw createAgentCredentialError("agent_signed_acl_tool_unavailable", "Unable to resolve current Windows user SID.");
+function normalizeWindowsSid(value) {
+  const sid = String(value || "").trim().toUpperCase();
+  if (!/^S-\d+-\d+(?:-\d+)+$/.test(sid)) {
+    throw createAgentCredentialError("agent_signed_acl_verification_failed", "Credential ACL verification did not return valid data.");
   }
   return sid;
 }
 
-function readWindowsAclSummary(filePath, options) {
-  const script = [
-    "& {",
-    "param([string]$target)",
-    "$ErrorActionPreference = 'Stop';",
-    "$acl = Get-Acl -LiteralPath $target;",
-    "$access = @($acl.Access | ForEach-Object {",
-    "  $sid = $null;",
-    "  try { $sid = $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $sid = $_.IdentityReference.Value }",
-    "  [pscustomobject]@{ sid = $sid; rights = $_.FileSystemRights.ToString(); type = $_.AccessControlType.ToString(); inherited = $_.IsInherited }",
-    "});",
-    "$ownerSid = $acl.Owner;",
-    "try { $ownerSid = (New-Object System.Security.Principal.NTAccount($acl.Owner)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}",
-    "[pscustomobject]@{ protected = $acl.AreAccessRulesProtected; owner_sid = $ownerSid; access = $access } | ConvertTo-Json -Depth 5 -Compress",
-    "}"
-  ].join(" ");
-  const result = runWindowsAclCommand("powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-Command",
-    script,
-    filePath
-  ], options);
+function resolveCurrentWindowsUserSid(options) {
+  if (options && options.currentUserSid) {
+    return normalizeWindowsSid(options.currentUserSid);
+  }
 
+  const result = runWindowsAclCommand("whoami.exe", ["/user", "/fo", "csv", "/nh"], options);
+  const sid = parseWhoamiCsvSid(result.stdout);
+  if (!/^S-\d+-\d+(?:-\d+)+$/i.test(sid)) {
+    throw createAgentCredentialError("agent_signed_acl_tool_unavailable", "Unable to resolve current Windows user SID.");
+  }
+  return normalizeWindowsSid(sid);
+}
+
+function invalidWindowsAcl() {
+  return createAgentCredentialError(
+    "agent_signed_acl_verification_failed",
+    "Credential ACL verification did not return valid data."
+  );
+}
+
+function parseWindowsAclSddl(value, expectedDirectory) {
+  let record = String(value || "").replace(/^\uFEFF/, "");
+  if (record.endsWith("\r\n")) {
+    record = record.slice(0, -2);
+  } else if (record.endsWith("\n")) {
+    record = record.slice(0, -1);
+  }
+  if (!record || /\r(?!\n)/.test(record)) {
+    throw invalidWindowsAcl();
+  }
+  const lines = record.split(/\r\n|\n/);
+  if (lines.length !== 2 || !lines[0] || lines[0].startsWith("D:") || !lines[1].startsWith("D:")) {
+    throw invalidWindowsAcl();
+  }
+
+  const descriptor = lines[1];
+  const prefix = "D:" + WINDOWS_CANONICAL_DACL_FLAGS;
+  if (!descriptor.startsWith(prefix)) {
+    throw invalidWindowsAcl();
+  }
+  const access = [];
+  const expectedFlags = expectedDirectory ? "OICI" : "";
+  let cursor = prefix.length;
+  while (cursor < descriptor.length) {
+    if (descriptor[cursor] !== "(") {
+      throw invalidWindowsAcl();
+    }
+    const close = descriptor.indexOf(")", cursor + 1);
+    if (close === -1 || descriptor.slice(cursor + 1, close).includes("(")) {
+      throw invalidWindowsAcl();
+    }
+    const fields = descriptor.slice(cursor + 1, close).split(";");
+    if (fields.length !== 6 ||
+        fields[0] !== "A" ||
+        fields[1] !== expectedFlags ||
+        fields[2] !== "FA" ||
+        fields[3] !== "" ||
+        fields[4] !== "" ||
+        fields[5] === "") {
+      throw invalidWindowsAcl();
+    }
+    const sidToken = fields[5].toUpperCase();
+    const canonicalSid = WINDOWS_SDDL_SID_ALIASES[sidToken] || normalizeWindowsSid(sidToken);
+    access.push({
+      sid: canonicalSid,
+      rights: "FullControl",
+      type: "Allow",
+      inherited: false,
+      inheritance_flags: expectedFlags
+    });
+    cursor = close + 1;
+  }
+  if (access.length === 0) {
+    throw invalidWindowsAcl();
+  }
+  return {
+    protected: true,
+    dacl_flags: WINDOWS_CANONICAL_DACL_FLAGS,
+    type: expectedDirectory ? "directory" : "file",
+    access
+  };
+}
+
+function readWindowsAclSummary(filePath, expectedDirectory, options) {
+  const readFileSync = options && options.readFileSync ? options.readFileSync : fs.readFileSync;
+  const unlinkSync = options && options.unlinkSync ? options.unlinkSync : fs.unlinkSync;
+  const summaryPath = path.join(
+    path.dirname(filePath),
+    ".factory-acl-" + process.pid + "-" + crypto.randomBytes(8).toString("hex") + ".txt"
+  );
   try {
-    return JSON.parse(result.stdout);
-  } catch (error) {
-    throw createAgentCredentialError("agent_signed_acl_verification_failed", "Credential ACL verification did not return valid data.");
+    try {
+      runWindowsAclCommand("icacls.exe", [filePath, "/save", summaryPath, "/c"], options);
+    } catch (error) {
+      throw invalidWindowsAcl();
+    }
+    let record;
+    try {
+      record = readFileSync(summaryPath).toString("utf16le");
+    } catch (error) {
+      throw invalidWindowsAcl();
+    }
+    return parseWindowsAclSddl(record, expectedDirectory);
+  } finally {
+    try {
+      unlinkSync(summaryPath);
+    } catch (error) {
+      // A failed ACL read remains the actionable result.
+    }
   }
 }
 
-function hasFullControlAllow(summary, sid) {
+function verifyWindowsCredentialAcl(filePath, currentUserSid, expectedDirectory, options) {
+  const summary = readWindowsAclSummary(filePath, expectedDirectory, options);
   const entries = Array.isArray(summary && summary.access) ? summary.access : [];
-  return entries.some((entry) => {
-    return String(entry.sid || "") === sid
-      && String(entry.type || "").toLowerCase() === "allow"
-      && String(entry.rights || "").includes("FullControl");
-  });
-}
-
-function hasAnyAllow(summary, sid) {
-  const entries = Array.isArray(summary && summary.access) ? summary.access : [];
-  return entries.some((entry) => {
-    return String(entry.sid || "") === sid && String(entry.type || "").toLowerCase() === "allow";
-  });
-}
-
-function verifyWindowsCredentialAcl(filePath, currentUserSid, options) {
-  const summary = readWindowsAclSummary(filePath, options);
-  const entries = Array.isArray(summary && summary.access) ? summary.access : [];
-  const inherited = entries.some((entry) => entry.inherited === true);
-  const broadSids = [WINDOWS_USERS_SID, WINDOWS_AUTHENTICATED_USERS_SID, WINDOWS_EVERYONE_SID];
-
-  if (!summary || summary.protected !== true || inherited) {
-    throw createAgentCredentialError("agent_signed_acl_verification_failed", "Credential ACL inheritance remains enabled.");
+  const allowedSids = new Set([
+    normalizeWindowsSid(currentUserSid),
+    WINDOWS_SYSTEM_SID,
+    WINDOWS_ADMINISTRATORS_SID
+  ]);
+  const actualSids = new Set(entries.map((entry) => entry.sid));
+  if (allowedSids.size !== 3 || entries.length !== 3 || actualSids.size !== 3) {
+    throw createAgentCredentialError("agent_signed_acl_verification_failed", "Credential ACL contains an unexpected principal.");
   }
-
-  if (!hasFullControlAllow(summary, currentUserSid) ||
-      !hasFullControlAllow(summary, WINDOWS_SYSTEM_SID) ||
-      !hasFullControlAllow(summary, WINDOWS_ADMINISTRATORS_SID)) {
-    throw createAgentCredentialError("agent_signed_acl_verification_failed", "Credential ACL required principals are missing.");
-  }
-
-  if (broadSids.some((sid) => hasAnyAllow(summary, sid))) {
-    throw createAgentCredentialError("agent_signed_acl_verification_failed", "Credential ACL still grants broad local access.");
+  for (const sid of actualSids) {
+    if (!allowedSids.has(sid)) {
+      throw createAgentCredentialError("agent_signed_acl_verification_failed", "Credential ACL contains an unexpected principal.");
+    }
   }
 
   return summary;
@@ -167,27 +226,19 @@ function verifyWindowsCredentialAcl(filePath, currentUserSid, options) {
 
 function hardenWindowsCredentialPath(filePath, options) {
   const currentUserSid = resolveCurrentWindowsUserSid(options);
+  const statSync = options && options.statSync ? options.statSync : fs.statSync;
+  const isDirectory = statSync(filePath).isDirectory();
+  const fullControl = isDirectory ? ":(OI)(CI)F" : ":F";
+  runWindowsAclCommand("icacls.exe", [filePath, "/reset"], options);
   runWindowsAclCommand("icacls.exe", [filePath, "/inheritance:r"], options);
   runWindowsAclCommand("icacls.exe", [
     filePath,
     "/grant:r",
-    "*" + currentUserSid + ":F",
-    "*" + WINDOWS_SYSTEM_SID + ":F",
-    "*" + WINDOWS_ADMINISTRATORS_SID + ":F"
+    "*" + currentUserSid + fullControl,
+    "*" + WINDOWS_SYSTEM_SID + fullControl,
+    "*" + WINDOWS_ADMINISTRATORS_SID + fullControl
   ], options);
-  try {
-    runWindowsAclCommand("icacls.exe", [
-      filePath,
-      "/remove:g",
-      "*" + WINDOWS_USERS_SID,
-      "*" + WINDOWS_AUTHENTICATED_USERS_SID,
-      "*" + WINDOWS_EVERYONE_SID
-    ], options);
-  } catch (error) {
-    // Some Windows builds return non-zero when an ACE is already absent. The
-    // verification step below remains the fail-closed source of truth.
-  }
-  return verifyWindowsCredentialAcl(filePath, currentUserSid, options);
+  return verifyWindowsCredentialAcl(filePath, currentUserSid, isDirectory, options);
 }
 
 function verifyPosixCredentialPermissions(filePath, expectedDirectory, options) {

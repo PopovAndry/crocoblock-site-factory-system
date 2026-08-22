@@ -23,6 +23,7 @@ const {
   requireAgentSigningCredential
 } = require("../src/agent-credential-store");
 const {
+  createSigningCredential,
   SIGNED_AUTH_VERSION
 } = require("../src/agent-signed-auth");
 
@@ -60,22 +61,37 @@ function phpBinary() {
 }
 
 const WINDOWS_USER_SID = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+const WINDOWS_SYSTEM_SID = "S-1-5-18";
+const WINDOWS_ADMINISTRATORS_SID = "S-1-5-32-544";
+const WINDOWS_GUESTS_SID = "S-1-5-32-546";
+const WINDOWS_ARBITRARY_SID = "S-1-5-21-999999999-888888888-777777777-2002";
 
-function validWindowsAclSummary() {
-  return {
-    protected: true,
-    owner_sid: WINDOWS_USER_SID,
-    access: [
-      { sid: WINDOWS_USER_SID, rights: "FullControl", type: "Allow", inherited: false },
-      { sid: "S-1-5-18", rights: "FullControl", type: "Allow", inherited: false },
-      { sid: "S-1-5-32-544", rights: "FullControl", type: "Allow", inherited: false }
-    ]
-  };
+function windowsAce(options = {}) {
+  return "(" + [
+    options.type === undefined ? "A" : options.type,
+    options.flags === undefined ? "" : options.flags,
+    options.rights === undefined ? "FA" : options.rights,
+    options.objectGuid === undefined ? "" : options.objectGuid,
+    options.inheritObjectGuid === undefined ? "" : options.inheritObjectGuid,
+    options.sid === undefined ? WINDOWS_USER_SID : options.sid
+  ].join(";") + ")";
+}
+
+function canonicalWindowsSddl(options = {}) {
+  const flags = options.directory ? "OICI" : "";
+  const system = options.aliases ? "SY" : WINDOWS_SYSTEM_SID;
+  const administrators = options.aliases ? "BA" : WINDOWS_ADMINISTRATORS_SID;
+  const principals = options.principals || [WINDOWS_USER_SID, system, administrators];
+  return "D:PAI" + principals.map((sid) => windowsAce({ flags, sid })).join("");
+}
+
+function savedAclRecord(name, sddl) {
+  return Buffer.from(String(name || "credential") + "\r\n" + sddl + "\r\n", "utf16le");
 }
 
 function windowsAclMock(options = {}) {
   const calls = [];
-  const aclSummary = options.invalidSummary || validWindowsAclSummary();
+  let saveIndex = 0;
   return {
     calls,
     acl: {
@@ -90,19 +106,30 @@ function windowsAclMock(options = {}) {
             stderr: ""
           };
         }
-        if (executable === "powershell.exe") {
-          return {
-            status: options.invalidJson ? 0 : 0,
-            stdout: options.invalidJson ? "not-json" : JSON.stringify(aclSummary),
-            stderr: ""
-          };
-        }
         if (executable === "icacls.exe") {
-          if (options.failApply && args.includes("/inheritance:r")) {
+          if (options.failApply && args.includes(options.failApplyArgument || "/reset")) {
             return { status: 1, stdout: "", stderr: "icacls failed" };
           }
-          if (options.failRemove && args.includes("/remove:g")) {
-            return { status: 1, stdout: "", stderr: "ACE not present" };
+          if (args.includes("/save")) {
+            if (options.failSave) {
+              return { status: 1, stdout: "", stderr: options.stderr || "icacls save failed" };
+            }
+            const outputPath = args[args.indexOf("/save") + 1];
+            if (!options.missingRecord) {
+              const target = args[0];
+              const directory = fs.statSync(target).isDirectory();
+              const configuredSddl = Array.isArray(options.sddlSequence)
+                ? options.sddlSequence[Math.min(saveIndex, options.sddlSequence.length - 1)]
+                : options.sddl;
+              const sddl = typeof configuredSddl === "function"
+                ? configuredSddl({ target, directory, saveIndex })
+                : configuredSddl || canonicalWindowsSddl({ directory });
+              const content = typeof options.savedContent === "function"
+                ? options.savedContent({ target, directory, saveIndex, sddl })
+                : options.savedContent || savedAclRecord(path.basename(target), sddl);
+              fs.writeFileSync(outputPath, content);
+            }
+            saveIndex += 1;
           }
           return { status: 0, stdout: "processed", stderr: "" };
         }
@@ -114,6 +141,66 @@ function windowsAclMock(options = {}) {
 
 function commandCalls(mock, executable) {
   return mock.calls.filter((call) => call.executable === executable);
+}
+
+function assertExactWindowsAcl(summary, directory, currentUserSid = WINDOWS_USER_SID) {
+  assert.equal(summary.protected, true);
+  assert.equal(summary.dacl_flags, "PAI");
+  assert.equal(summary.type, directory ? "directory" : "file");
+  assert.equal(summary.access.length, 3);
+  assert.deepEqual(
+    summary.access.map((entry) => entry.sid).sort(),
+    [currentUserSid, WINDOWS_SYSTEM_SID, WINDOWS_ADMINISTRATORS_SID].sort()
+  );
+  for (const entry of summary.access) {
+    assert.equal(entry.type, "Allow");
+    assert.equal(entry.rights, "FullControl");
+    assert.equal(entry.inherited, false);
+    assert.equal(entry.inheritance_flags, directory ? "OICI" : "");
+  }
+}
+
+async function rejectWindowsSddl(t, name, sddl, options = {}) {
+  await t.test(name, () => {
+    const root = projectsRoot();
+    try {
+      const target = options.directory ? path.join(root, "credential container") : path.join(root, "credential.json");
+      if (options.directory) {
+        fs.mkdirSync(target, { recursive: true });
+      } else {
+        fs.writeFileSync(target, "{}\n", "utf8");
+      }
+      const mock = windowsAclMock({
+        sddl,
+        savedContent: options.savedContent
+      });
+      assert.throws(
+        () => hardenCredentialPath(target, mock.acl),
+        (error) => error.code === "agent_signed_acl_verification_failed"
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+function runRealIcacls(args) {
+  const result = spawnSync("icacls.exe", args, {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 15000
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout || "icacls failed");
+}
+
+function saveRealWindowsAcl(target, proofRoot, label) {
+  const savePath = path.join(proofRoot, label + "-acl.txt");
+  try {
+    runRealIcacls([target, "/save", savePath, "/c"]);
+    return fs.readFileSync(savePath).toString("utf16le").replace(/\u0000/g, "").trim();
+  } finally {
+    fs.rmSync(savePath, { force: true });
+  }
 }
 
 test("project credential store creates one unique project-local secret and returns existing credential", () => {
@@ -146,27 +233,206 @@ test("Windows SID parsing and resolver use fixed executable arguments", () => {
 test("new credential creation hardens secrets directory, temporary file, and final file", () => {
   const root = projectsRoot();
   const project = tempProject(root, "acl-create-project");
-  const mock = windowsAclMock({ failRemove: true });
+  const mock = windowsAclMock();
   const created = ensureAgentSigningCredential(project, { acl: mock.acl });
   const icaclsCalls = commandCalls(mock, "icacls.exe");
-  const powershellCalls = commandCalls(mock, "powershell.exe");
+  const aclSaveCalls = icaclsCalls.filter((call) => call.args.includes("/save"));
   const secret = created.credential.signing_secret;
 
   assert.equal(created.created, true);
   assert.ok(icaclsCalls.length >= 9);
-  assert.ok(powershellCalls.length >= 3);
+  assert.ok(aclSaveCalls.length >= 3);
+  assert.ok(icaclsCalls.some((call) => call.args.includes("/reset")));
   assert.ok(icaclsCalls.some((call) => call.args.includes("/inheritance:r")));
+  assert.ok(icaclsCalls.some((call) => call.args.includes("/grant:r")
+    && call.args.includes("*" + WINDOWS_USER_SID + ":(OI)(CI)F")
+    && call.args.includes("*S-1-5-18:(OI)(CI)F")
+    && call.args.includes("*S-1-5-32-544:(OI)(CI)F")));
   assert.ok(icaclsCalls.some((call) => call.args.includes("/grant:r")
     && call.args.includes("*" + WINDOWS_USER_SID + ":F")
     && call.args.includes("*S-1-5-18:F")
     && call.args.includes("*S-1-5-32-544:F")));
-  assert.ok(icaclsCalls.some((call) => call.args.includes("/remove:g")
-    && call.args.includes("*S-1-5-32-545")
-    && call.args.includes("*S-1-5-11")
-    && call.args.includes("*S-1-1-0")));
+  assert.equal(icaclsCalls.some((call) => call.args.includes("/remove:g")), false);
   assert.equal(mock.calls.some((call) => JSON.stringify(call.args).includes(secret)), false);
   assert.equal(fs.existsSync(created.path), true);
   assert.equal(fs.existsSync(created.path + ".tmp"), false);
+});
+
+test("Windows ACL verification transports paths with spaces as fixed icacls arguments", () => {
+  const root = projectsRoot();
+  const filePath = path.join(root, "credential path with spaces.json");
+  fs.writeFileSync(filePath, "{}\n", "utf8");
+  const mock = windowsAclMock();
+
+  hardenCredentialPath(filePath, mock.acl);
+
+  const verification = commandCalls(mock, "icacls.exe").find((call) => call.args.includes("/save"));
+  assert.equal(verification.args[0], filePath);
+  assert.equal(path.dirname(verification.args[verification.args.indexOf("/save") + 1]), path.dirname(filePath));
+  assert.equal(fs.existsSync(verification.args[verification.args.indexOf("/save") + 1]), false);
+});
+
+test("strict Windows ACL accepts only canonical file, directory, alias, and order variants", async (t) => {
+  const positiveCases = [
+    { name: "canonical file ACL", directory: false, sddl: canonicalWindowsSddl() },
+    { name: "canonical directory ACL", directory: true, sddl: canonicalWindowsSddl({ directory: true }) },
+    { name: "SY and BA aliases", directory: false, sddl: canonicalWindowsSddl({ aliases: true }) },
+    {
+      name: "ACE ordering is immaterial",
+      directory: false,
+      sddl: canonicalWindowsSddl({ principals: [WINDOWS_ADMINISTRATORS_SID, WINDOWS_USER_SID, WINDOWS_SYSTEM_SID] })
+    }
+  ];
+  for (const entry of positiveCases) {
+    await t.test(entry.name, () => {
+      const root = projectsRoot();
+      try {
+        const target = entry.directory ? path.join(root, "credential container") : path.join(root, "credential.json");
+        if (entry.directory) {
+          fs.mkdirSync(target, { recursive: true });
+        } else {
+          fs.writeFileSync(target, "{}\n", "utf8");
+        }
+        const result = hardenCredentialPath(target, windowsAclMock({ sddl: entry.sddl }).acl);
+        assertExactWindowsAcl(result, entry.directory);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("strict Windows ACL rejects every unauthorized principal independently", async (t) => {
+  const required = canonicalWindowsSddl();
+  const extra = (sid, rights) => required + windowsAce({ sid, rights });
+  const cases = [
+    { name: "BUILTIN Guests Read", sddl: extra(WINDOWS_GUESTS_SID, "FR") },
+    { name: "BUILTIN Guests Full Control", sddl: extra(WINDOWS_GUESTS_SID, "FA") },
+    { name: "arbitrary SID Read", sddl: extra(WINDOWS_ARBITRARY_SID, "FR") },
+    { name: "arbitrary SID Full Control", sddl: extra(WINDOWS_ARBITRARY_SID, "FA") },
+    { name: "unexpected local or domain principal", sddl: required + windowsAce({ sid: "CONTOSO\\UnexpectedUser" }) },
+    { name: "allowed principals plus a fourth principal", sddl: extra("S-1-5-32-545", "FA") }
+  ];
+  for (const entry of cases) {
+    await rejectWindowsSddl(t, entry.name, entry.sddl);
+  }
+});
+
+test("strict Windows ACL rejects unsupported ACE type, rights, duplication, and inheritance", async (t) => {
+  const user = windowsAce({ sid: WINDOWS_USER_SID });
+  const system = windowsAce({ sid: WINDOWS_SYSTEM_SID });
+  const administrators = windowsAce({ sid: WINDOWS_ADMINISTRATORS_SID });
+  const replaceUser = (replacement) => "D:PAI" + replacement + system + administrators;
+  const cases = [
+    { name: "unknown ACE type", sddl: replaceUser(windowsAce({ type: "ZZ" })) },
+    { name: "deny ACE", sddl: replaceUser(windowsAce({ type: "D" })) },
+    { name: "audit ACE", sddl: replaceUser(windowsAce({ type: "AU" })) },
+    { name: "object-specific ACE", sddl: replaceUser(windowsAce({ type: "OA", objectGuid: "11111111-1111-1111-1111-111111111111" })) },
+    { name: "callback ACE", sddl: replaceUser(windowsAce({ type: "XA" })) },
+    { name: "duplicate allowed principal", sddl: canonicalWindowsSddl() + user },
+    { name: "missing required principal", sddl: "D:PAI" + user + system },
+    { name: "partial rights", sddl: replaceUser(windowsAce({ rights: "FR" })) },
+    { name: "unsupported compound rights", sddl: replaceUser(windowsAce({ rights: "FAFR" })) },
+    { name: "inherited ACE", sddl: replaceUser(windowsAce({ flags: "ID" })) },
+    { name: "unexpected inheritance flags", sddl: replaceUser(windowsAce({ flags: "NP" })) },
+    { name: "file with directory propagation flags", sddl: replaceUser(windowsAce({ flags: "OICI" })) }
+  ];
+  for (const entry of cases) {
+    await rejectWindowsSddl(t, entry.name, entry.sddl);
+  }
+  await rejectWindowsSddl(t, "directory without OI and CI", canonicalWindowsSddl(), { directory: true });
+  await rejectWindowsSddl(t, "directory with incomplete container inheritance", "D:PAI" +
+    windowsAce({ flags: "OI", sid: WINDOWS_USER_SID }) +
+    windowsAce({ flags: "OI", sid: WINDOWS_SYSTEM_SID }) +
+    windowsAce({ flags: "OI", sid: WINDOWS_ADMINISTRATORS_SID }), { directory: true });
+});
+
+test("strict Windows ACL rejects malformed descriptors with complete-consumption checks", async (t) => {
+  const canonical = canonicalWindowsSddl();
+  const cases = [
+    { name: "trailing garbage", sddl: canonical + "garbage" },
+    { name: "leading unsupported content", sddl: "O:" + WINDOWS_USER_SID + canonical },
+    { name: "unbalanced parentheses", sddl: canonical.slice(0, -1) },
+    { name: "incomplete ACE", sddl: "D:PAI(A;;FA;;;" },
+    { name: "empty ACE", sddl: "D:PAI()" },
+    { name: "extra delimiter fields", sddl: "D:PAI(A;;FA;;;;" + WINDOWS_USER_SID + ")" },
+    { name: "missing SID", sddl: "D:PAI(A;;FA;;;)" },
+    { name: "missing rights", sddl: "D:PAI(A;;;;;" + WINDOWS_USER_SID + ")" },
+    { name: "missing DACL", sddl: "O:" + WINDOWS_USER_SID },
+    { name: "missing protection flag", sddl: canonical.replace("D:PAI", "D:AI") },
+    { name: "unknown DACL flag", sddl: canonical.replace("D:PAI", "D:PAIZ") },
+    { name: "empty DACL", sddl: "D:PAI" },
+    { name: "valid prefix followed by malformed suffix", sddl: canonical + "(A;;FA" }
+  ];
+  for (const entry of cases) {
+    await rejectWindowsSddl(t, entry.name, entry.sddl);
+  }
+  await rejectWindowsSddl(t, "extra leading saved-record line", canonical, {
+    savedContent: savedAclRecord("unexpected\r\ncredential", canonical)
+  });
+  await rejectWindowsSddl(t, "extra trailing saved-record line", canonical, {
+    savedContent: Buffer.from(
+      savedAclRecord("credential", canonical).toString("utf16le") + "trailing\r\n",
+      "utf16le"
+    )
+  });
+});
+
+test("real Windows ACL proof restores exact file and container allowlists", {
+  skip: process.platform !== "win32"
+}, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "factory-acl-proof-"));
+  console.log("ACL_PROOF_ROOT=" + root);
+  try {
+    const currentUserSid = resolveCurrentWindowsUserSid({ platform: "win32" });
+    const canonicalFile = path.join(root, "canonical file.json");
+    console.log("ACL_PROOF_A_FILE=" + canonicalFile);
+    fs.writeFileSync(canonicalFile, "{}\n", "utf8");
+    assertExactWindowsAcl(hardenCredentialPath(canonicalFile, { platform: "win32" }), false, currentUserSid);
+    console.log("ACL_PROOF_A_SAVED=" + JSON.stringify(saveRealWindowsAcl(canonicalFile, root, "canonical-file")));
+
+    const unsafeFile = path.join(root, "unsafe file.json");
+    console.log("ACL_PROOF_B_FILE=" + unsafeFile);
+    fs.writeFileSync(unsafeFile, "{}\n", "utf8");
+    hardenCredentialPath(unsafeFile, { platform: "win32" });
+    runRealIcacls([unsafeFile, "/grant", "*" + WINDOWS_GUESTS_SID + ":R"]);
+    const unsafeFileBefore = saveRealWindowsAcl(unsafeFile, root, "unsafe-file-before");
+    assert.match(unsafeFileBefore, /(?:BG|S-1-5-32-546)/);
+    assertExactWindowsAcl(hardenCredentialPath(unsafeFile, { platform: "win32" }), false, currentUserSid);
+    const unsafeFileAfter = saveRealWindowsAcl(unsafeFile, root, "unsafe-file-after");
+    assert.doesNotMatch(unsafeFileAfter, /(?:BG|S-1-5-32-546)/);
+    console.log("ACL_PROOF_B_BEFORE=" + JSON.stringify(unsafeFileBefore));
+    console.log("ACL_PROOF_B_AFTER=" + JSON.stringify(unsafeFileAfter));
+
+    const unsafeContainer = path.join(root, "unsafe container");
+    console.log("ACL_PROOF_C_CONTAINER=" + unsafeContainer);
+    fs.mkdirSync(unsafeContainer);
+    hardenCredentialPath(unsafeContainer, { platform: "win32" });
+    const protectedChild = path.join(unsafeContainer, "protected child.json");
+    fs.writeFileSync(protectedChild, "{}\n", "utf8");
+    hardenCredentialPath(protectedChild, { platform: "win32" });
+    runRealIcacls([unsafeContainer, "/grant", "*" + WINDOWS_GUESTS_SID + ":(OI)(CI)R"]);
+    const unsafeContainerBefore = saveRealWindowsAcl(unsafeContainer, root, "unsafe-container-before");
+    assert.match(unsafeContainerBefore, /(?:BG|S-1-5-32-546)/);
+    assertExactWindowsAcl(hardenCredentialPath(unsafeContainer, { platform: "win32" }), true, currentUserSid);
+    const unsafeContainerAfter = saveRealWindowsAcl(unsafeContainer, root, "unsafe-container-after");
+    assert.doesNotMatch(unsafeContainerAfter, /(?:BG|S-1-5-32-546)/);
+    console.log("ACL_PROOF_C_BEFORE=" + JSON.stringify(unsafeContainerBefore));
+    console.log("ACL_PROOF_C_AFTER=" + JSON.stringify(unsafeContainerAfter));
+
+    const unicodeContainer = path.join(root, "unicode-юнікод-proof");
+    console.log("ACL_PROOF_E_CONTAINER=" + unicodeContainer);
+    fs.mkdirSync(unicodeContainer);
+    assertExactWindowsAcl(hardenCredentialPath(unicodeContainer, { platform: "win32" }), true, currentUserSid);
+    const unicodeFile = path.join(unicodeContainer, "облікові-дані.json");
+    console.log("ACL_PROOF_E_FILE=" + unicodeFile);
+    fs.writeFileSync(unicodeFile, "{}\n", "utf8");
+    assertExactWindowsAcl(hardenCredentialPath(unicodeFile, { platform: "win32" }), false, currentUserSid);
+    console.log("ACL_PROOF_E_SAVED=" + JSON.stringify(saveRealWindowsAcl(unicodeFile, root, "unicode-file")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    console.log("ACL_PROOF_CLEANED=" + !fs.existsSync(root));
+  }
 });
 
 test("existing credential load remediates secrets directory and credential ACL", () => {
@@ -178,7 +444,7 @@ test("existing credential load remediates secrets directory and credential ACL",
 
   assert.equal(loaded.key_id, created.credential.key_id);
   assert.ok(commandCalls(mock, "icacls.exe").some((call) => call.args.includes("/inheritance:r")));
-  assert.ok(commandCalls(mock, "powershell.exe").length >= 2);
+  assert.ok(commandCalls(mock, "icacls.exe").filter((call) => call.args.includes("/save")).length >= 2);
 });
 
 test("Windows ACL apply and verification failures fail closed", () => {
@@ -187,14 +453,7 @@ test("Windows ACL apply and verification failures fail closed", () => {
   const verifyProject = tempProject(root, "acl-verify-fail-project");
   const applyMock = windowsAclMock({ failApply: true });
   const verifyMock = windowsAclMock({
-    invalidSummary: {
-      protected: false,
-      owner_sid: WINDOWS_USER_SID,
-      access: [
-        { sid: WINDOWS_USER_SID, rights: "FullControl", type: "Allow", inherited: true },
-        { sid: "S-1-5-11", rights: "ReadAndExecute", type: "Allow", inherited: true }
-      ]
-    }
+    sddl: "D:AI" + windowsAce({ flags: "ID", sid: WINDOWS_USER_SID })
   });
 
   assert.throws(
@@ -205,6 +464,132 @@ test("Windows ACL apply and verification failures fail closed", () => {
     () => ensureAgentSigningCredential(verifyProject, { acl: verifyMock.acl }),
     (error) => error.code === "agent_signed_acl_verification_failed"
   );
+});
+
+test("Windows ACL lifecycle and failure propagation remain fail closed", async (t) => {
+  await t.test("malformed ACL output produces verification failure", () => {
+    const root = projectsRoot();
+    try {
+      const target = path.join(root, "credential.json");
+      fs.writeFileSync(target, "{}\n", "utf8");
+      const mock = windowsAclMock({
+        savedContent: Buffer.from("credential.json\r\nnot-sddl\r\n", "utf16le")
+      });
+      assert.throws(
+        () => hardenCredentialPath(target, mock.acl),
+        (error) => error.code === "agent_signed_acl_verification_failed"
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("icacls save nonzero exit produces verification failure", () => {
+    const root = projectsRoot();
+    try {
+      const target = path.join(root, "credential.json");
+      fs.writeFileSync(target, "{}\n", "utf8");
+      assert.throws(
+        () => hardenCredentialPath(target, windowsAclMock({ failSave: true }).acl),
+        (error) => error.code === "agent_signed_acl_verification_failed"
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("missing saved ACL record produces verification failure", () => {
+    const root = projectsRoot();
+    try {
+      const target = path.join(root, "credential.json");
+      fs.writeFileSync(target, "{}\n", "utf8");
+      assert.throws(
+        () => hardenCredentialPath(target, windowsAclMock({ missingRecord: true }).acl),
+        (error) => error.code === "agent_signed_acl_verification_failed"
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("successful hardening commands cannot mask unsafe final ACL", () => {
+    const root = projectsRoot();
+    try {
+      const target = path.join(root, "credential.json");
+      fs.writeFileSync(target, "{}\n", "utf8");
+      const unsafe = canonicalWindowsSddl() + windowsAce({ sid: WINDOWS_GUESTS_SID, rights: "FR" });
+      assert.throws(
+        () => hardenCredentialPath(target, windowsAclMock({ sddl: unsafe }).acl),
+        (error) => error.code === "agent_signed_acl_verification_failed"
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("unsafe container cannot be masked by a protected safe child", () => {
+    const root = projectsRoot();
+    try {
+      const project = tempProject(root, "unsafe-container-project");
+      const credentialPath = agentAuthSecretPath(project);
+      fs.mkdirSync(path.dirname(credentialPath), { recursive: true });
+      fs.writeFileSync(credentialPath, JSON.stringify(createSigningCredential({
+        projectSlug: project.project.slug
+      }), null, 2) + "\n", "utf8");
+      const unsafeContainer = canonicalWindowsSddl({ directory: true }) +
+        windowsAce({ flags: "OICI", sid: WINDOWS_GUESTS_SID, rights: "FR" });
+      const mock = windowsAclMock({
+        sddl({ directory }) {
+          return directory ? unsafeContainer : canonicalWindowsSddl();
+        }
+      });
+      assert.throws(
+        () => readAgentSigningCredential(project, { acl: mock.acl }),
+        (error) => error.code === "agent_signed_acl_verification_failed"
+      );
+      const saves = commandCalls(mock, "icacls.exe").filter((call) => call.args.includes("/save"));
+      assert.equal(saves.length, 1);
+      assert.equal(fs.statSync(saves[0].args[0]).isDirectory(), true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("credential readiness cannot succeed after ACL verification failure", () => {
+    const root = projectsRoot();
+    try {
+      const project = tempProject(root, "acl-readiness-project");
+      const unsafeContainer = canonicalWindowsSddl({ directory: true }) +
+        windowsAce({ flags: "OICI", sid: WINDOWS_ARBITRARY_SID, rights: "FA" });
+      assert.throws(
+        () => ensureAgentSigningCredential(project, { acl: windowsAclMock({ sddl: unsafeContainer }).acl }),
+        (error) => error.code === "agent_signed_acl_verification_failed"
+      );
+      assert.equal(fs.existsSync(agentAuthSecretPath(project)), false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("ACL errors exclude credential content and filesystem paths", () => {
+    const root = projectsRoot();
+    const secret = "credential-secret-must-not-escape";
+    try {
+      const target = path.join(root, "credential.json");
+      fs.writeFileSync(target, secret, "utf8");
+      let captured;
+      try {
+        hardenCredentialPath(target, windowsAclMock({ failSave: true, stderr: secret + " " + target }).acl);
+      } catch (error) {
+        captured = error;
+      }
+      assert.equal(captured.code, "agent_signed_acl_verification_failed");
+      assert.equal(captured.message.includes(secret), false);
+      assert.equal(captured.message.includes(target), false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("non-Windows hardening keeps chmod-based behavior", () => {
