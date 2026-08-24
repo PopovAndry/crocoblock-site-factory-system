@@ -2,9 +2,11 @@
 
 const crypto = require("node:crypto");
 const net = require("node:net");
+const { spawnSync } = require("node:child_process");
 const {
   createProjectScaffold,
   listProjects,
+  normalizeCanonicalProjectPort,
   readProjectBySlug,
   resolveProjectsRoot,
   saveProjectRecord,
@@ -188,20 +190,235 @@ function assertSystemCheckReady(systemCheck) {
   throw error;
 }
 
-function canBindPort(port) {
+function isUnsupportedIpv6Error(host, error) {
+  return String(host || "").includes(":")
+    && ["EAFNOSUPPORT", "EADDRNOTAVAIL", "ENODEV", "EPROTONOSUPPORT"].includes(String(error && error.code || ""));
+}
+
+function probePortAddress(port, host, options) {
   return new Promise((resolve) => {
     const probe = net.createServer();
-    probe.once("error", () => resolve(false));
-    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
+    let finished = false;
+    const finish = (result) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (!probe.listening) {
+        resolve(result);
+        return;
+      }
+      try {
+        probe.close(() => resolve(result));
+      } catch (error) {
+        resolve({ available: false, unsupported: false });
+      }
+    };
+    probe.once("error", (error) => {
+      finish({ available: false, unsupported: isUnsupportedIpv6Error(host, error) });
+    });
+    try {
+      probe.listen({
+        port,
+        host,
+        exclusive: true,
+        ipv6Only: Boolean(options && options.ipv6Only)
+      }, () => finish({ available: true, unsupported: false }));
+    } catch (error) {
+      finish({ available: false, unsupported: isUnsupportedIpv6Error(host, error) });
+    }
   });
 }
 
+async function canBindPort(port, options) {
+  const probe = options && options.probeAddress || probePortAddress;
+  const addresses = [
+    { host: "127.0.0.1", ipv6Only: false },
+    { host: "0.0.0.0", ipv6Only: false },
+    { host: "::1", ipv6Only: true },
+    { host: "::", ipv6Only: true },
+    { host: "::", ipv6Only: false }
+  ];
+  for (const address of addresses) {
+    let result;
+    try {
+      result = await probe(port, address.host, { ipv6Only: address.ipv6Only });
+    } catch (error) {
+      return false;
+    }
+    if (result && result.unsupported === true) {
+      continue;
+    }
+    if (!result || result.available !== true) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const DOCKER_OUTPUT_LIMIT = 1024 * 1024;
+const DOCKER_CONTAINER_ID_PATTERN = /^[0-9a-f]{12,64}$/i;
+const DOCKER_INSPECT_BATCH_SIZE = 24;
+
+function assertBoundedDockerOutput(output) {
+  const text = String(output == null ? "" : output);
+  if (Buffer.byteLength(text, "utf8") > DOCKER_OUTPUT_LIMIT) {
+    throw new Error("Docker port inventory exceeded the output limit.");
+  }
+  return text;
+}
+
+function parseDockerContainerIds(output) {
+  const text = assertBoundedDockerOutput(output).trim();
+  if (!text) {
+    return [];
+  }
+  const ids = text.split(/\s+/);
+  if (ids.some((id) => !DOCKER_CONTAINER_ID_PATTERN.test(id)) || new Set(ids).size !== ids.length) {
+    throw new Error("Docker port inventory contained an invalid container identifier.");
+  }
+  return ids;
+}
+
+function collectDockerBindingPorts(bindingMap, ports) {
+  if (bindingMap === null) {
+    return;
+  }
+  if (!bindingMap || typeof bindingMap !== "object" || Array.isArray(bindingMap)) {
+    throw new Error("Docker port inventory contained an invalid binding map.");
+  }
+  for (const [containerPort, bindings] of Object.entries(bindingMap)) {
+    const key = containerPort.match(/^(\d{1,5})\/([a-z0-9]+)$/i);
+    if (!key || Number(key[1]) < 1 || Number(key[1]) > 65535) {
+      throw new Error("Docker port inventory contained an invalid container port.");
+    }
+    if (key[2].toLowerCase() !== "tcp") {
+      continue;
+    }
+    if (bindings === null) {
+      continue;
+    }
+    if (!Array.isArray(bindings)) {
+      throw new Error("Docker port inventory contained invalid TCP bindings.");
+    }
+    for (const binding of bindings) {
+      if (!binding || typeof binding !== "object" || Array.isArray(binding)
+        || typeof binding.HostIp !== "string" || typeof binding.HostPort !== "string") {
+        throw new Error("Docker port inventory contained an invalid TCP binding.");
+      }
+      if (binding.HostPort === "") {
+        continue;
+      }
+      if (!/^\d+$/.test(binding.HostPort)) {
+        throw new Error("Docker port inventory contained an invalid host port.");
+      }
+      const hostPort = Number(binding.HostPort);
+      if (!Number.isInteger(hostPort) || hostPort < 1 || hostPort > 65535) {
+        throw new Error("Docker port inventory contained an invalid host port.");
+      }
+      ports.add(hostPort);
+    }
+  }
+}
+
+function parseDockerInspectHostPorts(output, requestedIds) {
+  const records = JSON.parse(assertBoundedDockerOutput(output));
+  if (!Array.isArray(records) || records.length !== requestedIds.length) {
+    throw new Error("Docker inspect returned an incomplete container inventory.");
+  }
+  const ports = new Set();
+  const matchedIds = new Set();
+  for (const record of records) {
+    if (!record || typeof record !== "object" || Array.isArray(record)
+      || typeof record.Id !== "string" || !DOCKER_CONTAINER_ID_PATTERN.test(record.Id)) {
+      throw new Error("Docker inspect returned an invalid container record.");
+    }
+    const matches = requestedIds.filter((id) => record.Id.toLowerCase().startsWith(id.toLowerCase()));
+    if (matches.length !== 1 || matchedIds.has(matches[0])) {
+      throw new Error("Docker inspect returned an unexpected container record.");
+    }
+    matchedIds.add(matches[0]);
+    if (!record.HostConfig || typeof record.HostConfig !== "object" || Array.isArray(record.HostConfig)
+      || !("PortBindings" in record.HostConfig)
+      || !record.NetworkSettings || typeof record.NetworkSettings !== "object" || Array.isArray(record.NetworkSettings)
+      || !("Ports" in record.NetworkSettings)) {
+      throw new Error("Docker inspect returned an invalid binding structure.");
+    }
+    collectDockerBindingPorts(record.HostConfig.PortBindings, ports);
+    collectDockerBindingPorts(record.NetworkSettings.Ports, ports);
+  }
+  if (matchedIds.size !== requestedIds.length) {
+    throw new Error("Docker inspect returned an incomplete container inventory.");
+  }
+  return ports;
+}
+
+function dockerPortInventoryError() {
+  return createError(
+    "Docker port availability could not be checked. Recheck the local environment and try again.",
+    "create_website_environment_unavailable",
+    409,
+    { customer_action: "Open System Check and recheck." }
+  );
+}
+
+function runDockerReadCommand(runner, args) {
+  const result = runner("docker", args, {
+    encoding: "utf8",
+    windowsHide: true,
+    shell: false,
+    timeout: 10000,
+    maxBuffer: DOCKER_OUTPUT_LIMIT
+  });
+  if (!result || result.error || result.status !== 0 || String(result.stderr || "").trim()) {
+    throw new Error("Docker read command failed.");
+  }
+  return assertBoundedDockerOutput(result.stdout);
+}
+
+function readDockerPublishedHostPorts(options) {
+  const runner = options && options.spawnSync || spawnSync;
+  try {
+    const ids = parseDockerContainerIds(runDockerReadCommand(runner, ["ps", "--all", "--quiet"]));
+    if (!ids.length) {
+      return new Set();
+    }
+    const batchPortSets = [];
+    for (let offset = 0; offset < ids.length; offset += DOCKER_INSPECT_BATCH_SIZE) {
+      const batchIds = ids.slice(offset, offset + DOCKER_INSPECT_BATCH_SIZE);
+      const inspectOutput = runDockerReadCommand(runner, ["inspect", "--type", "container", ...batchIds]);
+      batchPortSets.push(parseDockerInspectHostPorts(inspectOutput, batchIds));
+    }
+    const ports = new Set();
+    for (const batchPorts of batchPortSets) {
+      for (const port of batchPorts) {
+        ports.add(port);
+      }
+    }
+    return ports;
+  } catch (error) {
+    throw dockerPortInventoryError();
+  }
+}
+
 async function findAvailableProjectPort(projectsRoot, options) {
-  const usedPorts = new Set(listProjects(projectsRoot).map((project) => Number(project.wp_port)).filter(Number.isInteger));
-  const probe = options && options.canBindPort || canBindPort;
-  const firstPort = Number(options && options.firstPort || 8120);
+  const hasFirstPort = options && Object.prototype.hasOwnProperty.call(options, "firstPort");
+  const firstPort = hasFirstPort ? options.firstPort : 8120;
+  if (!Number.isInteger(firstPort) || firstPort < 1024 || firstPort > 65535) {
+    throw createError("No local website port is available.", "create_website_port_unavailable", 409);
+  }
+  const usedPorts = new Set(listProjects(projectsRoot)
+    .map((project) => normalizeCanonicalProjectPort(project.wp_port))
+    .filter((port) => port !== null));
+  const publishedPortsReader = options && options.readDockerPublishedHostPorts || readDockerPublishedHostPorts;
+  const publishedPorts = await publishedPortsReader(options);
+  if (!(publishedPorts instanceof Set)
+    || Array.from(publishedPorts).some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
+    throw dockerPortInventoryError();
+  }
+  const probe = options && options.canBindPort || ((port) => canBindPort(port, options));
   for (let port = firstPort; port <= Math.min(firstPort + 1000, 65535); port += 1) {
-    if (!usedPorts.has(port) && await probe(port)) {
+    if (!usedPorts.has(port) && !publishedPorts.has(port) && await probe(port)) {
       return port;
     }
   }
@@ -575,15 +792,20 @@ module.exports = {
   CREATE_OPERATION_TYPE,
   CREATE_PROFILE,
   CUSTOMER_STAGES,
+  DOCKER_INSPECT_BATCH_SIZE,
   INTERNAL_STAGES,
   REQUIRED_DEPENDENCIES,
   assertSystemCheckReady,
   buildCreateWebsitePrompt,
   buildProgress,
+  canBindPort,
   executeCreateWebsiteWorkflow,
   findAvailableProjectPort,
   getCreateWebsiteStatus,
+  isUnsupportedIpv6Error,
   normalizePhone,
+  parseDockerInspectHostPorts,
+  readDockerPublishedHostPorts,
   startCreateWebsite,
   validateCreateWebsiteRequest
 };

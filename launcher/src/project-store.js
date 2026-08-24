@@ -17,6 +17,160 @@ const BLOCKED_ROOTS = [
   "sf-controlled-generate-smoke"
 ].map((directoryName) => path.join(getSystemRoot(), directoryName));
 const PROJECT_SUBDIRECTORIES = ["runs", "proofs", "snapshots", "logs", "exports", "secrets", "wordpress", "mysql"];
+const PROJECT_STORE_LOCK_DIRECTORY = ".factory-project-store.lock";
+const PROJECT_STORE_INTERNAL_DIRECTORIES = new Set([
+  PROJECT_STORE_LOCK_DIRECTORY,
+  ".factory-cache",
+  ".factory-recovery"
+]);
+const PROJECT_STORE_LOCK_OWNER_FILE = "owner.json";
+const PROJECT_STORE_LOCK_WAIT_MS = 1500;
+const PROJECT_STORE_LOCK_POLL_MS = 10;
+const PROJECT_STORE_LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+const PROJECT_STATE_BINDING = Symbol("factory_project_state_binding");
+const PROJECT_MANIFEST_FILENAME = "factory-project.json";
+const PROJECT_MANIFEST_TEMP_PREFIX = ".factory-project.json.";
+const PROJECT_MANIFEST_TEMP_SUFFIX = ".tmp";
+const PROJECT_RUNTIME_MARKERS = new Set([
+  PROJECT_MANIFEST_FILENAME,
+  ".env",
+  "docker-compose.yml",
+  "wordpress",
+  "mysql"
+]);
+
+function createProjectStoreError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = 409;
+  return error;
+}
+
+function projectStoreUnavailableError() {
+  return createProjectStoreError(
+    "Project storage is busy. Try again.",
+    "project_store_unavailable"
+  );
+}
+
+function projectPortConflictError() {
+  return createProjectStoreError(
+    "The selected local website port is already assigned to another project.",
+    "project_port_conflict"
+  );
+}
+
+function projectStoreInventoryInvalidError() {
+  return createProjectStoreError(
+    "Project storage is inconsistent. Resolve project storage and try again.",
+    "project_store_inventory_invalid"
+  );
+}
+
+function projectIdentityMismatchError() {
+  return createProjectStoreError(
+    "Project identity does not match the stored project.",
+    "project_identity_mismatch"
+  );
+}
+
+function projectManifestWriteError() {
+  return createProjectStoreError(
+    "Project storage could not be updated. Try again.",
+    "project_store_write_failed"
+  );
+}
+
+function normalizeCanonicalProjectPort(value) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value >= 1024 && value <= 65535 ? value : null;
+  }
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
+    return null;
+  }
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1024 && port <= 65535 && String(port) === value ? port : null;
+}
+
+function acquireProjectStoreLock(projectsRoot) {
+  const lockPath = path.join(projectsRoot, PROJECT_STORE_LOCK_DIRECTORY);
+  const ownerPath = path.join(lockPath, PROJECT_STORE_LOCK_OWNER_FILE);
+  const token = crypto.randomBytes(32).toString("hex");
+  const deadline = Date.now() + PROJECT_STORE_LOCK_WAIT_MS;
+  while (true) {
+    try {
+      fs.mkdirSync(lockPath);
+      try {
+        fs.writeFileSync(ownerPath, JSON.stringify({
+          schema: "factory_project_store_lock",
+          version: 1,
+          owner_token: token,
+          pid: process.pid
+        }) + "\n", { encoding: "utf8", flag: "wx" });
+      } catch (error) {
+        try {
+          fs.rmSync(lockPath, { recursive: true, force: true });
+        } catch (cleanupError) {
+          // A failed acquisition remains fail closed if its private artifact cannot be removed.
+        }
+        throw projectStoreUnavailableError();
+      }
+      return { lockPath, ownerPath, token };
+    } catch (error) {
+      if (error && error.code !== "EEXIST") {
+        if (error && error.code === "project_store_unavailable") {
+          throw error;
+        }
+        throw projectStoreUnavailableError();
+      }
+      if (Date.now() >= deadline) {
+        throw projectStoreUnavailableError();
+      }
+      Atomics.wait(PROJECT_STORE_LOCK_SLEEP, 0, 0, PROJECT_STORE_LOCK_POLL_MS);
+    }
+  }
+}
+
+function releaseProjectStoreLock(lock) {
+  let owner;
+  try {
+    owner = JSON.parse(fs.readFileSync(lock.ownerPath, "utf8"));
+  } catch (error) {
+    throw projectStoreUnavailableError();
+  }
+  if (!owner || owner.schema !== "factory_project_store_lock" || owner.version !== 1
+    || typeof owner.owner_token !== "string" || owner.owner_token !== lock.token) {
+    throw projectStoreUnavailableError();
+  }
+  try {
+    fs.unlinkSync(lock.ownerPath);
+    fs.rmdirSync(lock.lockPath);
+  } catch (error) {
+    throw projectStoreUnavailableError();
+  }
+}
+
+function withProjectStoreTransaction(projectsRoot, callback) {
+  const lock = acquireProjectStoreLock(projectsRoot);
+  let result;
+  let primaryError = null;
+  try {
+    result = callback();
+  } catch (error) {
+    primaryError = error;
+  }
+  try {
+    releaseProjectStoreLock(lock);
+  } catch (error) {
+    if (!primaryError) {
+      primaryError = error;
+    }
+  }
+  if (primaryError) {
+    throw primaryError;
+  }
+  return result;
+}
 
 function resolveProjectsRoot(projectsRoot) {
   return path.resolve(projectsRoot || DEFAULT_PROJECTS_ROOT);
@@ -24,6 +178,19 @@ function resolveProjectsRoot(projectsRoot) {
 
 function normalizePath(inputPath) {
   return path.resolve(inputPath);
+}
+
+function pathComparisonKey(inputPath) {
+  const resolved = normalizePath(inputPath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function pathsEqual(leftPath, rightPath) {
+  return pathComparisonKey(leftPath) === pathComparisonKey(rightPath);
+}
+
+function hasParentTraversal(inputPath) {
+  return typeof inputPath === "string" && inputPath.split(/[\\/]+/).includes("..");
 }
 
 function isPathInside(parentPath, childPath) {
@@ -81,6 +248,19 @@ function assertSafeRuntimePath(runtimePath, projectsRoot) {
     }
   }
 
+  return resolvedRuntimePath;
+}
+
+function assertDirectProjectRuntimePath(runtimePath, projectsRoot) {
+  if (typeof runtimePath !== "string" || !runtimePath || hasParentTraversal(runtimePath)) {
+    throw projectIdentityMismatchError();
+  }
+  const resolvedRuntimePath = assertSafeRuntimePath(runtimePath, projectsRoot);
+  const resolvedProjectsRoot = resolveProjectsRoot(projectsRoot);
+  if (!pathsEqual(path.dirname(resolvedRuntimePath), resolvedProjectsRoot)
+    || pathsEqual(resolvedRuntimePath, resolvedProjectsRoot)) {
+    throw projectIdentityMismatchError();
+  }
   return resolvedRuntimePath;
 }
 
@@ -144,6 +324,68 @@ function ensureDirectory(dirPath) {
 
 function writeJsonFile(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2) + "\n", "utf8");
+}
+
+function removeManifestTempFile(tempPath) {
+  let cleanupError = null;
+  for (let attempt = 0; attempt < 3 && fs.existsSync(tempPath); attempt += 1) {
+    try {
+      fs.unlinkSync(tempPath);
+      cleanupError = null;
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+  if (fs.existsSync(tempPath)) {
+    throw cleanupError || new Error("Manifest temporary file cleanup failed.");
+  }
+}
+
+function writeProjectManifestAtomic(manifestPath, project) {
+  let payload;
+  try {
+    payload = JSON.stringify(toStoredProject(project), null, 2) + "\n";
+  } catch (error) {
+    throw projectManifestWriteError();
+  }
+
+  const manifestDirectory = path.dirname(manifestPath);
+  const tempPath = path.join(
+    manifestDirectory,
+    PROJECT_MANIFEST_TEMP_PREFIX + crypto.randomBytes(16).toString("hex") + PROJECT_MANIFEST_TEMP_SUFFIX
+  );
+  let descriptor = null;
+  let primaryError = null;
+  try {
+    descriptor = fs.openSync(tempPath, "wx", 0o600);
+    fs.writeFileSync(descriptor, payload, "utf8");
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = null;
+    fs.renameSync(tempPath, manifestPath);
+  } catch (error) {
+    primaryError = error;
+  } finally {
+    if (descriptor !== null) {
+      try {
+        fs.closeSync(descriptor);
+      } catch (error) {
+        if (!primaryError) {
+          primaryError = error;
+        }
+      }
+    }
+    try {
+      removeManifestTempFile(tempPath);
+    } catch (error) {
+      if (!primaryError) {
+        primaryError = error;
+      }
+    }
+  }
+  if (primaryError) {
+    throw projectManifestWriteError();
+  }
 }
 
 function parseEnvFile(filePath) {
@@ -316,6 +558,124 @@ function sanitizeProject(project) {
   };
 }
 
+function validateStrictProjectRecord(data, runtimePath, projectsRoot) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw projectStoreInventoryInvalidError();
+  }
+  const requiredStrings = ["project_id", "site_name", "slug", "runtime_path", "wp_url", "db_name", "admin_user", "created_at", "updated_at"];
+  for (const field of requiredStrings) {
+    if (typeof data[field] !== "string" || !data[field].trim() || data[field] !== data[field].trim()) {
+      throw projectStoreInventoryInvalidError();
+    }
+  }
+  let validatedSlug;
+  try {
+    validatedSlug = validateExplicitSlug(data.slug);
+  } catch (error) {
+    throw projectStoreInventoryInvalidError();
+  }
+  if (validatedSlug !== data.slug || typeof data.wp_port !== "number"
+    || normalizeCanonicalProjectPort(data.wp_port) === null) {
+    throw projectStoreInventoryInvalidError();
+  }
+  const directRuntimePath = assertDirectProjectRuntimePath(runtimePath, projectsRoot);
+  if (hasParentTraversal(data.runtime_path)
+    || !pathsEqual(data.runtime_path, directRuntimePath)
+    || !pathsEqual(path.join(projectsRoot, data.slug), directRuntimePath)) {
+    throw projectStoreInventoryInvalidError();
+  }
+  const manifestPath = path.join(directRuntimePath, PROJECT_MANIFEST_FILENAME);
+  if (Object.prototype.hasOwnProperty.call(data, "manifest_path")
+    && (typeof data.manifest_path !== "string" || hasParentTraversal(data.manifest_path)
+      || !pathsEqual(data.manifest_path, manifestPath))) {
+    throw projectStoreInventoryInvalidError();
+  }
+  return {
+    project: data,
+    projectId: data.project_id,
+    slug: data.slug,
+    port: data.wp_port,
+    runtimePath: directRuntimePath,
+    manifestPath
+  };
+}
+
+function readStrictProjectInventory(projectsRoot) {
+  const resolvedProjectsRoot = ensureSafeProjectsRoot(projectsRoot);
+  try {
+    const rootRealPath = fs.realpathSync.native(resolvedProjectsRoot);
+    const entries = fs.readdirSync(resolvedProjectsRoot, { withFileTypes: true });
+    const inventory = [];
+    for (const entry of entries) {
+      if (PROJECT_STORE_INTERNAL_DIRECTORIES.has(entry.name)) {
+        if (!entry.isDirectory() || entry.isSymbolicLink()) {
+          throw projectStoreInventoryInvalidError();
+        }
+        if (entry.name !== PROJECT_STORE_LOCK_DIRECTORY) {
+          const internalEntries = fs.readdirSync(path.join(resolvedProjectsRoot, entry.name), { withFileTypes: true });
+          if (internalEntries.some((internalEntry) => PROJECT_RUNTIME_MARKERS.has(internalEntry.name))) {
+            throw projectStoreInventoryInvalidError();
+          }
+        }
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        throw projectStoreInventoryInvalidError();
+      }
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const runtimePath = path.join(resolvedProjectsRoot, entry.name);
+      const runtimeStat = fs.lstatSync(runtimePath);
+      const runtimeRealPath = fs.realpathSync.native(runtimePath);
+      if (!runtimeStat.isDirectory() || runtimeStat.isSymbolicLink()
+        || !pathsEqual(path.dirname(runtimeRealPath), rootRealPath)) {
+        throw projectStoreInventoryInvalidError();
+      }
+      const manifestPath = path.join(runtimePath, PROJECT_MANIFEST_FILENAME);
+      const manifestStat = fs.lstatSync(manifestPath);
+      if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
+        throw projectStoreInventoryInvalidError();
+      }
+      const data = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      inventory.push(validateStrictProjectRecord(data, runtimePath, resolvedProjectsRoot));
+    }
+
+    const slugs = new Set();
+    const identities = new Set();
+    const ports = new Set();
+    const manifests = new Set();
+    for (const record of inventory) {
+      const slugKey = record.slug.toLowerCase();
+      const identityKey = record.projectId.toLowerCase();
+      const manifestKey = pathComparisonKey(record.manifestPath);
+      if (slugs.has(slugKey) || identities.has(identityKey) || ports.has(record.port) || manifests.has(manifestKey)) {
+        throw projectStoreInventoryInvalidError();
+      }
+      slugs.add(slugKey);
+      identities.add(identityKey);
+      ports.add(record.port);
+      manifests.add(manifestKey);
+    }
+    return inventory;
+  } catch (error) {
+    if (error && error.code === "project_store_inventory_invalid") {
+      throw error;
+    }
+    throw projectStoreInventoryInvalidError();
+  }
+}
+
+function bindProjectState(projectState, projectsRoot, runtimePath, manifestPath) {
+  Object.defineProperty(projectState, PROJECT_STATE_BINDING, {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: Object.freeze({ projectsRoot, runtimePath, manifestPath })
+  });
+  return projectState;
+}
+
 function createProjectScaffold(options) {
   const siteName = String(options.name || "").trim();
   const requestedPort = Number(options.port || 8099);
@@ -338,44 +698,58 @@ function createProjectScaffold(options) {
 
   ensureDirectory(projectsRoot);
 
-  const existingProjects = listProjects(projectsRoot);
-  const conflictingPortProject = existingProjects.find((project) => Number(project.wp_port) === requestedPort);
-  if (conflictingPortProject) {
-    throw new Error(
-      "WordPress port " + String(requestedPort) + " is already assigned to project " + conflictingPortProject.slug + "."
+  return withProjectStoreTransaction(projectsRoot, () => {
+    const lockedProjectsRoot = ensureSafeProjectsRoot(projectsRoot);
+    const existingProjects = readStrictProjectInventory(lockedProjectsRoot);
+    const conflictingPortProject = existingProjects.find(
+      (record) => record.port === requestedPort
     );
-  }
+    if (conflictingPortProject) {
+      throw projectPortConflictError();
+    }
 
-  const runtimePath = path.join(projectsRoot, slug);
-  if (fs.existsSync(runtimePath)) {
-    throw new Error("Project already exists: " + runtimePath);
-  }
+    const runtimePath = path.join(lockedProjectsRoot, slug);
+    if (fs.existsSync(runtimePath)) {
+      throw createProjectStoreError("The project already exists.", "project_exists");
+    }
 
-  const project = createProjectRecord(siteName, slug, runtimePath, requestedPort);
-  const filesWritten = [
-    path.join(runtimePath, "factory-project.json"),
-    path.join(runtimePath, ".env"),
-    path.join(runtimePath, "docker-compose.yml")
-  ];
+    const project = createProjectRecord(siteName, slug, runtimePath, requestedPort);
+    const filesWritten = [
+      path.join(runtimePath, PROJECT_MANIFEST_FILENAME),
+      path.join(runtimePath, ".env"),
+      path.join(runtimePath, "docker-compose.yml")
+    ];
+    let runtimeCreated = false;
+    try {
+      fs.mkdirSync(runtimePath);
+      runtimeCreated = true;
+      for (const subdirectory of PROJECT_SUBDIRECTORIES) {
+        ensureDirectory(path.join(runtimePath, subdirectory));
+      }
+      writeProjectManifestAtomic(filesWritten[0], project);
+      writeEnvFile(filesWritten[1], parseEnvContent(createEnvFile(project)));
+      fs.writeFileSync(filesWritten[2], createDockerCompose(project), "utf8");
+    } catch (error) {
+      if (runtimeCreated) {
+        try {
+          fs.rmSync(runtimePath, { recursive: true, force: true });
+        } catch (cleanupError) {
+          // Preserve the primary scaffold failure; the transaction lock still serializes writers.
+        }
+      }
+      throw error;
+    }
 
-  ensureDirectory(runtimePath);
-  for (const subdirectory of PROJECT_SUBDIRECTORIES) {
-    ensureDirectory(path.join(runtimePath, subdirectory));
-  }
-
-  writeJsonFile(filesWritten[0], toStoredProject(project));
-  writeEnvFile(filesWritten[1], parseEnvContent(createEnvFile(project)));
-  fs.writeFileSync(filesWritten[2], createDockerCompose(project), "utf8");
-
-  return {
-    project: sanitizeProject(project),
-    files_written: filesWritten,
-    directories_written: PROJECT_SUBDIRECTORIES.map((name) => path.join(runtimePath, name))
-  };
+    return {
+      project: sanitizeProject(project),
+      files_written: filesWritten,
+      directories_written: PROJECT_SUBDIRECTORIES.map((name) => path.join(runtimePath, name))
+    };
+  });
 }
 
 function readProjectRecord(runtimePath) {
-  const manifestPath = path.join(runtimePath, "factory-project.json");
+  const manifestPath = path.join(runtimePath, PROJECT_MANIFEST_FILENAME);
   if (!fs.existsSync(manifestPath)) {
     return null;
   }
@@ -414,7 +788,7 @@ function readProjectBySlug(slug, projectsRoot) {
 
   const resolvedProjectsRoot = resolveProjectsRoot(projectsRoot);
   const runtimePath = path.join(resolvedProjectsRoot, safeSlug);
-  const manifestPath = path.join(runtimePath, "factory-project.json");
+  const manifestPath = path.join(runtimePath, PROJECT_MANIFEST_FILENAME);
 
   assertSafeRuntimePath(runtimePath, resolvedProjectsRoot);
 
@@ -437,19 +811,67 @@ function readProjectBySlug(slug, projectsRoot) {
   project.generated_site = Object.assign(defaultGeneratedSiteMetadata(), project.generated_site || {});
   project.create_website = project.create_website && typeof project.create_website === "object" ? project.create_website : null;
 
-  return {
+  return bindProjectState({
     project,
     manifestPath,
     runtimePath,
     envPath: path.join(runtimePath, ".env"),
     composePath: path.join(runtimePath, "docker-compose.yml"),
     env: parseEnvFile(path.join(runtimePath, ".env"))
-  };
+  }, resolvedProjectsRoot, runtimePath, manifestPath);
 }
 
 function saveProjectRecord(projectState, project) {
-  project.updated_at = timestampIso();
-  writeJsonFile(projectState.manifestPath, toStoredProject(project));
+  const binding = projectState && projectState[PROJECT_STATE_BINDING];
+  if (!binding || !project || typeof project !== "object" || Array.isArray(project)
+    || typeof projectState.runtimePath !== "string" || hasParentTraversal(projectState.runtimePath)
+    || typeof projectState.manifestPath !== "string" || hasParentTraversal(projectState.manifestPath)
+    || !pathsEqual(projectState.runtimePath, binding.runtimePath)
+    || !pathsEqual(projectState.manifestPath, binding.manifestPath)) {
+    throw projectIdentityMismatchError();
+  }
+  const projectsRoot = ensureSafeProjectsRoot(binding.projectsRoot);
+  const runtimePath = assertDirectProjectRuntimePath(binding.runtimePath, projectsRoot);
+  const manifestPath = path.join(runtimePath, PROJECT_MANIFEST_FILENAME);
+  if (!pathsEqual(binding.manifestPath, manifestPath)) {
+    throw projectIdentityMismatchError();
+  }
+  return withProjectStoreTransaction(projectsRoot, () => {
+    const lockedProjectsRoot = ensureSafeProjectsRoot(projectsRoot);
+    const inventory = readStrictProjectInventory(lockedProjectsRoot);
+    const current = inventory.find((record) => pathsEqual(record.manifestPath, manifestPath));
+    if (!current) {
+      throw projectIdentityMismatchError();
+    }
+    if (project.project_id !== current.projectId || project.slug !== current.slug
+      || typeof project.runtime_path !== "string" || hasParentTraversal(project.runtime_path)
+      || !pathsEqual(project.runtime_path, current.runtimePath)
+      || Object.prototype.hasOwnProperty.call(project, "manifest_path")
+        && (typeof project.manifest_path !== "string" || hasParentTraversal(project.manifest_path)
+          || !pathsEqual(project.manifest_path, current.manifestPath))) {
+      throw projectIdentityMismatchError();
+    }
+    const requestedPort = normalizeCanonicalProjectPort(project && project.wp_port);
+    if (typeof project.wp_port !== "number" || requestedPort === null) {
+      throw projectStoreInventoryInvalidError();
+    }
+    const conflict = inventory.find((record) => {
+      return !pathsEqual(record.manifestPath, current.manifestPath) && record.port === requestedPort;
+    });
+    if (conflict) {
+      throw projectPortConflictError();
+    }
+    const updatedAt = timestampIso();
+    const nextProject = Object.assign({}, project, {
+      project_id: current.projectId,
+      slug: current.slug,
+      runtime_path: current.project.runtime_path,
+      updated_at: updatedAt
+    });
+    validateStrictProjectRecord(toStoredProject(nextProject), runtimePath, lockedProjectsRoot);
+    writeProjectManifestAtomic(manifestPath, nextProject);
+    project.updated_at = updatedAt;
+  });
 }
 
 function listProjects(projectsRoot) {
@@ -469,11 +891,13 @@ module.exports = {
   BLOCKED_ROOTS,
   DEFAULT_PROJECTS_ROOT,
   PROJECT_SUBDIRECTORIES,
+  PROJECT_STORE_LOCK_DIRECTORY,
   assertSafeRuntimePath,
   createProjectScaffold,
   ensureDirectory,
   ensureSafeProjectsRoot,
   listProjects,
+  normalizeCanonicalProjectPort,
   parseEnvFile,
   writeEnvFile,
   readProjectBySlug,
