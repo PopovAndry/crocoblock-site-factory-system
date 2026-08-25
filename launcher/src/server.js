@@ -1837,7 +1837,8 @@ function createLauncherServer(options) {
           idempotencyKey: getRequestIdempotencyKey(request),
           systemCheck: resolveCreateWebsiteSystemCheck(),
           projectSlug: options.createWebsiteProjectSlug,
-          services: options.createWebsiteServices
+          services: options.createWebsiteServices,
+          dependencySourceOptions: options.dependencySourceOptions
         });
         sendJson(response, result.status === "ready" ? 200 : 202, result);
         return;

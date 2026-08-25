@@ -18,9 +18,7 @@ const {
   savePackageConfig
 } = require("../src/windows-package-runtime");
 const {
-  configurePackagedLauncher,
-  shutdownPackagedLauncher,
-  startPackagedLauncher
+  configurePackagedLauncher
 } = require("../src/windows-package-main");
 
 function createTempRoot() {
@@ -33,6 +31,38 @@ function fakeDockerReady() {
 
 function noBrowser() {
   throw new Error("Browser must not open in automated tests.");
+}
+
+function writePackageManifest(resources) {
+  fs.mkdirSync(resources, { recursive: true });
+  fs.writeFileSync(path.join(resources, "package-manifest.json"), JSON.stringify({
+    schema_version: 1,
+    artifact_class: "INTERNAL_EVALUATION",
+    artifact_label: "INTERNAL EVALUATION BUILD",
+    application_name: "Crocoblock Site Factory",
+    application_version: "0.1.0",
+    architecture: "x64",
+    rehearsal: { frozen_project_slug: "win-ceo-rehearsal-smoke-3" }
+  }), "utf8");
+}
+
+function createCanonicalPackageLayout(root, options) {
+  const safeOptions = options || {};
+  const packageRoot = path.join(root, "Crocoblock-Site-Factory-Windows-x64-0.1.0-beta");
+  const launcherRoot = path.join(packageRoot, "app", "launcher");
+  fs.cpSync(path.join(__dirname, "..", "src"), path.join(launcherRoot, "src"), { recursive: true });
+  fs.cpSync(path.join(__dirname, "..", "contracts"), path.join(launcherRoot, "contracts"), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, "..", "package.json"), path.join(launcherRoot, "package.json"));
+  const resources = path.join(packageRoot, "resources");
+  if (safeOptions.manifest !== false) {
+    writePackageManifest(resources);
+  }
+  return {
+    packageRoot,
+    resources,
+    main: require(path.join(launcherRoot, "src", "windows-package-main.js")),
+    runtime: require(path.join(launcherRoot, "src", "windows-package-runtime.js"))
+  };
 }
 
 async function requestText(url) {
@@ -55,6 +85,15 @@ test("packaged runtime separates application data, configuration, and projects",
   assert.notEqual(runtimePaths.runtimeDirectory, projectsRoot);
   assert.equal(config.projects_root, path.resolve(projectsRoot));
   assert.equal(config.preferred_port, 39120);
+});
+
+test("package manifest is authoritative for canonical internal evaluation identity and version", (t) => {
+  const root = createTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packaged = createCanonicalPackageLayout(root);
+  assert.equal(packaged.runtime.loadPackageManifest().application_version, "0.1.0");
+  fs.writeFileSync(path.join(packaged.resources, "package-manifest.json"), "{}", "utf8");
+  assert.throws(() => packaged.runtime.loadPackageManifest(), /metadata is missing or invalid/);
 });
 
 test("package configuration discovers an existing configured projects root without mutating it", async () => {
@@ -115,18 +154,81 @@ test("package logs redact credentials and filesystem paths", () => {
   assert.equal(sanitizeLogText(unsafe).includes("secret-value"), false);
 });
 
-test("packaged Launcher serves a path-safe first screen and shuts down through its local control channel", async () => {
+test("direct packaged start fails closed without a canonical manifest before server startup", async (t) => {
   const root = createTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packaged = createCanonicalPackageLayout(root, { manifest: false });
+  const dataRoot = path.join(root, "data");
+  let browserOpened = false;
+  await assert.rejects(() => packaged.main.startPackagedLauncher({
+    dataRoot,
+    projectsRoot: path.join(root, "projects"),
+    requirePackageManifest: false,
+    packageManifest: { application_name: "ignored" },
+    openBrowser: false,
+    spawn() { browserOpened = true; return { unref() {} }; },
+    spawnSync: () => fakeDockerReady()
+  }), (error) => /metadata is missing or invalid/.test(error.message) && !error.message.includes(root));
+  assert.equal(browserOpened, false);
+  assert.equal(fs.existsSync(dataRoot), false);
+});
+
+test("packaged startup rejects manifest or resources reparse substitution before startup", async (t) => {
+  const root = createTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packaged = createCanonicalPackageLayout(root);
+  const manifestPath = path.join(packaged.resources, "package-manifest.json");
+  const targetManifest = path.join(root, "manifest-target.json");
+  fs.renameSync(manifestPath, targetManifest);
+  let linked = false;
+  try {
+    fs.symlinkSync(targetManifest, manifestPath, "file");
+    linked = true;
+  } catch (error) {
+    const targetResources = path.join(root, "resources-target");
+    writePackageManifest(targetResources);
+    try {
+      fs.rmSync(packaged.resources, { recursive: true, force: true });
+      fs.symlinkSync(targetResources, packaged.resources, "junction");
+      linked = true;
+    } catch (junctionError) {
+      t.skip("Local symlink and junction creation are unavailable on this host.");
+      return;
+    }
+  }
+  assert.equal(linked, true);
+  const dataRoot = path.join(root, "data");
+  await assert.rejects(() => packaged.main.startPackagedLauncher({
+    dataRoot,
+    projectsRoot: path.join(root, "projects"),
+    openBrowser: false,
+    spawnSync: () => fakeDockerReady()
+  }), (error) => /metadata is missing or invalid/.test(error.message) && !error.message.includes(root));
+  assert.equal(fs.existsSync(dataRoot), false);
+});
+
+test("packaged Launcher ignores caller resource roots and serves a path-safe first screen", async (t) => {
+  const root = createTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packaged = createCanonicalPackageLayout(root);
   const dataRoot = path.join(root, "data");
   const projectsRoot = path.join(root, "projects");
+  const attackerResources = path.join(root, "attacker resources");
+  writePackageManifest(attackerResources);
   createProjectScaffold({ name: "Read only", slug: "read-only", port: 39124, projectsRoot });
   const projectPath = path.join(projectsRoot, "read-only", "factory-project.json");
   const before = fs.readFileSync(projectPath, "utf8");
 
-  const runtime = await startPackagedLauncher({
+  const runtime = await packaged.main.startPackagedLauncher({
     dataRoot,
     projectsRoot,
     port: 39125,
+    requirePackageManifest: false,
+    packagedResourceDirectory: attackerResources,
+    environment: {
+      FACTORY_PACKAGED_RESOURCES: attackerResources,
+      FACTORY_VENDOR_DIR: path.join(root, "attacker vendor")
+    },
     openBrowser: false,
     spawn: noBrowser,
     spawnSync: () => fakeDockerReady()
@@ -141,12 +243,47 @@ test("packaged Launcher serves a path-safe first screen and shuts down through i
     assert.equal(home.body.includes("Factory runtime"), true);
     assert.equal(projects.body.includes(projectsRoot), false);
     assert.equal(fs.readFileSync(projectPath, "utf8"), before);
+    assert.equal(runtime.runtimePaths.packagedResourceDirectory, fs.realpathSync.native(packaged.resources));
+    assert.equal(runtime.runtimePaths.packagedResourceDirectory.includes("attacker"), false);
 
-    await shutdownPackagedLauncher({ dataRoot });
+    await packaged.main.shutdownPackagedLauncher({ dataRoot });
     await new Promise((resolve) => setTimeout(resolve, 120));
     assert.equal(fs.existsSync(runtime.runtimePaths.runtimeStatePath), false);
   } finally {
     await runtime.close();
+  }
+});
+
+test("a duplicate canonical packaged start reopens the authoritative Launcher without starting another instance", async (t) => {
+  const root = createTempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packaged = createCanonicalPackageLayout(root);
+  const dataRoot = path.join(root, "data");
+  const projectsRoot = path.join(root, "projects");
+  const first = await packaged.main.startPackagedLauncher({
+    dataRoot,
+    projectsRoot,
+    port: 39127,
+    openBrowser: false,
+    spawn: noBrowser,
+    spawnSync: () => fakeDockerReady()
+  });
+  try {
+    const second = await packaged.main.startPackagedLauncher({
+      dataRoot,
+      projectsRoot,
+      port: 39127,
+      openBrowser: false,
+      spawn: noBrowser,
+      spawnSync: () => fakeDockerReady()
+    });
+    assert.equal(second.alreadyRunning, true);
+    assert.equal(second.url, first.url);
+    assert.equal((await requestText(first.url + "/api/health")).status, 200);
+    await second.close();
+    assert.equal((await requestText(first.url + "/api/health")).status, 200);
+  } finally {
+    await first.close();
   }
 });
 

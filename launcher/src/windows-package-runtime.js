@@ -8,6 +8,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const {
   openExternalUrl,
+  resolveCanonicalPackagedLayout,
   resolvePlatformDirectories
 } = require("./platform-runtime");
 const { collectSystemCheck } = require("./system-check");
@@ -79,6 +80,31 @@ function readJsonFile(filePath) {
   } catch (error) {
     return null;
   }
+}
+
+function loadPackageManifest(packageLayout) {
+  const canonicalLayout = resolveCanonicalPackagedLayout();
+  if (packageLayout && (
+    path.resolve(packageLayout.packageRoot || "") !== canonicalLayout.packageRoot
+    || path.resolve(packageLayout.resourcesDirectory || "") !== canonicalLayout.resourcesDirectory
+    || path.resolve(packageLayout.manifestPath || "") !== canonicalLayout.manifestPath
+  )) {
+    throw new Error("Packaged application metadata is missing or invalid.");
+  }
+  const manifest = readJsonFile(canonicalLayout.manifestPath);
+  if (!manifest || manifest.schema_version !== 1 || manifest.artifact_class !== "INTERNAL_EVALUATION") {
+    throw new Error("Packaged application metadata is missing or invalid.");
+  }
+  if (manifest.application_name !== "Crocoblock Site Factory" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(String(manifest.application_version || ""))) {
+    throw new Error("Packaged application identity is invalid.");
+  }
+  if (manifest.architecture !== "x64" || manifest.artifact_label !== "INTERNAL EVALUATION BUILD") {
+    throw new Error("Packaged application target is invalid.");
+  }
+  if (!manifest.rehearsal || manifest.rehearsal.frozen_project_slug !== "win-ceo-rehearsal-smoke-3") {
+    throw new Error("Packaged rehearsal contract is invalid.");
+  }
+  return manifest;
 }
 
 function normalizePort(value) {
@@ -191,15 +217,27 @@ function diagnoseDataRoot(runtimePaths, options) {
 }
 
 async function collectRuntimeDiagnostics(config, runtimePaths, options) {
+  const packageManifest = options && options.packageManifest || null;
+  const dependencySourceOptions = options && options.dependencySourceOptions || {
+    environment: options && options.environment,
+    packagedResourceDirectory: runtimePaths.packagedResourceDirectory,
+    applicationDataDirectory: runtimePaths.dataRoot,
+    developmentResourceDirectory: runtimePaths.developmentResourceDirectory,
+    packagedMode: Boolean(packageManifest),
+    includeDevelopmentFallback: packageManifest ? false : undefined
+  };
   const portAvailability = await findAvailablePort(config.preferred_port, options);
   const diagnostics = [
+    packageManifest
+      ? { label: "Application", status: "ready", message: packageManifest.application_name + " " + packageManifest.application_version + " · " + packageManifest.artifact_label + "." }
+      : null,
     diagnoseDocker(options),
     diagnoseProjectsRoot(config.projects_root),
     diagnoseDataRoot(runtimePaths, options),
     portAvailability.preferredAvailable
       ? { label: "Launcher port", status: "ready", message: "Launcher port is ready." }
       : { label: "Launcher port", status: "fallback", message: "Preferred Launcher port is in use. A local fallback port will be used." }
-  ];
+  ].filter(Boolean);
   const attentionRequired = diagnostics.some((diagnostic) => ["missing", "stopped", "unavailable"].includes(diagnostic.status));
   const systemCheck = collectSystemCheck({
     platform: options && options.platform,
@@ -211,12 +249,7 @@ async function collectRuntimeDiagnostics(config, runtimePaths, options) {
     totalMemory: options && options.totalMemory,
     spawnSync: options && options.spawnSync,
     dependencySources: options && options.dependencySources,
-    dependencySourceOptions: {
-      environment: options && options.environment,
-      packagedResourceDirectory: runtimePaths.packagedResourceDirectory,
-      applicationDataDirectory: runtimePaths.dataRoot,
-      developmentResourceDirectory: runtimePaths.developmentResourceDirectory
-    },
+    dependencySourceOptions,
     initializationFailure: options && options.initializationFailure
   });
   return {
@@ -243,11 +276,21 @@ function secureCompare(left, right) {
   return expected.length > 0 && expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-function listenControlServer(token, close) {
+function listenControlServer(token, close, status) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((request, response) => {
       const loopback = request.socket && (request.socket.remoteAddress === "127.0.0.1" || request.socket.remoteAddress === "::ffff:127.0.0.1");
-      if (!loopback || request.method !== "POST" || request.url !== "/close" || !secureCompare(token, request.headers["x-factory-runtime-token"])) {
+      if (!loopback || !secureCompare(token, request.headers["x-factory-runtime-token"])) {
+        response.writeHead(404, { "Cache-Control": "no-store" });
+        response.end();
+        return;
+      }
+      if (request.method === "GET" && request.url === "/status") {
+        response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" });
+        response.end(JSON.stringify(status()));
+        return;
+      }
+      if (request.method !== "POST" || request.url !== "/close") {
         response.writeHead(404, { "Cache-Control": "no-store" });
         response.end();
         return;
@@ -258,6 +301,40 @@ function listenControlServer(token, close) {
     });
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => resolve(server));
+  });
+}
+
+function requestRuntimeStatus(state, requestImplementation) {
+  return new Promise((resolve, reject) => {
+    const request = (requestImplementation || http.request)({
+      host: "127.0.0.1",
+      port: Number(state && state.control_port),
+      method: "GET",
+      path: "/status",
+      headers: { "X-Factory-Runtime-Token": state && state.control_token },
+      timeout: 1500
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => {
+        if (response.statusCode !== 200) {
+          reject(new Error("Packaged Launcher status is unavailable."));
+          return;
+        }
+        try {
+          const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (!value || !Number.isInteger(Number(value.launcher_port))) {
+            throw new Error("invalid status");
+          }
+          resolve(value);
+        } catch (error) {
+          reject(new Error("Packaged Launcher status is invalid."));
+        }
+      });
+    });
+    request.once("timeout", () => request.destroy(new Error("timeout")));
+    request.once("error", () => reject(new Error("Packaged Launcher is not running.")));
+    request.end();
   });
 }
 
@@ -296,10 +373,12 @@ module.exports = {
   defaultProjectsRoot,
   findAvailablePort,
   listenControlServer,
+  loadPackageManifest,
   loadPackageConfig,
   openBrowser,
   readJsonFile,
   requestRuntimeShutdown,
+  requestRuntimeStatus,
   resolveRuntimePaths,
   sanitizeLogText,
   savePackageConfig,

@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { listDependencyDefinitions, resolveDependencyDefinition } = require("./dependency-catalog");
+const { resolveCanonicalPackagedLayout } = require("./platform-runtime");
 
 const DEFAULT_VENDOR_DIR = path.join(path.parse(process.cwd()).root || path.sep, "sf-vendor");
 const MANAGED_PACKAGE_DIRECTORY = "managed-packages";
@@ -28,19 +29,68 @@ function isPathWithin(candidate, root) {
   return relative === "" || (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative));
 }
 
+function packagedDependencyError() {
+  return new Error("Packaged dependency resources are invalid.");
+}
+
+function sameFilesystemPath(left, right) {
+  const normalize = (value) => process.platform === "win32" ? value.toLowerCase() : value;
+  return normalize(path.resolve(left)) === normalize(path.resolve(right));
+}
+
+function resolveCanonicalPackagedResourceDirectory(options) {
+  const layout = resolveCanonicalPackagedLayout();
+  if (options && options.packagedResourceDirectory) {
+    let requested;
+    try {
+      requested = fs.realpathSync.native(options.packagedResourceDirectory);
+    } catch (error) {
+      throw packagedDependencyError();
+    }
+    if (!sameFilesystemPath(requested, layout.resourcesDirectory)) {
+      throw packagedDependencyError();
+    }
+  }
+  return layout.resourcesDirectory;
+}
+
+function packagedManagedDirectory(resourcesDirectory) {
+  const managedDirectory = path.join(resourcesDirectory, MANAGED_PACKAGE_DIRECTORY);
+  if (!fs.existsSync(managedDirectory)) {
+    return managedDirectory;
+  }
+  try {
+    const stat = fs.lstatSync(managedDirectory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw packagedDependencyError();
+    }
+    const canonical = fs.realpathSync.native(managedDirectory);
+    if (!isPathWithin(canonical, resourcesDirectory)) {
+      throw packagedDependencyError();
+    }
+    return canonical;
+  } catch (error) {
+    if (error && error.message === "Packaged dependency resources are invalid.") {
+      throw error;
+    }
+    throw packagedDependencyError();
+  }
+}
+
 function dependencySourceRoots(options) {
   const safeOptions = options || {};
   const environment = safeOptions.environment || process.env;
+  if (safeOptions.packagedMode === true) {
+    const resourcesDirectory = resolveCanonicalPackagedResourceDirectory(safeOptions);
+    return [{
+      mode: "packaged_resource",
+      root: packagedManagedDirectory(resourcesDirectory),
+      readOnly: true
+    }];
+  }
   const roots = [];
   if (environment.FACTORY_VENDOR_DIR || safeOptions.developmentVendorDirectory) {
     roots.push({ mode: "development_override", root: resolveVendorDirectory(safeOptions), readOnly: true });
-  }
-  if (safeOptions.packagedResourceDirectory) {
-    roots.push({
-      mode: "packaged_resource",
-      root: path.resolve(safeOptions.packagedResourceDirectory, MANAGED_PACKAGE_DIRECTORY),
-      readOnly: true
-    });
   }
   if (safeOptions.applicationDataDirectory) {
     roots.push({
@@ -70,7 +120,21 @@ function resolveApprovedDependencySource(dependencyKey, options) {
   const selected = candidates.find((candidate) => candidate.exists) || candidates[0];
   const absolutePath = selected.absolutePath;
   const exists = fs.existsSync(absolutePath);
-  const stat = exists ? fs.statSync(absolutePath) : null;
+  let stat = null;
+  if (exists) {
+    stat = fs.lstatSync(absolutePath);
+    if (selected.mode === "packaged_resource") {
+      let canonical;
+      try {
+        canonical = fs.realpathSync.native(absolutePath);
+      } catch (error) {
+        throw packagedDependencyError();
+      }
+      if (stat.isSymbolicLink() || !stat.isFile() || !isPathWithin(canonical, selected.root)) {
+        throw packagedDependencyError();
+      }
+    }
+  }
 
   return {
     key: definition.key,

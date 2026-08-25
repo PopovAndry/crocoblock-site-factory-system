@@ -8,6 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
+const { createLauncherServer } = require("../src/server");
 
 const {
   assertSystemCheckReady,
@@ -261,6 +262,10 @@ test("Create Website rejects required, bounded, email, path, profile, and browse
     [Object.assign(validRequest(), { docker_port: 8120 }), "create_website_unknown_fields"],
     [Object.assign(validRequest(), { compose_port: 8120 }), "create_website_unknown_fields"],
     [Object.assign(validRequest(), { package_path: "C:\\vendor\\jet-engine.zip" }), "create_website_unknown_fields"],
+    [Object.assign(validRequest(), { source_path: "C:\\vendor\\kava.zip" }), "create_website_unknown_fields"],
+    [Object.assign(validRequest(), { resource_root: "C:\\package\\resources" }), "create_website_unknown_fields"],
+    [Object.assign(validRequest(), { package_filename: "jet-engine.zip" }), "create_website_unknown_fields"],
+    [Object.assign(validRequest(), { cache_path: "C:\\cache" }), "create_website_unknown_fields"],
     [Object.assign(validRequest(), { command: "docker compose up" }), "create_website_unknown_fields"],
     [Object.assign(validRequest(), { agent_secret: "hidden" }), "create_website_unknown_fields"]
   ];
@@ -1218,15 +1223,21 @@ test("workflow invokes existing services once in frozen stage order and succeeds
   scaffold(projectsRoot, slug);
   const stages = [];
   const calls = [];
+  const dependencySourceOptions = { packagedMode: true, packagedResourceDirectory: "C:\\installed package\\resources" };
   const result = await executeCreateWebsiteWorkflow({
     request: validRequest(),
     slug,
     projectsRoot,
     operationId: "op-test",
+    dependencySourceOptions,
     setStage(stage) { stages.push(stage); },
     services: {
       async provisionProject() { calls.push("provision"); return { proofPath: "provision-proof" }; },
-      createManagedDependencyInstallPlan({ dependency }) { calls.push("plan:" + dependency); return { plan: { plan_id: "plan-" + dependency } }; },
+      createManagedDependencyInstallPlan({ dependency, dependencySourceOptions: receivedOptions }) {
+        assert.equal(receivedOptions, dependencySourceOptions);
+        calls.push("plan:" + dependency);
+        return { plan: { plan_id: "plan-" + dependency } };
+      },
       async installDependency({ planId }) { calls.push("install:" + planId); return { proof: { installed: true, active: true } }; },
       async installAgent() { calls.push("agent"); return { health: { status: "ok" }, capabilities: { capabilities: { controlled_generate: true } } }; },
       async readDependencies() { calls.push("verify-dependencies"); return { blockers: [] }; },
@@ -1270,6 +1281,50 @@ test("workflow invokes existing services once in frozen stage order and succeeds
   assert.equal(result.resultSummary.validation_passed, true);
   assert.equal(result.resultSummary.url_status.single_property, 200);
   assert.equal(readProjectBySlug(slug, projectsRoot).project.create_website.status, "ready");
+});
+
+test("Create Website API injects dependency source context without accepting it from the browser", async (t) => {
+  const projectsRoot = temporaryProjectsRoot();
+  const dependencySourceOptions = { packagedMode: true, packagedResourceDirectory: "C:\\installed package\\resources" };
+  let received = null;
+  const server = createLauncherServer({
+    host: "127.0.0.1",
+    port: 48500 + Math.floor(Math.random() * 500),
+    projectsRoot,
+    dependencySourceOptions,
+    packagedRuntime: { systemCheck: readySystemCheck() },
+    createWebsiteProjectSlug: "win-ceo-rehearsal-smoke-3",
+    createWebsiteService: {
+      async start(options) {
+        received = options;
+        return { status: "running", project: { slug: "win-ceo-rehearsal-smoke-3" } };
+      },
+      status() { return { status: "running" }; }
+    }
+  });
+  t.after(async () => {
+    await server.close().catch(() => {});
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+  });
+  const listening = await server.listen();
+  const baseUrl = "http://127.0.0.1:" + listening.port;
+  const sessionResponse = await fetch(baseUrl + "/api/security/session");
+  const session = await sessionResponse.json();
+  const response = await fetch(baseUrl + "/api/create-websites", {
+    method: "POST",
+    headers: {
+      Origin: baseUrl,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "packaged-create-context-0001",
+      "X-Factory-CSRF-Token": session.csrf_token
+    },
+    body: JSON.stringify(validRequest())
+  });
+
+  assert.equal(response.status, 202);
+  assert.equal(received.dependencySourceOptions, dependencySourceOptions);
+  assert.equal(received.projectSlug, "win-ceo-rehearsal-smoke-3");
+  assert.deepEqual(received.request, validRequest());
 });
 
 test("failed dependency stage prevents Agent and generate", async (t) => {

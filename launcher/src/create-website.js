@@ -510,7 +510,7 @@ function defaultServices(overrides) {
 }
 
 async function executeCreateWebsiteWorkflow(context) {
-  const { request, slug, projectsRoot, services, operationId } = context;
+  const { request, slug, projectsRoot, services, operationId, dependencySourceOptions } = context;
   let currentStage = "validate_request";
   const setStage = async (stage, patch) => {
     currentStage = stage;
@@ -528,7 +528,12 @@ async function executeCreateWebsiteWorkflow(context) {
     await setStage("install_dependencies");
     const dependencies = [];
     for (const dependency of REQUIRED_DEPENDENCIES) {
-      const plan = services.createManagedDependencyInstallPlan({ slug, dependency, projectsRoot });
+      const plan = services.createManagedDependencyInstallPlan({
+        slug,
+        dependency,
+        projectsRoot,
+        dependencySourceOptions
+      });
       const installed = await services.installDependency({
         slug,
         projectsRoot,
@@ -694,6 +699,7 @@ async function startCreateWebsiteInternal(options) {
       projectsRoot,
       services,
       operationId,
+      dependencySourceOptions: options.dependencySourceOptions,
       setStage: operationContext.setStage
     })
   });

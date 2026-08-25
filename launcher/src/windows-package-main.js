@@ -7,14 +7,17 @@ const {
   appendSafeLog,
   collectRuntimeDiagnostics,
   listenControlServer,
+  loadPackageManifest,
   loadPackageConfig,
   openBrowser,
   readJsonFile,
   requestRuntimeShutdown,
+  requestRuntimeStatus,
   resolveRuntimePaths,
   savePackageConfig,
   writeAtomicJson
 } = require("./windows-package-runtime");
+const { resolveCanonicalPackagedLayout } = require("./platform-runtime");
 
 function parsePackageArguments(argv) {
   const flags = {};
@@ -42,9 +45,45 @@ function closeServer(server) {
 }
 
 async function startPackagedLauncher(options) {
+  // This entrypoint is only for the installed package. Validate its immutable
+  // layout before reading state, resolving dependencies, or starting a server.
+  const packageLayout = resolveCanonicalPackagedLayout();
+  const packageManifest = loadPackageManifest(packageLayout);
   const runtimePaths = resolveRuntimePaths(options);
+  runtimePaths.packageRoot = packageLayout.packageRoot;
+  runtimePaths.packagedResourceDirectory = packageLayout.resourcesDirectory;
   const config = loadPackageConfig(runtimePaths, options);
-  const runtimeDiagnostics = await collectRuntimeDiagnostics(config, runtimePaths, options);
+  const existingState = readJsonFile(runtimePaths.runtimeStatePath);
+  if (existingState) {
+    try {
+      const existing = await requestRuntimeStatus(existingState, options && options.requestImplementation);
+      const existingUrl = "http://127.0.0.1:" + String(existing.launcher_port);
+      if (!options || options.openBrowser !== false) {
+        openBrowser(existingUrl, options && options.spawn, options);
+      }
+      return {
+        alreadyRunning: true,
+        close: async () => {},
+        details: { host: "127.0.0.1", port: Number(existing.launcher_port) },
+        runtimePaths,
+        url: existingUrl
+      };
+    } catch (error) {
+      appendSafeLog(runtimePaths, "stale_runtime_state_ignored", { result: "unreachable" });
+    }
+  }
+  const dependencySourceOptions = {
+    environment: options && options.environment,
+    packagedResourceDirectory: runtimePaths.packagedResourceDirectory,
+    applicationDataDirectory: runtimePaths.dataRoot,
+    developmentResourceDirectory: runtimePaths.developmentResourceDirectory,
+    packagedMode: true,
+    includeDevelopmentFallback: false
+  };
+  const runtimeDiagnostics = await collectRuntimeDiagnostics(config, runtimePaths, Object.assign({}, options || {}, {
+    packageManifest,
+    dependencySourceOptions
+  }));
   const runtimeToken = crypto.randomBytes(32).toString("hex");
   let launcher = null;
   let controlServer = null;
@@ -85,17 +124,13 @@ async function startPackagedLauncher(options) {
       diagnostics: runtimeDiagnostics.diagnostics,
       systemCheck: runtimeDiagnostics.systemCheck
     },
-    dependencySourceOptions: {
-      environment: options && options.environment,
-      packagedResourceDirectory: runtimePaths.packagedResourceDirectory,
-      applicationDataDirectory: runtimePaths.dataRoot,
-      developmentResourceDirectory: runtimePaths.developmentResourceDirectory
-    },
+    dependencySourceOptions,
+    createWebsiteProjectSlug: packageManifest && packageManifest.rehearsal.frozen_project_slug,
     skipRestoreReconciliation: true
   });
 
   const details = await launcher.listen();
-  controlServer = await listenControlServer(runtimeToken, close);
+  controlServer = await listenControlServer(runtimeToken, close, () => ({ launcher_port: details.port }));
   const controlAddress = controlServer.address();
   writeAtomicJson(runtimePaths.runtimeStatePath, {
     schema_version: 1,
@@ -141,7 +176,8 @@ async function runPackageCli(argv, options) {
   const runtimeOptions = Object.assign({}, options || {}, {
     dataRoot: flags["data-root"] || options && options.dataRoot,
     projectsRoot: flags["projects-root"] || options && options.projectsRoot,
-    port: flags.port || options && options.port
+    port: flags.port || options && options.port,
+    requirePackageManifest: true
   });
   if (flags.configure) {
     await configurePackagedLauncher(runtimeOptions);

@@ -76,7 +76,7 @@ function summarizeSystemCheck(checks) {
   if (checks.some((check) => check.state === CHECK_STATES.WARNING)) {
     return { state: CHECK_STATES.WARNING, title: "System ready", message: "Site Factory can continue, with the warning below." };
   }
-  return { state: CHECK_STATES.PASS, title: "System ready", message: "This Mac is ready for Site Factory." };
+  return { state: CHECK_STATES.PASS, title: "System ready", message: "This system is ready for Site Factory." };
 }
 
 function collectSystemCheck(options) {

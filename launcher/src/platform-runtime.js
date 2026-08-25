@@ -1,6 +1,7 @@
 "use strict";
 
 const os = require("node:os");
+const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const launcherPackage = require("../package.json");
@@ -70,10 +71,7 @@ function resolvePlatformDirectories(options) {
     projects = pathApi.join(homeDirectory, "Factory Projects");
   }
 
-  const packagedResourceRoot = safeOptions.packagedResourceDirectory
-    || safeOptions.resourcesPath
-    || environment.FACTORY_PACKAGED_RESOURCES
-    || process.resourcesPath
+  const packagedResourceRoot = process.resourcesPath
     || pathApi.join(pathApi.dirname(process.execPath), "resources");
   const developmentResourceRoot = safeOptions.developmentResourceDirectory
     || path.resolve(__dirname, "..", "resources");
@@ -88,6 +86,54 @@ function resolvePlatformDirectories(options) {
     packagedResources: pathApi.resolve(packagedResourceRoot),
     developmentResources: path.resolve(developmentResourceRoot)
   };
+}
+
+function packagedMetadataError() {
+  return new Error("Packaged application metadata is missing or invalid.");
+}
+
+function sameFilesystemPath(left, right) {
+  const normalize = (value) => process.platform === "win32" ? value.toLowerCase() : value;
+  return normalize(path.resolve(left)) === normalize(path.resolve(right));
+}
+
+function requireNormalExistingPath(targetPath, expectedType) {
+  let stat;
+  try {
+    stat = fs.lstatSync(targetPath);
+  } catch (error) {
+    throw packagedMetadataError();
+  }
+  if (stat.isSymbolicLink() || (expectedType === "directory" && !stat.isDirectory()) || (expectedType === "file" && !stat.isFile())) {
+    throw packagedMetadataError();
+  }
+  try {
+    fs.accessSync(targetPath, fs.constants.R_OK);
+    return fs.realpathSync.native(targetPath);
+  } catch (error) {
+    throw packagedMetadataError();
+  }
+}
+
+function resolveCanonicalPackagedLayout() {
+  // The portable Windows builder always installs this module at
+  // <package-root>/app/launcher/src. Do not accept an environment or caller path here.
+  const packageRootPath = path.resolve(__dirname, "..", "..", "..");
+  const resourcesPath = path.join(packageRootPath, "resources");
+  const manifestPath = path.join(resourcesPath, "package-manifest.json");
+  const packageRoot = requireNormalExistingPath(packageRootPath, "directory");
+  const resources = requireNormalExistingPath(resourcesPath, "directory");
+  const manifest = requireNormalExistingPath(manifestPath, "file");
+  const expectedResources = path.join(packageRoot, "resources");
+  const expectedManifest = path.join(resources, "package-manifest.json");
+  if (!sameFilesystemPath(resources, expectedResources) || !sameFilesystemPath(manifest, expectedManifest)) {
+    throw packagedMetadataError();
+  }
+  return Object.freeze({
+    packageRoot,
+    resourcesDirectory: resources,
+    manifestPath: manifest
+  });
 }
 
 function assertSafeExternalUrl(value) {
@@ -168,6 +214,7 @@ module.exports = {
   getPlatformIdentity,
   normalizePlatformPath,
   openExternalUrl,
+  resolveCanonicalPackagedLayout,
   resolveDockerCommand,
   resolvePlatformDirectories,
   spawnOwnedProcess,

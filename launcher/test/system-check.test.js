@@ -22,7 +22,15 @@ test("System Check reports ready when every blocking prerequisite passes", () =>
   const result = collectSystemCheck(readyOptions());
   assert.equal(result.state, CHECK_STATES.PASS);
   assert.equal(result.title, "System ready");
+  assert.equal(result.message, "This system is ready for Site Factory.");
   assert.equal(result.checks.every((check) => check.state === CHECK_STATES.PASS), true);
+});
+
+test("System Check ready copy is platform-neutral on Windows and macOS", () => {
+  const windows = collectSystemCheck(readyOptions({ platform: "win32", arch: "x64" }));
+  const mac = collectSystemCheck(readyOptions());
+  assert.equal(windows.message, "This system is ready for Site Factory.");
+  assert.equal(mac.message, windows.message);
 });
 
 test("System Check distinguishes Docker missing from installed but stopped", () => {
