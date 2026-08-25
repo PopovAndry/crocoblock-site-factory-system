@@ -1406,6 +1406,41 @@ test("System Check not-ready blocks before every mutation seam", async (t) => {
   assert.deepEqual(fs.readdirSync(projectsRoot), []);
 });
 
+test("selected port reaches scaffold state unchanged when package source options are present", async (t) => {
+  const projectsRoot = temporaryProjectsRoot();
+  t.after(() => fs.rmSync(projectsRoot, { recursive: true, force: true }));
+  const dependencySourceOptions = {
+    packagedMode: true,
+    packagedResourceDirectory: "C:\\installed package\\resources"
+  };
+  let scaffoldOptions = null;
+  const never = new Promise(() => {});
+  const result = await startCreateWebsite({
+    request: validRequest({ project_name: "Selected Port Proof" }),
+    projectsRoot,
+    projectSlug: "selected-port-proof",
+    idempotencyKey: "create-selected-port-proof-0001",
+    systemCheck: readySystemCheck(),
+    dependencySourceOptions,
+    services: {
+      async findAvailableProjectPort() { return 48321; },
+      createOperationId() { return "op-selected-port"; },
+      createProjectScaffold(options) {
+        scaffoldOptions = options;
+        return createProjectScaffold(options);
+      },
+      runProjectOperation() { return never; }
+    }
+  });
+  assert.equal(scaffoldOptions.port, 48321);
+  assert.equal(scaffoldOptions.slug, "selected-port-proof");
+  assert.equal(result.project.website_url, "http://127.0.0.1:48321");
+  const state = readProjectBySlug("selected-port-proof", projectsRoot);
+  assert.equal(state.project.wp_port, 48321);
+  assert.equal(state.project.wp_url, "http://127.0.0.1:48321");
+  assert.match(fs.readFileSync(path.join(projectsRoot, "selected-port-proof", ".env"), "utf8"), /^WP_PORT=48321$/m);
+});
+
 test("Create Website duplicate-port race loser keeps a sanitized HTTP conflict contract", async (t) => {
   const projectsRoot = temporaryProjectsRoot();
   t.after(() => fs.rmSync(projectsRoot, { recursive: true, force: true }));
@@ -1434,6 +1469,91 @@ test("Create Website duplicate-port race loser keeps a sanitized HTTP conflict c
   assert.doesNotMatch(rejected.message, /factory-project|\.lock|pid|token|EEXIST|[A-Z]:\\/i);
   assert.equal(listProjects(projectsRoot).length, 1);
   assert.equal(fs.existsSync(path.join(projectsRoot, PROJECT_STORE_LOCK_DIRECTORY)), false);
+});
+
+test("Create Website HTTP route returns sanitized 409 for a persisted port race loser", async (t) => {
+  const projectsRoot = temporaryProjectsRoot();
+  const never = new Promise(() => {});
+  let operationCounter = 0;
+  const server = createLauncherServer({
+    host: "127.0.0.1",
+    port: 49000 + Math.floor(Math.random() * 500),
+    projectsRoot,
+    packagedRuntime: { systemCheck: readySystemCheck() },
+    createWebsiteServices: {
+      async findAvailableProjectPort() { return 48341; },
+      createOperationId() { operationCounter += 1; return "op-http-race-" + String(operationCounter); },
+      runProjectOperation() { return never; }
+    }
+  });
+  t.after(async () => {
+    await server.close().catch(() => {});
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+  });
+  const listening = await server.listen();
+  const baseUrl = "http://127.0.0.1:" + String(listening.port);
+  const session = await (await fetch(baseUrl + "/api/security/session")).json();
+  async function create(request, idempotencyKey) {
+    return fetch(baseUrl + "/api/create-websites", {
+      method: "POST",
+      headers: {
+        Origin: baseUrl,
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+        "X-Factory-CSRF-Token": session.csrf_token
+      },
+      body: JSON.stringify(request)
+    });
+  }
+  const first = await create(validRequest({ project_name: "HTTP race one" }), "http-race-one-0001");
+  assert.equal(first.status, 202);
+  const second = await create(validRequest({ project_name: "HTTP race two" }), "http-race-two-0001");
+  const body = await second.json();
+  assert.equal(second.status, 409);
+  assert.equal(body.code, "project_port_conflict");
+  assert.equal(body.message, "The selected local website port is already assigned to another project.");
+  assert.doesNotMatch(JSON.stringify(body), /factory-project|\.lock|pid|token|EEXIST|[A-Z]:\\/i);
+  assert.equal(listProjects(projectsRoot).length, 1);
+});
+
+test("Create Website HTTP route returns sanitized 409 when authoritative inventory is malformed", async (t) => {
+  const projectsRoot = temporaryProjectsRoot();
+  createProjectScaffold({ name: "Broken inventory", slug: "broken-inventory", port: 48351, projectsRoot });
+  const server = createLauncherServer({
+    host: "127.0.0.1",
+    port: 49500 + Math.floor(Math.random() * 300),
+    projectsRoot,
+    packagedRuntime: { systemCheck: readySystemCheck() },
+    createWebsiteServices: {
+      async findAvailableProjectPort() { return 48352; }
+    }
+  });
+  t.after(async () => {
+    await server.close().catch(() => {});
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+  });
+  const listening = await server.listen();
+  fs.writeFileSync(path.join(projectsRoot, "broken-inventory", "factory-project.json"), '{"project_id":', "utf8");
+  const baseUrl = "http://127.0.0.1:" + String(listening.port);
+  const session = await (await fetch(baseUrl + "/api/security/session")).json();
+  const response = await fetch(baseUrl + "/api/create-websites", {
+    method: "POST",
+    headers: {
+      Origin: baseUrl,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "malformed-inventory-0001",
+      "X-Factory-CSRF-Token": session.csrf_token
+    },
+    body: JSON.stringify(validRequest({ project_name: "Rejected by inventory" }))
+  });
+  const body = await response.json();
+  assert.equal(response.status, 409);
+  assert.equal(body.code, "project_store_inventory_invalid");
+  assert.equal(body.message, "Project storage is inconsistent. Resolve project storage and try again.");
+  assert.doesNotMatch(JSON.stringify(body), /factory-project|\.lock|owner\.json|pid|token|EEXIST|ENOENT|EPERM|project_id|[A-Z]:\\/i);
+  assert.equal(fs.existsSync(path.join(projectsRoot, "rejected-by-inventory")), false);
+  assert.equal(fs.existsSync(path.join(projectsRoot, PROJECT_STORE_LOCK_DIRECTORY)), false);
+  assert.ok(listProjects(projectsRoot).some((project) => project.error === "Invalid factory-project.json"));
 });
 
 test("double submission reuses one project and status polling is read-only", async (t) => {
