@@ -1,0 +1,18 @@
+{
+  "description": "Lightweight deterministic CSF checks before Codex finishes a turn.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"$(git rev-parse --show-toplevel)/.codex/hooks/csf-stop-check.ps1\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path (git rev-parse --show-toplevel) '.codex\\hooks\\csf-stop-check.ps1')\"",
+            "timeout": 10,
+            "statusMessage": "Checking CSF Git diff"
+          }
+        ]
+      }
+    ]
+  }
+}
