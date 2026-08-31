@@ -56,6 +56,13 @@
   const recoveryCapabilityStatus = document.getElementById("recovery-capability-status");
 
   const THEME_STORAGE_KEY = "crocoblock-site-factory-theme";
+  const GENERATE_REVIEW_FIELDS = Object.freeze([
+    ["agency_name", "Agency"],
+    ["city", "City"],
+    ["hero_title", "Hero title"],
+    ["hero_subtitle", "Hero subtitle"],
+    ["hero_cta_text", "Hero call to action"]
+  ]);
 
   function escapeHtml(value) {
     return String(value)
@@ -86,6 +93,30 @@
       return safeFallback;
     }
     return message;
+  }
+
+  function sanitizeGenerateReviewFieldValue(value) {
+    const text = normalizeDisplayText(value);
+    if (!text || text.length > 160) {
+      return null;
+    }
+    if (
+      /[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|var|tmp|etc|opt|srv|mnt)\//i.test(text)
+      || /(?:password|secret|authorization|bearer|access[_-]?token|api[_-]?key)/i.test(text)
+      || /\b(?:operation|plan|proof|snapshot|run)[_-]?(?:id)?\s*[:=]\s*[A-Za-z0-9._:-]{6,}/i.test(text)
+      || /\b(?:powershell|cmd|bash|shell|docker|wp-cli|jet(?:engine|smartfilters|formbuilder)?|crocoblock)\b/i.test(text)
+    ) {
+      return null;
+    }
+    return text;
+  }
+
+  function collectGenerateReviewFields(interpretedFields) {
+    const source = interpretedFields && typeof interpretedFields === "object" ? interpretedFields : {};
+    return GENERATE_REVIEW_FIELDS
+      .filter(([key]) => Object.prototype.hasOwnProperty.call(source, key))
+      .map(([key, label]) => ({ label, value: sanitizeGenerateReviewFieldValue(source[key]) }))
+      .filter((field) => field.value !== null);
   }
 
   function applyTheme(theme) {
@@ -1621,26 +1652,30 @@
     const interpretedFields = safeResult.interpreted_fields && typeof safeResult.interpreted_fields === "object"
       ? safeResult.interpreted_fields
       : {};
-    const fieldEntries = Object.entries(interpretedFields);
+    const reviewFields = collectGenerateReviewFields(interpretedFields);
     const warnings = Array.isArray(safeResult.warnings) ? safeResult.warnings : [];
+    const businessSummary = safeResult.business_summary && typeof safeResult.business_summary === "object"
+      && typeof safeResult.business_summary.description === "string"
+      ? safeResult.business_summary.description
+      : "";
     const stale = Boolean(options && options.stale);
+    const canGenerate = safeResult.can_generate === true;
 
       return {
-      className: stale ? "result-box result-box-error" : "result-box result-box-success",
+      className: stale || !canGenerate ? "result-box result-box-error" : "result-box result-box-success",
       html: [
-      "<strong>" + escapeHtml(stale ? "Preview is stale." : "Generate preview ready.") + "</strong>",
+      "<strong>" + escapeHtml(stale ? "Preview is stale." : (canGenerate ? "Generate preview ready." : "Website setup needs attention.")) + "</strong>",
       stale ? "<p>The prompt changed after preview. Preview Plan again before Generate.</p>" : "",
-      "<p><span>Personalization source:</span> " + escapeHtml(safeResult.personalization_source || "local_interpreter") + "</p>",
-      "<p><span>Can generate:</span> " + escapeHtml(String(safeResult.can_generate === true)) + "</p>",
-      "<p><span>Dependency blockers:</span> " + escapeHtml((safeResult.dependency_blockers || []).length ? safeResult.dependency_blockers.join(", ") : "None") + "</p>",
+      !canGenerate ? "<p>Website setup is not ready yet. Complete the required setup before generating.</p>" : "",
+      businessSummary ? "<p><span>Website capability:</span> " + escapeHtml(businessSummary) + "</p>" : "",
+      "<p><span>Can generate:</span> " + escapeHtml(String(canGenerate)) + "</p>",
+      "<p><span>Dependency blockers:</span> " + escapeHtml((safeResult.dependency_blockers || []).length ? "Review setup before generating." : "None") + "</p>",
       "<p><span>Estimated input tokens:</span> " + escapeHtml(String(safeResult.estimated_input_tokens != null ? safeResult.estimated_input_tokens : "Not available")) + "</p>",
       "<p><span>Estimated output tokens:</span> " + escapeHtml(String(safeResult.estimated_output_tokens != null ? safeResult.estimated_output_tokens : "Not available")) + "</p>",
       "<p><span>Estimated total tokens:</span> " + escapeHtml(String(safeResult.estimated_total_tokens != null ? safeResult.estimated_total_tokens : "Not available")) + "</p>",
       "<p><span>Estimated cost:</span> " + escapeHtml(String(safeResult.estimated_cost == null ? "Not available" : safeResult.estimated_cost)) + "</p>",
-      "<p><span>Plan proof:</span> " + escapeHtml(safeResult.plan_proof_path || "Unavailable") + "</p>",
-      "<p><span>Estimate proof:</span> " + escapeHtml(safeResult.estimate_proof_path || "Unavailable") + "</p>",
-      fieldEntries.length
-        ? "<p><span>Interpreted fields:</span></p><ul>" + fieldEntries.map(([key, value]) => "<li><strong>" + escapeHtml(key) + ":</strong> " + escapeHtml(value) + "</li>").join("") + "</ul>"
+      reviewFields.length
+        ? "<p><span>Planned content:</span></p><ul>" + reviewFields.map((field) => "<li><strong>" + escapeHtml(field.label) + ":</strong> " + escapeHtml(field.value) + "</li>").join("") + "</ul>"
         : "<p><span>Interpreted fields:</span> None</p>",
       "<ul class=\"warning-list\">"
         + "<li>Generate will modify this WordPress project.</li>"
@@ -1648,12 +1683,7 @@
         + "<li>Full-site rollback is not available in this version.</li>"
         + "<li>Safe-field rollback is not the same as full-site rollback.</li>"
         + "</ul>",
-      buildTechnicalDetails("Advanced details", [
-        ["Plan ID", safeResult.plan_id || "Unavailable"],
-        ["Prompt hash", safeResult.prompt_hash || "Unavailable"],
-        ["Provider called", String(safeResult.provider_called === true)]
-      ]),
-      buildWarningDetails("Preview warnings", warnings)
+      warnings.length ? "<p><span>Preview warnings:</span> " + escapeHtml(String(warnings.length)) + "</p>" : ""
       ].join("")
     };
   }
@@ -3766,6 +3796,9 @@
     window.FactoryLauncherTestHooks.presentation = {
       getProjectPresentation,
       sanitizePublicError
+    };
+    window.FactoryLauncherTestHooks.generatePreview = {
+      buildGeneratePreviewHtml
     };
     window.FactoryLauncherTestHooks.recoveryStatus = {
       buildRecoveryStatusCardHtml,

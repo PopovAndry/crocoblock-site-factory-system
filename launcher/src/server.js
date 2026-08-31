@@ -34,6 +34,7 @@ const {
 const { planProject } = require("./plan");
 const { configureAi, enableLiveAi, estimateAi, getAiStatus } = require("./ai");
 const { assertPlanningRunReady, generateProject, readRunFile } = require("./generate");
+const { buildRealEstateBusinessSummary } = require("./real-estate-contract");
 const { getSiteStatus, writeSiteSurfaceProof } = require("./site");
 const {
   readStateStatus,
@@ -1615,6 +1616,7 @@ function createLauncherServer(options) {
         assertProjectExistsForRoute(slug, projectsRoot);
         const prompt = validateGenerationPrompt(payload.prompt);
         const setupResult = await ensureProjectReadyToGenerate(slug, projectsRoot);
+        const businessSummary = buildRealEstateBusinessSummary();
         const planResult = await planProject({
           slug,
           prompt,
@@ -1644,6 +1646,7 @@ function createLauncherServer(options) {
           estimated_total_tokens: estimateResult.estimate.estimated_total_tokens,
           estimated_cost: estimateResult.estimate.estimated_cost,
           estimate_uncertainty: estimateResult.estimate.uncertainty,
+          business_summary: businessSummary,
           can_generate: setupResult.setup.dependencies.can_generate === true,
           dependency_blockers: setupResult.setup.dependencies.blockers || [],
           plan_path: planResult.runPath,

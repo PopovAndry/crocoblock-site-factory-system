@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   CONTRACT_PATH,
+  buildRealEstateBusinessSummary,
   evaluateRealEstateContract,
   loadRealEstateContract,
   validateRealEstateContract
@@ -35,6 +36,10 @@ test("valid Real Estate contract loads with deterministic normalized output", ()
   assert.equal(first.contract_id, "real-estate-contract@1");
   assert.deepEqual(first, second);
   assert.equal(new Set(first.proof.checks.map((check) => check.id)).size, first.proof.checks.length);
+  assert.deepEqual(first.user_journeys.map((journey) => journey.id), ["discover_property"]);
+  assert.deepEqual(buildRealEstateBusinessSummary(first), {
+    description: "Visitors can browse properties, filter by Purpose, Property Type and District, and open property details."
+  });
 });
 
 test("malformed and unsupported contracts fail closed", () => {
@@ -57,6 +62,38 @@ test("duplicate IDs, invalid ownership, invalid surfaces, and unsafe paths are r
   const unsafe = clone(loadRealEstateContract());
   unsafe.compatibility.blueprint_source = "C:\\developer\\blueprint.json";
   assert.throws(() => validateRealEstateContract(unsafe), { code: "real_estate_contract_unsafe_path" });
+});
+
+test("provider-neutral discovery semantics fail closed for missing, unresolved, and provider instructions", () => {
+  const missing = clone(loadRealEstateContract());
+  delete missing.queries;
+  assert.throws(() => validateRealEstateContract(missing));
+
+  const unknownEntity = clone(loadRealEstateContract());
+  unknownEntity.queries[0].entity_id = "unknown_entity";
+  assert.throws(() => validateRealEstateContract(unknownEntity), { code: "real_estate_contract_invalid_business_reference" });
+
+  const unknownFilterQuery = clone(loadRealEstateContract());
+  unknownFilterQuery.filters[0].query_id = "unknown_query";
+  assert.throws(() => validateRealEstateContract(unknownFilterQuery), { code: "real_estate_contract_invalid_business_reference" });
+
+  const unresolvedListing = clone(loadRealEstateContract());
+  unresolvedListing.listings[0].component_id = "unknown_component";
+  assert.throws(() => validateRealEstateContract(unresolvedListing), { code: "real_estate_contract_invalid_business_reference" });
+
+  const unresolvedJourney = clone(loadRealEstateContract());
+  unresolvedJourney.user_journeys[0].listing_id = "unknown_listing";
+  assert.throws(() => validateRealEstateContract(unresolvedJourney), { code: "real_estate_contract_invalid_business_reference" });
+
+  for (const value of ["JetEngine listing", "<?php echo 'property';", "SELECT * FROM properties", "powershell Remove-Item C:\\site"]) {
+    const unsafeBusinessSemantic = clone(loadRealEstateContract());
+    unsafeBusinessSemantic.queries[0].result_label = value;
+    assert.throws(() => validateRealEstateContract(unsafeBusinessSemantic), { code: "real_estate_contract_invalid_business_semantics" });
+  }
+
+  const implementationRef = clone(loadRealEstateContract());
+  implementationRef.queries[0].implementation_ref = "adapter";
+  assert.throws(() => validateRealEstateContract(implementationRef), { code: "real_estate_contract_invalid_business_semantics" });
 });
 
 test("valid runtime fixture produces a sanitized compliant report", () => {

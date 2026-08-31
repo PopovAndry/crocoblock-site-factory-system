@@ -8,6 +8,9 @@ const CONTRACT_PATH = path.join(__dirname, "..", "contracts", "real-estate-contr
 const OWNERSHIP_CLASSES = new Set(["factory_managed", "owner_editable", "protected", "derived_runtime_only"]);
 const CHECK_KINDS = new Set(["runtime_status", "validation_message", "generated_url", "minimum_count", "ownership"]);
 const HOMEPAGE_COMPONENT_IDS = new Set(["site-header", "hero", "property-listing", "property-card", "site-footer"]);
+const BUSINESS_SEMANTIC_SECTIONS = ["queries", "filters", "listings", "user_journeys"];
+const PROVIDER_OR_EXECUTION_PATTERN = /(?:\b(?:jet(?:engine|smartfilters|formbuilder)?|crocoblock|wordpress|elementor|bricks|kava)\b|<\?(?:php|=)|\$\w+|\b(?:select|insert|update|delete|drop|alter|create|from|where|join)\b|\b(?:powershell|cmd|bash|shell|docker|wp-cli|rm|del|remove-item|copy-item|move-item|mkdir|rmdir|touch|chmod|chown|curl|wget|npm|apply|execute|mutate|install|uninstall|restore|format)\b)/i;
+const BUSINESS_FORBIDDEN_KEYS = new Set(["implementation_ref", "path", "file", "file_path", "command", "script", "provider", "plugin", "theme", "sql", "php"]);
 
 function contractError(message, code) {
   const error = new Error(message);
@@ -40,6 +43,135 @@ function requireArray(contract, key) {
   return contract[key];
 }
 
+function requirePlainObject(value, section) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw contractError("Contract business section entry is invalid: " + section + ".", "real_estate_contract_invalid_business_semantics");
+  }
+  return value;
+}
+
+function requireExactKeys(value, allowedKeys, section) {
+  const entry = requirePlainObject(value, section);
+  if (Object.keys(entry).some((key) => !allowedKeys.includes(key))) {
+    throw contractError("Contract business section contains an unsupported field.", "real_estate_contract_invalid_business_semantics");
+  }
+  return entry;
+}
+
+function requireStableId(value, section) {
+  if (!/^[a-z][a-z0-9_.-]*$/i.test(String(value || ""))) {
+    throw contractError("Contract contains an invalid stable ID in " + section + ".", "real_estate_contract_invalid_id");
+  }
+}
+
+function requireBusinessLabel(value, section) {
+  if (typeof value !== "string" || !/^[A-Za-z][A-Za-z -]{0,79}$/.test(value)) {
+    throw contractError("Contract business label is invalid: " + section + ".", "real_estate_contract_invalid_business_semantics");
+  }
+}
+
+function containsForbiddenBusinessInstruction(value) {
+  if (typeof value === "string") {
+    return /[\\/]/.test(value) || PROVIDER_OR_EXECUTION_PATTERN.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsForbiddenBusinessInstruction);
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value).some(([key, item]) => BUSINESS_FORBIDDEN_KEYS.has(key) || containsForbiddenBusinessInstruction(item));
+  }
+  return false;
+}
+
+function requireReference(value, references, message) {
+  if (!references.has(value)) {
+    throw contractError(message, "real_estate_contract_invalid_business_reference");
+  }
+}
+
+function requireUniqueReferences(values, references, message) {
+  if (!Array.isArray(values) || new Set(values).size !== values.length) {
+    throw contractError(message, "real_estate_contract_invalid_business_reference");
+  }
+  for (const value of values) {
+    requireReference(value, references, message);
+  }
+}
+
+function validateBusinessSemantics(contract) {
+  for (const section of BUSINESS_SEMANTIC_SECTIONS) {
+    const entries = requireArray(contract, section);
+    if (containsForbiddenBusinessInstruction(entries)) {
+      throw contractError("Contract business semantics may not contain provider or executable instructions.", "real_estate_contract_invalid_business_semantics");
+    }
+  }
+
+  const entityIds = new Set(contract.data_model.entities.map((entry) => entry.id));
+  const taxonomyIds = new Set(contract.data_model.taxonomies.map((entry) => entry.id));
+  const fieldIds = new Set(contract.data_model.fields.map((entry) => entry.id));
+  const componentIds = new Set(contract.component_slots.map((entry) => entry.id));
+  const surfaceIds = new Set(contract.surfaces.map((entry) => entry.id));
+  const queryIds = new Set(contract.queries.map((entry) => entry.id));
+  const filterIds = new Set(contract.filters.map((entry) => entry.id));
+  const listingIds = new Set(contract.listings.map((entry) => entry.id));
+
+  if (contract.queries.length !== 1 || contract.queries[0].id !== "property_catalog") {
+    throw contractError("Real Estate contract requires exactly one property catalog query.", "real_estate_contract_invalid_business_semantics");
+  }
+  if (contract.filters.length !== 3 || new Set(contract.filters.map((entry) => entry.taxonomy_id)).size !== 3 || contract.filters.some((entry) => !["property_purpose", "property_type", "property_district"].includes(entry.taxonomy_id))) {
+    throw contractError("Real Estate contract requires Purpose, Property Type, and District filters.", "real_estate_contract_invalid_business_semantics");
+  }
+  if (contract.listings.length !== 1 || contract.listings[0].id !== "property_card_listing") {
+    throw contractError("Real Estate contract requires exactly one Property Card listing.", "real_estate_contract_invalid_business_semantics");
+  }
+
+  for (const query of contract.queries) {
+    requireExactKeys(query, ["id", "entity_id", "result_label"], "queries");
+    requireStableId(query.id, "queries");
+    requireReference(query.entity_id, entityIds, "Query references an unknown entity.");
+    requireBusinessLabel(query.result_label, "queries");
+  }
+  for (const filter of contract.filters) {
+    requireExactKeys(filter, ["id", "query_id", "taxonomy_id", "label", "optional"], "filters");
+    requireStableId(filter.id, "filters");
+    requireReference(filter.query_id, queryIds, "Filter references an unknown query.");
+    requireReference(filter.taxonomy_id, taxonomyIds, "Filter references an unknown taxonomy.");
+    requireBusinessLabel(filter.label, "filters");
+    if (filter.optional !== true) {
+      throw contractError("Property discovery filters must be optional.", "real_estate_contract_invalid_business_semantics");
+    }
+  }
+  for (const listing of contract.listings) {
+    requireExactKeys(listing, ["id", "query_id", "component_id", "field_ids", "surface_id", "detail_surface_id"], "listings");
+    requireStableId(listing.id, "listings");
+    requireReference(listing.query_id, queryIds, "Listing references an unknown query.");
+    requireReference(listing.component_id, componentIds, "Listing references an unknown component.");
+    requireUniqueReferences(listing.field_ids, fieldIds, "Listing references an unknown field.");
+    requireReference(listing.surface_id, surfaceIds, "Listing references an unknown surface.");
+    requireReference(listing.detail_surface_id, surfaceIds, "Listing references an unknown surface.");
+  }
+  if (contract.user_journeys.length !== 1 || contract.user_journeys[0].id !== "discover_property") {
+    throw contractError("Real Estate contract requires exactly one discover_property journey.", "real_estate_contract_invalid_business_journey");
+  }
+  const journey = contract.user_journeys[0];
+  requireExactKeys(journey, ["id", "entry_surface_id", "query_id", "filter_ids", "listing_id", "detail_surface_id", "detail_label"], "user_journeys");
+  requireStableId(journey.id, "user_journeys");
+  requireReference(journey.entry_surface_id, surfaceIds, "Journey references an unknown surface.");
+  requireReference(journey.query_id, queryIds, "Journey references an unknown query.");
+  requireUniqueReferences(journey.filter_ids, filterIds, "Journey references an unknown filter.");
+  requireReference(journey.listing_id, listingIds, "Journey references an unknown listing.");
+  requireReference(journey.detail_surface_id, surfaceIds, "Journey references an unknown surface.");
+  requireBusinessLabel(journey.detail_label, "user_journeys");
+
+  const listing = contract.listings.find((entry) => entry.id === journey.listing_id);
+  if (journey.entry_surface_id !== listing.surface_id || journey.query_id !== listing.query_id || journey.detail_surface_id !== listing.detail_surface_id) {
+    throw contractError("Journey contains unresolved listing references.", "real_estate_contract_invalid_business_reference");
+  }
+  if (journey.filter_ids.length !== 3 || journey.filter_ids.some((filterId) => contract.filters.find((entry) => entry.id === filterId).query_id !== journey.query_id)) {
+    throw contractError("Journey filters do not resolve to its catalog query.", "real_estate_contract_invalid_business_reference");
+  }
+}
+
 function collectStableIds(contract) {
   const seen = new Set();
   const groups = [
@@ -49,6 +181,10 @@ function collectStableIds(contract) {
     requireArray(contract.data_model || {}, "fields"),
     requireArray(contract, "surfaces"),
     requireArray(contract, "component_slots"),
+    requireArray(contract, "queries"),
+    requireArray(contract, "filters"),
+    requireArray(contract, "listings"),
+    requireArray(contract, "user_journeys"),
     requireArray(contract, "ownership"),
     requireArray(contract.proof || {}, "checks")
   ];
@@ -76,6 +212,7 @@ function validateRealEstateContract(contract) {
     throw contractError("Real Estate contract may not contain absolute or traversal paths.", "real_estate_contract_unsafe_path");
   }
   collectStableIds(contract);
+  validateBusinessSemantics(contract);
   const surfaceIds = new Set(contract.surfaces.map((surface) => surface.id));
   for (const entry of contract.data_model.fields.concat(contract.data_model.entities, contract.data_model.taxonomies, contract.ownership)) {
     if (!OWNERSHIP_CLASSES.has(entry.ownership || entry.class)) {
@@ -135,6 +272,10 @@ function normalizeContract(contract) {
   sortById(clone.data_model.fields);
   sortById(clone.surfaces);
   sortById(clone.component_slots);
+  sortById(clone.queries);
+  sortById(clone.filters);
+  sortById(clone.listings);
+  sortById(clone.user_journeys);
   sortById(clone.homepage_components);
   const componentSlots = new Map(clone.component_slots.map((slot) => [slot.id, slot]));
   for (const component of clone.homepage_components) {
@@ -143,6 +284,20 @@ function normalizeContract(contract) {
   sortById(clone.ownership);
   sortById(clone.proof.checks);
   return clone;
+}
+
+function buildRealEstateBusinessSummary(contractInput) {
+  const contract = contractInput ? validateRealEstateContract(contractInput) : loadRealEstateContract();
+  const journey = contract.user_journeys[0];
+  const query = contract.queries.find((entry) => entry.id === journey.query_id);
+  const filters = journey.filter_ids.map((filterId) => contract.filters.find((entry) => entry.id === filterId));
+  const filterLabels = filters.map((filter) => filter.label);
+  const filterText = filterLabels.length === 1
+    ? filterLabels[0]
+    : filterLabels.slice(0, -1).join(", ") + " and " + filterLabels[filterLabels.length - 1];
+  return {
+    description: "Visitors can browse " + query.result_label + ", filter by " + filterText + ", and open " + journey.detail_label + "."
+  };
 }
 
 function loadRealEstateContract(contractPath) {
@@ -236,6 +391,7 @@ function evaluateRealEstateContract(options) {
 
 module.exports = {
   CONTRACT_PATH,
+  buildRealEstateBusinessSummary,
   evaluateRealEstateContract,
   inspectRealEstateRuntime,
   loadRealEstateContract,

@@ -39,6 +39,35 @@
       { "id": "property_district_value", "key": "district", "type": "text", "multiple": false, "required": true, "ownership": "factory_managed" }
     ]
   },
+  "queries": [
+    { "id": "property_catalog", "entity_id": "property", "result_label": "properties" }
+  ],
+  "filters": [
+    { "id": "filter_purpose", "query_id": "property_catalog", "taxonomy_id": "property_purpose", "label": "Purpose", "optional": true },
+    { "id": "filter_property_type", "query_id": "property_catalog", "taxonomy_id": "property_type", "label": "Property Type", "optional": true },
+    { "id": "filter_district", "query_id": "property_catalog", "taxonomy_id": "property_district", "label": "District", "optional": true }
+  ],
+  "listings": [
+    {
+      "id": "property_card_listing",
+      "query_id": "property_catalog",
+      "component_id": "property_card",
+      "field_ids": ["property_price", "property_address", "property_bedrooms", "property_bathrooms", "property_size", "property_district_value"],
+      "surface_id": "property_archive",
+      "detail_surface_id": "property_single"
+    }
+  ],
+  "user_journeys": [
+    {
+      "id": "discover_property",
+      "entry_surface_id": "property_archive",
+      "query_id": "property_catalog",
+      "filter_ids": ["filter_purpose", "filter_property_type", "filter_district"],
+      "listing_id": "property_card_listing",
+      "detail_surface_id": "property_single",
+      "detail_label": "property details"
+    }
+  ],
   "surfaces": [
     { "id": "homepage", "route": "home", "required": true, "regions": ["site_header", "hero", "property_listing", "contact_section", "site_footer"], "bindings": ["property-card"], "navigation": ["property_archive", "contact"] },
     { "id": "property_archive", "route": "properties", "required": true, "regions": ["site_header", "property_filters", "property_listing", "site_footer"], "bindings": ["property-card"], "navigation": ["homepage", "property_single"] },
