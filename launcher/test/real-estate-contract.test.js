@@ -5,6 +5,7 @@ const test = require("node:test");
 const {
   CONTRACT_PATH,
   buildRealEstateBusinessSummary,
+  classifyAddOptionalViewingDateChange,
   evaluateRealEstateContract,
   loadRealEstateContract,
   validateRealEstateContract
@@ -15,6 +16,37 @@ function clone(value) {
 }
 
 const DISCOVERY_RULES_DESCRIPTION = "Property Discovery specification only: each of Purpose, Property Type and District accepts one taxonomy term. Active selections use AND, so a property must match every selected condition. An unselected filter adds no restriction; all other active conditions still apply. When no filters are selected, or after Clear filters, the base properties catalog is used. A valid search with no matches while filters are active shows an explicit empty state and offers Clear filters; conditions are not relaxed automatically. An empty base catalog remains empty, and an execution error is shown as an error, not as no matches. Runtime filtering behavior is not verified in this slice.";
+
+function beforeViewingDateFacts() {
+  const contract = loadRealEstateContract();
+  const form = contract.forms.find((entry) => entry.id === "request_viewing_form");
+  const context = contract.property_contexts.find((entry) => entry.id === "selected_property_context");
+  const journey = contract.user_journeys.find((entry) => entry.id === "request_viewing");
+  const fields = contract.form_fields
+    .filter((field) => field.id !== "request_viewing_preferred_date")
+    .map(({ id, form_id, type, required }) => ({ id, form_id, type, required }));
+  return {
+    profile_id: "add_optional_viewing_date",
+    profile_version: 1,
+    ownership: {
+      form: "factory_managed",
+      context: "factory_managed",
+      existing_fields: "factory_managed",
+      protected_content: "preserved",
+      user_content: "preserved"
+    },
+    journey: { id: journey.id, form_id: journey.form_id, context_id: journey.context_id },
+    form: {
+      id: form.id,
+      entity_id: form.entity_id,
+      context_id: form.context_id,
+      field_ids: fields.map((field) => field.id),
+      contact_rule: clone(form.contact_rule)
+    },
+    context: clone(context),
+    fields
+  };
+}
 
 function runtimeFixture() {
   const contract = loadRealEstateContract();
@@ -42,7 +74,7 @@ test("valid Real Estate contract loads with deterministic normalized output", ()
   assert.deepEqual(buildRealEstateBusinessSummary(first), {
     description: "Visitors can browse properties, filter by Purpose, Property Type and District, and open property details.",
     discovery_rules_description: DISCOVERY_RULES_DESCRIPTION,
-    request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires Email or Phone. Preferred date does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime submission is not connected in this slice."
+    request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires Email or Phone. Preferred date does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime readiness and submission are not verified by this specification."
   });
 });
 
@@ -258,6 +290,143 @@ test("Request Viewing semantics fail closed for unresolved context, form, field,
   const providerConfiguration = clone(loadRealEstateContract());
   providerConfiguration.forms[0].provider = "JetEngine";
   assert.throws(() => validateRealEstateContract(providerConfiguration), { code: "real_estate_contract_invalid_business_semantics" });
+});
+
+test("the sole viewing-date change profile preserves exactly the allowed structural change", () => {
+  const contract = loadRealEstateContract();
+  assert.deepEqual(contract.change_profiles.map((profile) => [profile.id, profile.version, profile.operation, profile.journey_id, profile.form_id, profile.context_id, profile.field_id]), [[
+    "add_optional_viewing_date",
+    1,
+    "add_optional_form_field_and_binding",
+    "request_viewing",
+    "request_viewing_form",
+    "selected_property_context",
+    "request_viewing_preferred_date"
+  ]]);
+  assert.equal(contract.change_profiles[0].preservation.form_replacement, "forbidden");
+  assert.equal(contract.change_profiles[0].preservation.field_removal, "forbidden");
+  assert.equal(contract.change_profiles[0].recovery_policy.before_mutation, "verified_recovery_point_required");
+  assert.equal(contract.change_profiles[0].verification.email_client_is_submission_proof, false);
+  assert.equal(contract.change_profiles[0].verification.receiver_receipt_confirms_appointment, false);
+
+  const reordered = clone(contract);
+  reordered.change_profiles.reverse();
+  reordered.form_fields.reverse();
+  reordered.user_journeys.reverse();
+  assert.deepEqual(validateRealEstateContract(reordered), contract);
+});
+
+test("viewing-date change profile validation fails closed for invalid references and weakened requirements", () => {
+  const missingProfile = clone(loadRealEstateContract());
+  delete missingProfile.change_profiles;
+  assert.throws(() => validateRealEstateContract(missingProfile));
+
+  const unsupportedVersion = clone(loadRealEstateContract());
+  unsupportedVersion.change_profiles[0].version = 2;
+  assert.throws(() => validateRealEstateContract(unsupportedVersion), { code: "real_estate_contract_invalid_business_reference" });
+
+  const unsupportedOperation = clone(loadRealEstateContract());
+  unsupportedOperation.change_profiles[0].operation = "replace_form";
+  assert.throws(() => validateRealEstateContract(unsupportedOperation), { code: "real_estate_contract_invalid_business_reference" });
+
+  const unknownReference = clone(loadRealEstateContract());
+  unknownReference.change_profiles[0].field_id = "unknown_field";
+  assert.throws(() => validateRealEstateContract(unknownReference), { code: "real_estate_contract_invalid_business_reference" });
+
+  const unknownJourneyReference = clone(loadRealEstateContract());
+  unknownJourneyReference.change_profiles[0].journey_id = "unknown_journey";
+  assert.throws(() => validateRealEstateContract(unknownJourneyReference), { code: "real_estate_contract_invalid_business_reference" });
+
+  const duplicateProfile = clone(loadRealEstateContract());
+  duplicateProfile.change_profiles.push(clone(duplicateProfile.change_profiles[0]));
+  assert.throws(() => validateRealEstateContract(duplicateProfile), { code: "real_estate_contract_duplicate_id" });
+
+  const weakenedPreservation = clone(loadRealEstateContract());
+  weakenedPreservation.change_profiles[0].preservation.form_replacement = "allowed";
+  assert.throws(() => validateRealEstateContract(weakenedPreservation), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const missingRecoveryRule = clone(loadRealEstateContract());
+  delete missingRecoveryRule.change_profiles[0].recovery_policy.before_mutation;
+  assert.throws(() => validateRealEstateContract(missingRecoveryRule), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const weakenedVerification = clone(loadRealEstateContract());
+  weakenedVerification.change_profiles[0].verification.visual.mobile = "optional";
+  assert.throws(() => validateRealEstateContract(weakenedVerification), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const providerInstruction = clone(loadRealEstateContract());
+  providerInstruction.change_profiles[0].provider = "JetEngine";
+  assert.throws(() => validateRealEstateContract(providerInstruction), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const executableInstruction = clone(loadRealEstateContract());
+  executableInstruction.change_profiles[0].recovery_policy.command = "powershell";
+  assert.throws(() => validateRealEstateContract(executableInstruction), { code: "real_estate_contract_invalid_business_semantics" });
+});
+
+test("preferred viewing date classifier is pure, deterministic, and never execution authority", () => {
+  const before = beforeViewingDateFacts();
+  const beforeSnapshot = clone(before);
+  const applicable = classifyAddOptionalViewingDateChange(before);
+  assert.deepEqual(applicable, { classification: "applicable" });
+  assert.deepEqual(before, beforeSnapshot);
+  assert.equal(Object.hasOwn(applicable, "can_apply"), false);
+  assert.equal(Object.hasOwn(applicable, "runtime_ready"), false);
+  assert.equal(Object.hasOwn(applicable, "execution_payload"), false);
+
+  const noOp = clone(before);
+  noOp.fields.push({ id: "request_viewing_preferred_date", form_id: "request_viewing_form", type: "date", required: false });
+  noOp.form.field_ids.push("request_viewing_preferred_date");
+  assert.deepEqual(classifyAddOptionalViewingDateChange(noOp), { classification: "no_op" });
+
+  const reorderedNoOp = clone(noOp);
+  reorderedNoOp.fields.reverse();
+  reorderedNoOp.form.field_ids.reverse();
+  assert.deepEqual(classifyAddOptionalViewingDateChange(reorderedNoOp), { classification: "no_op" });
+});
+
+test("preferred viewing date classifier blocks conflicts and never lets no-op mask base violations", () => {
+  for (const conflictingDate of [
+    { id: "request_viewing_preferred_date", form_id: "request_viewing_form", type: "text", required: false },
+    { id: "request_viewing_preferred_date", form_id: "request_viewing_form", type: "date", required: true },
+    { id: "request_viewing_preferred_date", form_id: "other_form", type: "date", required: false }
+  ]) {
+    const conflictingField = beforeViewingDateFacts();
+    conflictingField.fields.push(conflictingDate);
+    conflictingField.form.field_ids.push("request_viewing_preferred_date");
+    assert.deepEqual(classifyAddOptionalViewingDateChange(conflictingField), { classification: "blocked" });
+  }
+
+  const missingContext = beforeViewingDateFacts();
+  delete missingContext.context;
+  assert.deepEqual(classifyAddOptionalViewingDateChange(missingContext), { classification: "blocked" });
+
+  const unknownOwnership = beforeViewingDateFacts();
+  unknownOwnership.ownership.form = "unknown";
+  assert.deepEqual(classifyAddOptionalViewingDateChange(unknownOwnership), { classification: "blocked" });
+
+  const ambiguousIdentity = beforeViewingDateFacts();
+  ambiguousIdentity.context.identity_source = "ambiguous";
+  assert.deepEqual(classifyAddOptionalViewingDateChange(ambiguousIdentity), { classification: "blocked" });
+
+  const duplicateField = beforeViewingDateFacts();
+  duplicateField.fields.push(clone(duplicateField.fields[0]));
+  duplicateField.form.field_ids.push(duplicateField.fields[0].id);
+  assert.deepEqual(classifyAddOptionalViewingDateChange(duplicateField), { classification: "blocked" });
+
+  const unknownField = beforeViewingDateFacts();
+  unknownField.fields.push({ id: "unknown_field", form_id: "request_viewing_form", type: "text", required: false });
+  unknownField.form.field_ids.push("unknown_field");
+  assert.deepEqual(classifyAddOptionalViewingDateChange(unknownField), { classification: "blocked" });
+
+  const invalidBaseWithDate = beforeViewingDateFacts();
+  invalidBaseWithDate.fields.find((field) => field.id === "request_viewing_name").required = false;
+  invalidBaseWithDate.fields.push({ id: "request_viewing_preferred_date", form_id: "request_viewing_form", type: "date", required: false });
+  invalidBaseWithDate.form.field_ids.push("request_viewing_preferred_date");
+  assert.deepEqual(classifyAddOptionalViewingDateChange(invalidBaseWithDate), { classification: "blocked" });
+
+  const v1WithoutDate = clone(loadRealEstateContract());
+  v1WithoutDate.form_fields = v1WithoutDate.form_fields.filter((field) => field.id !== "request_viewing_preferred_date");
+  v1WithoutDate.forms[0].field_ids = v1WithoutDate.forms[0].field_ids.filter((id) => id !== "request_viewing_preferred_date");
+  assert.throws(() => validateRealEstateContract(v1WithoutDate), { code: "real_estate_contract_invalid_business_semantics" });
 });
 
 test("valid runtime fixture produces a sanitized compliant report", () => {

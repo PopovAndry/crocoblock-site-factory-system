@@ -8,7 +8,7 @@ const CONTRACT_PATH = path.join(__dirname, "..", "contracts", "real-estate-contr
 const OWNERSHIP_CLASSES = new Set(["factory_managed", "owner_editable", "protected", "derived_runtime_only"]);
 const CHECK_KINDS = new Set(["runtime_status", "validation_message", "generated_url", "minimum_count", "ownership"]);
 const HOMEPAGE_COMPONENT_IDS = new Set(["site-header", "hero", "property-listing", "property-card", "site-footer"]);
-const BUSINESS_SEMANTIC_SECTIONS = ["queries", "filters", "listings", "property_contexts", "forms", "form_fields", "user_journeys"];
+const BUSINESS_SEMANTIC_SECTIONS = ["queries", "filters", "listings", "property_contexts", "forms", "form_fields", "change_profiles", "user_journeys"];
 const PROVIDER_OR_EXECUTION_PATTERN = /(?:\b(?:jet(?:engine|smartfilters|formbuilder)?|crocoblock|wordpress|elementor|bricks|kava|shortcode)\b|<\?(?:php|=)|\$\w+|\b(?:select|insert|update|delete|drop|alter|create|from|where|join)\b|\b(?:powershell|cmd|bash|shell|docker|wp-cli|rm|del|remove-item|copy-item|move-item|mkdir|rmdir|touch|chmod|chown|curl|wget|npm|apply|execute|mutate|install|uninstall|restore|format)\b)/i;
 const BUSINESS_FORBIDDEN_KEYS = new Set(["implementation_ref", "path", "file", "file_path", "command", "script", "provider", "plugin", "theme", "sql", "php"]);
 const FORM_FIELD_TYPES = new Set(["text", "email", "phone", "date", "textarea"]);
@@ -17,6 +17,15 @@ const DISCOVERY_FILTER_TAXONOMIES = {
   filter_property_type: "property_type",
   filter_district: "property_district"
 };
+const CHANGE_PROFILE_ID = "add_optional_viewing_date";
+const CHANGE_PROFILE_VERSION = 1;
+const BASE_REQUEST_VIEWING_FIELDS = {
+  request_viewing_name: ["text", true],
+  request_viewing_email: ["email", false],
+  request_viewing_phone: ["phone", false],
+  request_viewing_message: ["textarea", false]
+};
+const OPTIONAL_VIEWING_DATE_FIELD = ["date", false];
 
 function contractError(message, code) {
   const error = new Error(message);
@@ -60,6 +69,24 @@ function requireExactKeys(value, allowedKeys, section) {
   const entry = requirePlainObject(value, section);
   if (Object.keys(entry).some((key) => !allowedKeys.includes(key))) {
     throw contractError("Contract business section contains an unsupported field.", "real_estate_contract_invalid_business_semantics");
+  }
+  return entry;
+}
+
+function requireRequiredExactKeys(value, allowedKeys, section) {
+  const entry = requireExactKeys(value, allowedKeys, section);
+  if (Object.keys(entry).length !== allowedKeys.length || allowedKeys.some((key) => !Object.hasOwn(entry, key))) {
+    throw contractError("Contract business section is missing a required field.", "real_estate_contract_invalid_business_semantics");
+  }
+  return entry;
+}
+
+function requireExactValues(value, expectedValues, section) {
+  const entry = requireRequiredExactKeys(value, Object.keys(expectedValues), section);
+  for (const [key, expected] of Object.entries(expectedValues)) {
+    if (entry[key] !== expected) {
+      throw contractError("Contract change profile requirement is invalid.", "real_estate_contract_invalid_business_semantics");
+    }
   }
   return entry;
 }
@@ -129,6 +156,8 @@ function validateBusinessSemantics(contract) {
   const contextIds = new Set(contract.property_contexts.map((entry) => entry.id));
   const formIds = new Set(contract.forms.map((entry) => entry.id));
   const formFieldIds = new Set(contract.form_fields.map((entry) => entry.id));
+  const changeProfileIds = new Set(contract.change_profiles.map((entry) => entry.id));
+  const journeyIds = new Set(contract.user_journeys.map((entry) => entry.id));
 
   if (contract.queries.length !== 1 || contract.queries[0].id !== "property_catalog") {
     throw contractError("Real Estate contract requires exactly one property catalog query.", "real_estate_contract_invalid_business_semantics");
@@ -251,14 +280,83 @@ function validateBusinessSemantics(contract) {
   if (!hasExactIds(discoveryJourney.filter_ids.map((id) => ({ id })), Object.keys(DISCOVERY_FILTER_TAXONOMIES)) || discoveryJourney.filter_ids.some((filterId) => contract.filters.find((entry) => entry.id === filterId).query_id !== discoveryJourney.query_id) || discoveryJourney.clear_filters_action !== "reset_to_base_catalog") {
     throw contractError("Journey filters do not resolve to its catalog query.", "real_estate_contract_invalid_business_reference");
   }
-  requireExactKeys(requestViewingJourney, ["id", "source_surface_id", "target_surface_id", "form_id", "context_id", "outcome", "delivery_status", "email_handoff_confirms_submission"], "user_journeys");
+  requireExactKeys(requestViewingJourney, ["id", "source_surface_id", "target_surface_id", "form_id", "context_id", "outcome", "email_handoff_confirms_submission"], "user_journeys");
   requireReference(requestViewingJourney.source_surface_id, surfaceIds, "Request Viewing journey references an unknown surface.");
   requireReference(requestViewingJourney.target_surface_id, surfaceIds, "Request Viewing journey references an unknown surface.");
   requireReference(requestViewingJourney.form_id, formIds, "Request Viewing journey references an unknown form.");
   requireReference(requestViewingJourney.context_id, contextIds, "Request Viewing journey references an unknown property context.");
-  if (requestViewingJourney.source_surface_id !== discoveryJourney.detail_surface_id || requestViewingJourney.target_surface_id !== "contact" || requestViewingJourney.form_id !== form.id || requestViewingJourney.context_id !== context.id || requestViewingJourney.outcome !== "viewing_request" || requestViewingJourney.delivery_status !== "not_connected" || requestViewingJourney.email_handoff_confirms_submission !== false) {
+  if (requestViewingJourney.source_surface_id !== discoveryJourney.detail_surface_id || requestViewingJourney.target_surface_id !== "contact" || requestViewingJourney.form_id !== form.id || requestViewingJourney.context_id !== context.id || requestViewingJourney.outcome !== "viewing_request" || requestViewingJourney.email_handoff_confirms_submission !== false) {
     throw contractError("Request Viewing journey binding or outcome is invalid.", "real_estate_contract_invalid_business_reference");
   }
+
+  if (contract.change_profiles.length !== 1 || !changeProfileIds.has(CHANGE_PROFILE_ID)) {
+    throw contractError("Real Estate contract requires exactly one supported change profile.", "real_estate_contract_invalid_business_semantics");
+  }
+  const profile = contract.change_profiles.find((entry) => entry.id === CHANGE_PROFILE_ID);
+  requireRequiredExactKeys(profile, ["id", "version", "operation", "journey_id", "form_id", "context_id", "field_id", "preservation", "verification", "recovery_policy"], "change_profiles");
+  requireStableId(profile.id, "change_profiles");
+  requireReference(profile.journey_id, journeyIds, "Change profile references an unknown journey.");
+  requireReference(profile.form_id, formIds, "Change profile references an unknown form.");
+  requireReference(profile.context_id, contextIds, "Change profile references an unknown property context.");
+  requireReference(profile.field_id, formFieldIds, "Change profile references an unknown form field.");
+  const profileField = contract.form_fields.find((entry) => entry.id === profile.field_id);
+  if (profile.version !== CHANGE_PROFILE_VERSION || profile.operation !== "add_optional_form_field_and_binding" || profile.journey_id !== requestViewingJourney.id || profile.form_id !== form.id || profile.context_id !== context.id || profile.field_id !== "request_viewing_preferred_date" || profileField.form_id !== form.id || profileField.type !== OPTIONAL_VIEWING_DATE_FIELD[0] || profileField.required !== OPTIONAL_VIEWING_DATE_FIELD[1]) {
+    throw contractError("Change profile binding or operation is invalid.", "real_estate_contract_invalid_business_reference");
+  }
+  requireExactValues(profile.preservation, {
+    name_required: "required",
+    contact_rule: "preserve",
+    existing_fields: "preserve",
+    selected_property_context: "preserve",
+    other_journeys: "preserve",
+    surfaces: "preserve",
+    property_records: "preserve",
+    protected_content: "preserve",
+    user_content: "preserve",
+    form_replacement: "forbidden",
+    field_removal: "forbidden",
+    arbitrary_patch_paths: "forbidden",
+    site_rebuild: "forbidden",
+    delivery_settings: "preserve"
+  }, "change_profiles.preservation");
+  const verification = requireRequiredExactKeys(profile.verification, ["structural", "functional", "visual", "email_client_is_submission_proof", "receiver_receipt_confirms_appointment", "receiver_receipt_confirms_email_delivery"], "change_profiles.verification");
+  const structuralVerification = requireExactValues(verification.structural, {
+    field_cardinality: "exactly_one",
+    field_semantics: "optional_date_bound_to_request_viewing_form",
+    preservation: "required"
+  }, "change_profiles.verification.structural");
+  const functionalVerification = requireExactValues(verification.functional, {
+    with_date: "controlled_receiver_required",
+    without_date: "controlled_receiver_required",
+    selected_property_and_date: "controlled_receiver_required",
+    contact_and_context_rules: "preserved"
+  }, "change_profiles.verification.functional");
+  const visualVerification = requireExactValues(verification.visual, {
+    desktop: "usable",
+    mobile: "usable",
+    existing_form: "preserved"
+  }, "change_profiles.verification.visual");
+  requireExactValues(verification, {
+    structural: structuralVerification,
+    functional: functionalVerification,
+    visual: visualVerification,
+    email_client_is_submission_proof: false,
+    receiver_receipt_confirms_appointment: false,
+    receiver_receipt_confirms_email_delivery: false
+  }, "change_profiles.verification");
+  requireExactValues(profile.recovery_policy, {
+    before_mutation: "verified_recovery_point_required",
+    identity_binding: "same_project_baseline_change_required",
+    affected_resource_coverage: "required",
+    missing_or_unsuitable_evidence: "blocks_mutation",
+    verification_before_completion: "required",
+    user_accept_after_verification: "required",
+    restore_target: "verified_before_state",
+    restored_status: "restore_verification_required",
+    failure_or_interruption: "not_success",
+    external_effects: "not_reversible",
+    runtime_proof_environment: "controlled_disposable_required"
+  }, "change_profiles.recovery_policy");
 }
 
 function collectStableIds(contract) {
@@ -276,6 +374,7 @@ function collectStableIds(contract) {
     requireArray(contract, "property_contexts"),
     requireArray(contract, "forms"),
     requireArray(contract, "form_fields"),
+    requireArray(contract, "change_profiles"),
     requireArray(contract, "user_journeys"),
     requireArray(contract, "ownership"),
     requireArray(contract.proof || {}, "checks")
@@ -370,6 +469,7 @@ function normalizeContract(contract) {
   sortById(clone.property_contexts);
   sortById(clone.forms);
   sortById(clone.form_fields);
+  sortById(clone.change_profiles);
   sortById(clone.user_journeys);
   for (const form of clone.forms) {
     form.field_ids.sort();
@@ -383,6 +483,92 @@ function normalizeContract(contract) {
   sortById(clone.ownership);
   sortById(clone.proof.checks);
   return clone;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasRequiredExactKeys(value, keys) {
+  return isPlainObject(value)
+    && Object.keys(value).length === keys.length
+    && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function hasExactValues(value, expectedValues) {
+  return hasRequiredExactKeys(value, Object.keys(expectedValues))
+    && Object.entries(expectedValues).every(([key, expected]) => value[key] === expected);
+}
+
+function hasExactSemanticFields(fields, expectedFields) {
+  if (!Array.isArray(fields) || fields.length !== Object.keys(expectedFields).length) {
+    return false;
+  }
+  const seen = new Set();
+  for (const field of fields) {
+    if (!hasRequiredExactKeys(field, ["id", "form_id", "type", "required"]) || seen.has(field.id) || !Object.hasOwn(expectedFields, field.id)) {
+      return false;
+    }
+    seen.add(field.id);
+    const expected = expectedFields[field.id];
+    if (field.form_id !== "request_viewing_form" || field.type !== expected[0] || field.required !== expected[1]) {
+      return false;
+    }
+  }
+  return seen.size === Object.keys(expectedFields).length;
+}
+
+function classifyAddOptionalViewingDateChange(facts) {
+  const blocked = () => ({ classification: "blocked" });
+  if (!hasRequiredExactKeys(facts, ["profile_id", "profile_version", "ownership", "journey", "form", "context", "fields"])) {
+    return blocked();
+  }
+  if (facts.profile_id !== CHANGE_PROFILE_ID || facts.profile_version !== CHANGE_PROFILE_VERSION) {
+    return blocked();
+  }
+  if (!hasExactValues(facts.ownership, {
+    form: "factory_managed",
+    context: "factory_managed",
+    existing_fields: "factory_managed",
+    protected_content: "preserved",
+    user_content: "preserved"
+  })) {
+    return blocked();
+  }
+  if (!hasExactValues(facts.journey, {
+    id: "request_viewing",
+    form_id: "request_viewing_form",
+    context_id: "selected_property_context"
+  })) {
+    return blocked();
+  }
+  if (!hasExactValues(facts.context, {
+    id: "selected_property_context",
+    entity_id: "property",
+    source_surface_id: "property_single",
+    target_surface_id: "contact",
+    required: true,
+    identity_source: "selected_entity"
+  })) {
+    return blocked();
+  }
+  const contactRule = isPlainObject(facts.form) ? facts.form.contact_rule : null;
+  if (!hasRequiredExactKeys(facts.form, ["id", "entity_id", "context_id", "field_ids", "contact_rule"]) || facts.form.id !== "request_viewing_form" || facts.form.entity_id !== "property" || facts.form.context_id !== "selected_property_context" || !hasRequiredExactKeys(contactRule, ["type", "field_ids"]) || contactRule.type !== "at_least_one" || !Array.isArray(contactRule.field_ids) || contactRule.field_ids.length !== 2 || !["request_viewing_email", "request_viewing_phone"].every((id) => contactRule.field_ids.includes(id)) || new Set(contactRule.field_ids).size !== 2) {
+    return blocked();
+  }
+  if (!Array.isArray(facts.fields)) {
+    return blocked();
+  }
+  const fieldIds = facts.fields.map((field) => field && field.id);
+  if (!Array.isArray(facts.form.field_ids) || new Set(facts.form.field_ids).size !== facts.form.field_ids.length || facts.form.field_ids.length !== fieldIds.length || new Set(fieldIds).size !== fieldIds.length || facts.form.field_ids.some((id) => !fieldIds.includes(id))) {
+    return blocked();
+  }
+  const datePresent = fieldIds.includes("request_viewing_preferred_date");
+  const expectedFields = Object.assign({}, BASE_REQUEST_VIEWING_FIELDS, datePresent ? { request_viewing_preferred_date: OPTIONAL_VIEWING_DATE_FIELD } : {});
+  if (!hasExactSemanticFields(facts.fields, expectedFields)) {
+    return blocked();
+  }
+  return { classification: datePresent ? "no_op" : "applicable" };
 }
 
 function buildRealEstateBusinessSummary(contractInput) {
@@ -402,7 +588,7 @@ function buildRealEstateBusinessSummary(contractInput) {
   return {
     description: "Visitors can browse " + query.result_label + ", filter by " + filterText + ", and open " + discoveryJourney.detail_label + ".",
     discovery_rules_description: "Property Discovery specification only: each of " + filterText + " accepts one taxonomy term. Active selections use AND, so a property must match every selected condition. An unselected filter adds no restriction; all other active conditions still apply. When no filters are selected, or after Clear filters, the base " + query.result_label + " catalog is used. A valid search with no matches while filters are active shows an explicit empty state and offers Clear filters; conditions are not relaxed automatically. An empty base catalog remains empty, and an execution error is shown as an error, not as no matches. Runtime filtering behavior is not verified in this slice.",
-    request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires " + contactLabels.join(" or ") + ". " + preferredDate + " does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime submission is not connected in this slice."
+    request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires " + contactLabels.join(" or ") + ". " + preferredDate + " does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime readiness and submission are not verified by this specification."
   };
 }
 
@@ -498,6 +684,7 @@ function evaluateRealEstateContract(options) {
 module.exports = {
   CONTRACT_PATH,
   buildRealEstateBusinessSummary,
+  classifyAddOptionalViewingDateChange,
   evaluateRealEstateContract,
   inspectRealEstateRuntime,
   loadRealEstateContract,

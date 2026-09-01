@@ -99,6 +99,67 @@
     { "id": "request_viewing_preferred_date", "form_id": "request_viewing_form", "type": "date", "label": "Preferred date", "required": false },
     { "id": "request_viewing_message", "form_id": "request_viewing_form", "type": "textarea", "label": "Message", "required": false }
   ],
+  "change_profiles": [
+    {
+      "id": "add_optional_viewing_date",
+      "version": 1,
+      "operation": "add_optional_form_field_and_binding",
+      "journey_id": "request_viewing",
+      "form_id": "request_viewing_form",
+      "context_id": "selected_property_context",
+      "field_id": "request_viewing_preferred_date",
+      "preservation": {
+        "name_required": "required",
+        "contact_rule": "preserve",
+        "existing_fields": "preserve",
+        "selected_property_context": "preserve",
+        "other_journeys": "preserve",
+        "surfaces": "preserve",
+        "property_records": "preserve",
+        "protected_content": "preserve",
+        "user_content": "preserve",
+        "form_replacement": "forbidden",
+        "field_removal": "forbidden",
+        "arbitrary_patch_paths": "forbidden",
+        "site_rebuild": "forbidden",
+        "delivery_settings": "preserve"
+      },
+      "verification": {
+        "structural": {
+          "field_cardinality": "exactly_one",
+          "field_semantics": "optional_date_bound_to_request_viewing_form",
+          "preservation": "required"
+        },
+        "functional": {
+          "with_date": "controlled_receiver_required",
+          "without_date": "controlled_receiver_required",
+          "selected_property_and_date": "controlled_receiver_required",
+          "contact_and_context_rules": "preserved"
+        },
+        "visual": {
+          "desktop": "usable",
+          "mobile": "usable",
+          "existing_form": "preserved"
+        },
+        "email_client_is_submission_proof": false,
+        "receiver_receipt_confirms_appointment": false,
+        "receiver_receipt_confirms_email_delivery": false
+      },
+      "recovery_policy": {
+        "before_mutation": "verified_recovery_point_required",
+        "identity_binding": "same_project_baseline_change_required",
+        "affected_resource_coverage": "required",
+        "missing_or_unsuitable_evidence": "blocks_mutation",
+        "verification_before_completion": "required",
+        "user_accept_after_verification": "required",
+        "restore_target": "verified_before_state",
+        "restored_status": "restore_verification_required",
+        "failure_or_interruption": "not_success",
+        "external_effects": "not_reversible",
+        "runtime_proof_environment": "controlled_disposable_required"
+      }
+    }
+  ],
   "user_journeys": [
     {
       "id": "discover_property",
@@ -117,7 +178,6 @@
       "form_id": "request_viewing_form",
       "context_id": "selected_property_context",
       "outcome": "viewing_request",
-      "delivery_status": "not_connected",
       "email_handoff_confirms_submission": false
     }
   ],
