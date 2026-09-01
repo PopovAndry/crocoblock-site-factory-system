@@ -14,6 +14,8 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+const DISCOVERY_RULES_DESCRIPTION = "Property Discovery specification only: each of Purpose, Property Type and District accepts one taxonomy term. Active selections use AND, so a property must match every selected condition. An unselected filter adds no restriction; all other active conditions still apply. When no filters are selected, or after Clear filters, the base properties catalog is used. A valid search with no matches while filters are active shows an explicit empty state and offers Clear filters; conditions are not relaxed automatically. An empty base catalog remains empty, and an execution error is shown as an error, not as no matches. Runtime filtering behavior is not verified in this slice.";
+
 function runtimeFixture() {
   const contract = loadRealEstateContract();
   const validationMessages = contract.proof.checks
@@ -39,6 +41,7 @@ test("valid Real Estate contract loads with deterministic normalized output", ()
   assert.deepEqual(first.user_journeys.map((journey) => journey.id), ["discover_property", "request_viewing"]);
   assert.deepEqual(buildRealEstateBusinessSummary(first), {
     description: "Visitors can browse properties, filter by Purpose, Property Type and District, and open property details.",
+    discovery_rules_description: DISCOVERY_RULES_DESCRIPTION,
     request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires Email or Phone. Preferred date does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime submission is not connected in this slice."
   });
 });
@@ -95,6 +98,93 @@ test("provider-neutral discovery semantics fail closed for missing, unresolved, 
   const implementationRef = clone(loadRealEstateContract());
   implementationRef.queries[0].implementation_ref = "adapter";
   assert.throws(() => validateRealEstateContract(implementationRef), { code: "real_estate_contract_invalid_business_semantics" });
+});
+
+test("Property Discovery rules are explicit, deterministic, and derive the review description from business labels", () => {
+  const contract = loadRealEstateContract();
+  assert.deepEqual(contract.queries[0], {
+    id: "property_catalog",
+    entity_id: "property",
+    result_label: "properties",
+    active_filter_combination: "and",
+    unselected_filter_behavior: "no_restriction",
+    no_selected_filters_behavior: "base_catalog",
+    clear_filters_behavior: "base_catalog",
+    empty_catalog_behavior: "empty_state",
+    execution_failure_behavior: "error_state"
+  });
+  assert.equal(contract.listings[0].empty_state, "explicit");
+  assert.equal(contract.listings[0].active_filter_empty_action, "clear_filters");
+  assert.equal(contract.listings[0].automatic_relaxation, false);
+  assert.equal(contract.user_journeys.find((journey) => journey.id === "discover_property").clear_filters_action, "reset_to_base_catalog");
+  for (const filter of contract.filters) {
+    assert.equal(filter.optional, true);
+    assert.equal(filter.selection_mode, "single_term");
+    assert.equal(filter.term_identity, "taxonomy_term");
+  }
+
+  const reordered = clone(contract);
+  reordered.filters.reverse();
+  reordered.user_journeys.reverse();
+  assert.deepEqual(validateRealEstateContract(reordered), contract);
+
+  const relabeled = clone(contract);
+  relabeled.filters.find((filter) => filter.id === "filter_purpose").label = "Intent";
+  assert.match(buildRealEstateBusinessSummary(relabeled).discovery_rules_description, /each of Intent, Property Type and District accepts one taxonomy term/);
+});
+
+test("Property Discovery rules fail closed for missing, unknown, duplicate, and conflicting behavior", () => {
+  const missingRule = clone(loadRealEstateContract());
+  delete missingRule.queries[0].active_filter_combination;
+  assert.throws(() => validateRealEstateContract(missingRule), { code: "real_estate_contract_invalid_business_semantics" });
+
+  for (const [field, value] of [["unselected_filter_behavior", "base_catalog"], ["no_selected_filters_behavior", "retain_selections"], ["clear_filters_behavior", "retain_selections"], ["empty_catalog_behavior", "matched_results"], ["execution_failure_behavior", "empty_state"]]) {
+    const conflictingQueryRule = clone(loadRealEstateContract());
+    conflictingQueryRule.queries[0][field] = value;
+    assert.throws(() => validateRealEstateContract(conflictingQueryRule), { code: "real_estate_contract_invalid_business_semantics" });
+  }
+
+  const unknownTaxonomy = clone(loadRealEstateContract());
+  unknownTaxonomy.filters[0].taxonomy_id = "unknown_taxonomy";
+  assert.throws(() => validateRealEstateContract(unknownTaxonomy), { code: "real_estate_contract_invalid_business_reference" });
+
+  const duplicateFilter = clone(loadRealEstateContract());
+  duplicateFilter.filters[1].id = "filter_purpose";
+  assert.throws(() => validateRealEstateContract(duplicateFilter), { code: "real_estate_contract_duplicate_id" });
+
+  const conflictingTaxonomy = clone(loadRealEstateContract());
+  conflictingTaxonomy.filters[0].taxonomy_id = "property_type";
+  assert.throws(() => validateRealEstateContract(conflictingTaxonomy), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const multiSelection = clone(loadRealEstateContract());
+  multiSelection.filters[0].selection_mode = "multiple_terms";
+  assert.throws(() => validateRealEstateContract(multiSelection), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const displayLabelIdentity = clone(loadRealEstateContract());
+  displayLabelIdentity.filters[0].term_identity = "display_label";
+  assert.throws(() => validateRealEstateContract(displayLabelIdentity), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const orCombination = clone(loadRealEstateContract());
+  orCombination.queries[0].active_filter_combination = "or";
+  assert.throws(() => validateRealEstateContract(orCombination), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const expandedResults = clone(loadRealEstateContract());
+  expandedResults.listings[0].automatic_relaxation = true;
+  assert.throws(() => validateRealEstateContract(expandedResults), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const hiddenEmptyState = clone(loadRealEstateContract());
+  hiddenEmptyState.listings[0].empty_state = "none";
+  assert.throws(() => validateRealEstateContract(hiddenEmptyState), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const unresolvedClearAction = clone(loadRealEstateContract());
+  unresolvedClearAction.user_journeys.find((journey) => journey.id === "discover_property").clear_filters_action = "retain_selections";
+  assert.throws(() => validateRealEstateContract(unresolvedClearAction), { code: "real_estate_contract_invalid_business_reference" });
+
+  const providerIdentity = clone(loadRealEstateContract());
+  providerIdentity.filters[0].term_identity = "JetEngine";
+  assert.throws(() => validateRealEstateContract(providerIdentity), { code: "real_estate_contract_invalid_business_semantics" });
+
+  assert.throws(() => buildRealEstateBusinessSummary(orCombination), { code: "real_estate_contract_invalid_business_semantics" });
 });
 
 test("Request Viewing form, selected property context, and exact journey bindings validate deterministically", () => {

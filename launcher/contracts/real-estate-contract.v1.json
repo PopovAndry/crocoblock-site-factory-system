@@ -40,12 +40,22 @@
     ]
   },
   "queries": [
-    { "id": "property_catalog", "entity_id": "property", "result_label": "properties" }
+    {
+      "id": "property_catalog",
+      "entity_id": "property",
+      "result_label": "properties",
+      "active_filter_combination": "and",
+      "unselected_filter_behavior": "no_restriction",
+      "no_selected_filters_behavior": "base_catalog",
+      "clear_filters_behavior": "base_catalog",
+      "empty_catalog_behavior": "empty_state",
+      "execution_failure_behavior": "error_state"
+    }
   ],
   "filters": [
-    { "id": "filter_purpose", "query_id": "property_catalog", "taxonomy_id": "property_purpose", "label": "Purpose", "optional": true },
-    { "id": "filter_property_type", "query_id": "property_catalog", "taxonomy_id": "property_type", "label": "Property Type", "optional": true },
-    { "id": "filter_district", "query_id": "property_catalog", "taxonomy_id": "property_district", "label": "District", "optional": true }
+    { "id": "filter_purpose", "query_id": "property_catalog", "taxonomy_id": "property_purpose", "label": "Purpose", "optional": true, "selection_mode": "single_term", "term_identity": "taxonomy_term" },
+    { "id": "filter_property_type", "query_id": "property_catalog", "taxonomy_id": "property_type", "label": "Property Type", "optional": true, "selection_mode": "single_term", "term_identity": "taxonomy_term" },
+    { "id": "filter_district", "query_id": "property_catalog", "taxonomy_id": "property_district", "label": "District", "optional": true, "selection_mode": "single_term", "term_identity": "taxonomy_term" }
   ],
   "listings": [
     {
@@ -54,7 +64,10 @@
       "component_id": "property_card",
       "field_ids": ["property_price", "property_address", "property_bedrooms", "property_bathrooms", "property_size", "property_district_value"],
       "surface_id": "property_archive",
-      "detail_surface_id": "property_single"
+      "detail_surface_id": "property_single",
+      "empty_state": "explicit",
+      "active_filter_empty_action": "clear_filters",
+      "automatic_relaxation": false
     }
   ],
   "property_contexts": [
@@ -94,7 +107,8 @@
       "filter_ids": ["filter_purpose", "filter_property_type", "filter_district"],
       "listing_id": "property_card_listing",
       "detail_surface_id": "property_single",
-      "detail_label": "property details"
+      "detail_label": "property details",
+      "clear_filters_action": "reset_to_base_catalog"
     },
     {
       "id": "request_viewing",

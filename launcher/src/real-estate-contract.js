@@ -12,6 +12,11 @@ const BUSINESS_SEMANTIC_SECTIONS = ["queries", "filters", "listings", "property_
 const PROVIDER_OR_EXECUTION_PATTERN = /(?:\b(?:jet(?:engine|smartfilters|formbuilder)?|crocoblock|wordpress|elementor|bricks|kava|shortcode)\b|<\?(?:php|=)|\$\w+|\b(?:select|insert|update|delete|drop|alter|create|from|where|join)\b|\b(?:powershell|cmd|bash|shell|docker|wp-cli|rm|del|remove-item|copy-item|move-item|mkdir|rmdir|touch|chmod|chown|curl|wget|npm|apply|execute|mutate|install|uninstall|restore|format)\b)/i;
 const BUSINESS_FORBIDDEN_KEYS = new Set(["implementation_ref", "path", "file", "file_path", "command", "script", "provider", "plugin", "theme", "sql", "php"]);
 const FORM_FIELD_TYPES = new Set(["text", "email", "phone", "date", "textarea"]);
+const DISCOVERY_FILTER_TAXONOMIES = {
+  filter_purpose: "property_purpose",
+  filter_property_type: "property_type",
+  filter_district: "property_district"
+};
 
 function contractError(message, code) {
   const error = new Error(message);
@@ -128,7 +133,7 @@ function validateBusinessSemantics(contract) {
   if (contract.queries.length !== 1 || contract.queries[0].id !== "property_catalog") {
     throw contractError("Real Estate contract requires exactly one property catalog query.", "real_estate_contract_invalid_business_semantics");
   }
-  if (contract.filters.length !== 3 || new Set(contract.filters.map((entry) => entry.taxonomy_id)).size !== 3 || contract.filters.some((entry) => !["property_purpose", "property_type", "property_district"].includes(entry.taxonomy_id))) {
+  if (!hasExactIds(contract.filters, Object.keys(DISCOVERY_FILTER_TAXONOMIES))) {
     throw contractError("Real Estate contract requires Purpose, Property Type, and District filters.", "real_estate_contract_invalid_business_semantics");
   }
   if (contract.listings.length !== 1 || contract.listings[0].id !== "property_card_listing") {
@@ -136,29 +141,35 @@ function validateBusinessSemantics(contract) {
   }
 
   for (const query of contract.queries) {
-    requireExactKeys(query, ["id", "entity_id", "result_label"], "queries");
+    requireExactKeys(query, ["id", "entity_id", "result_label", "active_filter_combination", "unselected_filter_behavior", "no_selected_filters_behavior", "clear_filters_behavior", "empty_catalog_behavior", "execution_failure_behavior"], "queries");
     requireStableId(query.id, "queries");
     requireReference(query.entity_id, entityIds, "Query references an unknown entity.");
     requireBusinessLabel(query.result_label, "queries");
+    if (query.id !== "property_catalog" || query.entity_id !== "property" || query.active_filter_combination !== "and" || query.unselected_filter_behavior !== "no_restriction" || query.no_selected_filters_behavior !== "base_catalog" || query.clear_filters_behavior !== "base_catalog" || query.empty_catalog_behavior !== "empty_state" || query.execution_failure_behavior !== "error_state") {
+      throw contractError("Property catalog discovery rules are invalid.", "real_estate_contract_invalid_business_semantics");
+    }
   }
   for (const filter of contract.filters) {
-    requireExactKeys(filter, ["id", "query_id", "taxonomy_id", "label", "optional"], "filters");
+    requireExactKeys(filter, ["id", "query_id", "taxonomy_id", "label", "optional", "selection_mode", "term_identity"], "filters");
     requireStableId(filter.id, "filters");
     requireReference(filter.query_id, queryIds, "Filter references an unknown query.");
     requireReference(filter.taxonomy_id, taxonomyIds, "Filter references an unknown taxonomy.");
     requireBusinessLabel(filter.label, "filters");
-    if (filter.optional !== true) {
+    if (filter.query_id !== "property_catalog" || filter.taxonomy_id !== DISCOVERY_FILTER_TAXONOMIES[filter.id] || filter.optional !== true || filter.selection_mode !== "single_term" || filter.term_identity !== "taxonomy_term") {
       throw contractError("Property discovery filters must be optional.", "real_estate_contract_invalid_business_semantics");
     }
   }
   for (const listing of contract.listings) {
-    requireExactKeys(listing, ["id", "query_id", "component_id", "field_ids", "surface_id", "detail_surface_id"], "listings");
+    requireExactKeys(listing, ["id", "query_id", "component_id", "field_ids", "surface_id", "detail_surface_id", "empty_state", "active_filter_empty_action", "automatic_relaxation"], "listings");
     requireStableId(listing.id, "listings");
     requireReference(listing.query_id, queryIds, "Listing references an unknown query.");
     requireReference(listing.component_id, componentIds, "Listing references an unknown component.");
     requireUniqueReferences(listing.field_ids, fieldIds, "Listing references an unknown field.");
     requireReference(listing.surface_id, surfaceIds, "Listing references an unknown surface.");
     requireReference(listing.detail_surface_id, surfaceIds, "Listing references an unknown surface.");
+    if (listing.id !== "property_card_listing" || listing.query_id !== "property_catalog" || listing.empty_state !== "explicit" || listing.active_filter_empty_action !== "clear_filters" || listing.automatic_relaxation !== false) {
+      throw contractError("Property listing discovery behavior is invalid.", "real_estate_contract_invalid_business_semantics");
+    }
   }
 
   if (contract.property_contexts.length !== 1 || contract.property_contexts[0].id !== "selected_property_context") {
@@ -225,7 +236,7 @@ function validateBusinessSemantics(contract) {
   }
   const discoveryJourney = contract.user_journeys.find((entry) => entry.id === "discover_property");
   const requestViewingJourney = contract.user_journeys.find((entry) => entry.id === "request_viewing");
-  requireExactKeys(discoveryJourney, ["id", "entry_surface_id", "query_id", "filter_ids", "listing_id", "detail_surface_id", "detail_label"], "user_journeys");
+  requireExactKeys(discoveryJourney, ["id", "entry_surface_id", "query_id", "filter_ids", "listing_id", "detail_surface_id", "detail_label", "clear_filters_action"], "user_journeys");
   requireReference(discoveryJourney.entry_surface_id, surfaceIds, "Journey references an unknown surface.");
   requireReference(discoveryJourney.query_id, queryIds, "Journey references an unknown query.");
   requireUniqueReferences(discoveryJourney.filter_ids, filterIds, "Journey references an unknown filter.");
@@ -237,7 +248,7 @@ function validateBusinessSemantics(contract) {
   if (discoveryJourney.entry_surface_id !== listing.surface_id || discoveryJourney.query_id !== listing.query_id || discoveryJourney.detail_surface_id !== listing.detail_surface_id) {
     throw contractError("Journey contains unresolved listing references.", "real_estate_contract_invalid_business_reference");
   }
-  if (discoveryJourney.filter_ids.length !== 3 || discoveryJourney.filter_ids.some((filterId) => contract.filters.find((entry) => entry.id === filterId).query_id !== discoveryJourney.query_id)) {
+  if (!hasExactIds(discoveryJourney.filter_ids.map((id) => ({ id })), Object.keys(DISCOVERY_FILTER_TAXONOMIES)) || discoveryJourney.filter_ids.some((filterId) => contract.filters.find((entry) => entry.id === filterId).query_id !== discoveryJourney.query_id) || discoveryJourney.clear_filters_action !== "reset_to_base_catalog") {
     throw contractError("Journey filters do not resolve to its catalog query.", "real_estate_contract_invalid_business_reference");
   }
   requireExactKeys(requestViewingJourney, ["id", "source_surface_id", "target_surface_id", "form_id", "context_id", "outcome", "delivery_status", "email_handoff_confirms_submission"], "user_journeys");
@@ -390,6 +401,7 @@ function buildRealEstateBusinessSummary(contractInput) {
   const preferredDate = contract.form_fields.find((field) => field.id === "request_viewing_preferred_date").label;
   return {
     description: "Visitors can browse " + query.result_label + ", filter by " + filterText + ", and open " + discoveryJourney.detail_label + ".",
+    discovery_rules_description: "Property Discovery specification only: each of " + filterText + " accepts one taxonomy term. Active selections use AND, so a property must match every selected condition. An unselected filter adds no restriction; all other active conditions still apply. When no filters are selected, or after Clear filters, the base " + query.result_label + " catalog is used. A valid search with no matches while filters are active shows an explicit empty state and offers Clear filters; conditions are not relaxed automatically. An empty base catalog remains empty, and an execution error is shown as an error, not as no matches. Runtime filtering behavior is not verified in this slice.",
     request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires " + contactLabels.join(" or ") + ". " + preferredDate + " does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime submission is not connected in this slice."
   };
 }

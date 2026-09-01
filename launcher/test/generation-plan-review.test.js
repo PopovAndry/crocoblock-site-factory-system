@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 let portCounter = 48500;
+const DISCOVERY_RULES_DESCRIPTION = "Property Discovery specification only: each of Purpose, Property Type and District accepts one taxonomy term. Active selections use AND, so a property must match every selected condition. An unselected filter adds no restriction; all other active conditions still apply. When no filters are selected, or after Clear filters, the base properties catalog is used. A valid search with no matches while filters are active shows an explicit empty state and offers Clear filters; conditions are not relaxed automatically. An empty base catalog remains empty, and an execution error is shown as an error, not as no matches. Runtime filtering behavior is not verified in this slice.";
 
 function projectState() {
   return {
@@ -193,6 +194,7 @@ test("generation-plan response includes the validated contract-derived business 
     assert.equal(result.response.status, 200);
     assert.deepEqual(result.body.business_summary, {
       description: "Visitors can browse properties, filter by Purpose, Property Type and District, and open property details.",
+      discovery_rules_description: DISCOVERY_RULES_DESCRIPTION,
       request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires Email or Phone. Preferred date does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime submission is not connected in this slice."
     });
     assert.equal(result.body.provider_called, false);
@@ -211,6 +213,7 @@ test("Generate Review renders escaped allowlisted content with the discovery sum
   const view = review.buildGeneratePreviewHtml({
     business_summary: {
       description: "Visitors can browse properties, filter by Purpose, Property Type and District, and open property details.",
+      discovery_rules_description: DISCOVERY_RULES_DESCRIPTION,
       request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires Email or Phone. Preferred date does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime submission is not connected in this slice."
     },
     dependency_blockers: ["JetEngine plugin at C:\\runtime"],
@@ -231,6 +234,7 @@ test("Generate Review renders escaped allowlisted content with the discovery sum
   });
 
   assert.match(view.html, /Visitors can browse properties, filter by Purpose, Property Type and District, and open property details\./);
+  assert.match(view.html, /Property Discovery specification only: each of Purpose, Property Type and District accepts one taxonomy term\. Active selections use AND, so a property must match every selected condition\. An unselected filter adds no restriction; all other active conditions still apply\. When no filters are selected, or after Clear filters, the base properties catalog is used\. A valid search with no matches while filters are active shows an explicit empty state and offers Clear filters; conditions are not relaxed automatically\. An empty base catalog remains empty, and an execution error is shown as an error, not as no matches\. Runtime filtering behavior is not verified in this slice\./);
   assert.match(view.html, /Request Viewing specification only: it relates to the selected property and requires Email or Phone\. Preferred date does not confirm an appointment\. Opening an email client does not confirm submission or receipt\. Runtime submission is not connected in this slice\./);
   assert.match(view.html, /Kyiv &lt;Realty&gt; &amp; Co\./);
   assert.match(view.html, /Kyiv &amp; region/);
@@ -250,6 +254,7 @@ test("blocked Generate Review gives actionable setup guidance without exposing r
   const view = review.buildGeneratePreviewHtml({
     business_summary: {
       description: "Visitors can browse properties, filter by Purpose, Property Type and District, and open property details.",
+      discovery_rules_description: DISCOVERY_RULES_DESCRIPTION,
       request_viewing_description: "Request Viewing specification only: it relates to the selected property and requires Email or Phone. Preferred date does not confirm an appointment. Opening an email client does not confirm submission or receipt. Runtime submission is not connected in this slice."
     },
     can_generate: false,
@@ -259,6 +264,8 @@ test("blocked Generate Review gives actionable setup guidance without exposing r
 
   assert.match(view.html, /Website setup is not ready yet\. Complete the required setup before generating\./);
   assert.match(view.html, /Visitors can browse properties, filter by Purpose, Property Type and District, and open property details\./);
+  assert.match(view.html, /When no filters are selected, or after Clear filters, the base properties catalog is used\./);
+  assert.match(view.html, /Runtime filtering behavior is not verified in this slice\./);
   assert.match(view.html, /Runtime submission is not connected in this slice\./);
   assert.match(view.html, /Kyiv Realty/);
   assert.doesNotMatch(view.html, /JetEngine|C:\\runtime|plugin at/i);
