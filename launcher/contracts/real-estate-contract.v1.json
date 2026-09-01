@@ -57,6 +57,35 @@
       "detail_surface_id": "property_single"
     }
   ],
+  "property_contexts": [
+    {
+      "id": "selected_property_context",
+      "entity_id": "property",
+      "source_surface_id": "property_single",
+      "target_surface_id": "contact",
+      "required": true,
+      "identity_source": "selected_entity"
+    }
+  ],
+  "forms": [
+    {
+      "id": "request_viewing_form",
+      "entity_id": "property",
+      "context_id": "selected_property_context",
+      "field_ids": ["request_viewing_name", "request_viewing_email", "request_viewing_phone", "request_viewing_preferred_date", "request_viewing_message"],
+      "contact_rule": {
+        "type": "at_least_one",
+        "field_ids": ["request_viewing_email", "request_viewing_phone"]
+      }
+    }
+  ],
+  "form_fields": [
+    { "id": "request_viewing_name", "form_id": "request_viewing_form", "type": "text", "label": "Name", "required": true },
+    { "id": "request_viewing_email", "form_id": "request_viewing_form", "type": "email", "label": "Email", "required": false },
+    { "id": "request_viewing_phone", "form_id": "request_viewing_form", "type": "phone", "label": "Phone", "required": false },
+    { "id": "request_viewing_preferred_date", "form_id": "request_viewing_form", "type": "date", "label": "Preferred date", "required": false },
+    { "id": "request_viewing_message", "form_id": "request_viewing_form", "type": "textarea", "label": "Message", "required": false }
+  ],
   "user_journeys": [
     {
       "id": "discover_property",
@@ -66,6 +95,16 @@
       "listing_id": "property_card_listing",
       "detail_surface_id": "property_single",
       "detail_label": "property details"
+    },
+    {
+      "id": "request_viewing",
+      "source_surface_id": "property_single",
+      "target_surface_id": "contact",
+      "form_id": "request_viewing_form",
+      "context_id": "selected_property_context",
+      "outcome": "viewing_request",
+      "delivery_status": "not_connected",
+      "email_handoff_confirms_submission": false
     }
   ],
   "surfaces": [

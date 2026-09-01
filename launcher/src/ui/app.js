@@ -1658,6 +1658,10 @@
       && typeof safeResult.business_summary.description === "string"
       ? safeResult.business_summary.description
       : "";
+    const requestViewingSummary = safeResult.business_summary && typeof safeResult.business_summary === "object"
+      && typeof safeResult.business_summary.request_viewing_description === "string"
+      ? safeResult.business_summary.request_viewing_description
+      : "";
     const stale = Boolean(options && options.stale);
     const canGenerate = safeResult.can_generate === true;
 
@@ -1668,6 +1672,7 @@
       stale ? "<p>The prompt changed after preview. Preview Plan again before Generate.</p>" : "",
       !canGenerate ? "<p>Website setup is not ready yet. Complete the required setup before generating.</p>" : "",
       businessSummary ? "<p><span>Website capability:</span> " + escapeHtml(businessSummary) + "</p>" : "",
+      requestViewingSummary ? "<p><span>Request Viewing:</span> " + escapeHtml(requestViewingSummary) + "</p>" : "",
       "<p><span>Can generate:</span> " + escapeHtml(String(canGenerate)) + "</p>",
       "<p><span>Dependency blockers:</span> " + escapeHtml((safeResult.dependency_blockers || []).length ? "Review setup before generating." : "None") + "</p>",
       "<p><span>Estimated input tokens:</span> " + escapeHtml(String(safeResult.estimated_input_tokens != null ? safeResult.estimated_input_tokens : "Not available")) + "</p>",
