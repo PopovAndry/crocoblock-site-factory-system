@@ -158,8 +158,8 @@ function factory_console_dependency_definitions(): array {
 			'type'                     => 'plugin',
 			'required_for_real_estate' => false,
 			'minimum_version'          => null,
-			'plugin_basenames'         => [ 'jet-form-builder/jet-form-builder.php' ],
-			'plugin_dirs'              => [ 'jet-form-builder' ],
+			'plugin_basenames'         => [ 'jetformbuilder/jet-form-builder.php' ],
+			'plugin_dirs'              => [ 'jetformbuilder' ],
 			'action_hint'              => [
 				'missing'       => 'upload_zip',
 				'inactive'      => 'open_plugins',

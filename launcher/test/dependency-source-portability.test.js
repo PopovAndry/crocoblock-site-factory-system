@@ -68,8 +68,8 @@ test("packaged dependency resources are resolved from the canonical installed la
   const root = tempRoot();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const packaged = createCanonicalPackagedDependencyModule(root);
-  writePackage(path.join(packaged.resources, "managed-packages"), "jet-engine.zip");
-  const source = packaged.sources.resolveApprovedDependencySource("jet-engine", {
+  writePackage(path.join(packaged.resources, "managed-packages"), "jet-form-builder.zip");
+  const source = packaged.sources.resolveApprovedDependencySource("jet-form-builder", {
     packagedMode: true,
     packagedResourceDirectory: packaged.resources,
     applicationDataDirectory: path.join(root, "data"),
@@ -77,6 +77,7 @@ test("packaged dependency resources are resolved from the canonical installed la
   });
   assert.equal(source.mode, "packaged_resource");
   assert.equal(source.readOnly, true);
+  assert.equal(source.absolutePath, path.join(packaged.resources, "managed-packages", "jet-form-builder.zip"));
 });
 
 test("packaged mode is authoritative and never falls back to development or application data", (t) => {

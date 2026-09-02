@@ -1276,6 +1276,9 @@ test("workflow invokes existing services once in frozen stage order and succeeds
   ]);
   assert.equal(calls.filter((call) => call === "provision").length, 1);
   assert.equal(calls.filter((call) => call.startsWith("install:")).length, 3);
+  assert.deepEqual(calls.filter((call) => call.startsWith("plan:")), [
+    "plan:kava", "plan:jet-engine", "plan:jet-smart-filters"
+  ]);
   assert.equal(calls.filter((call) => call === "agent").length, 1);
   assert.equal(calls.filter((call) => call === "generate").length, 1);
   assert.equal(result.resultSummary.validation_passed, true);

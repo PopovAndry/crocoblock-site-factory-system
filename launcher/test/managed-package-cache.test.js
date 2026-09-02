@@ -195,6 +195,15 @@ function createKavaZip(vendorDir) {
   return zipPath;
 }
 
+function createJetFormBuilderZip(vendorDir, entries) {
+  const zipPath = path.join(vendorDir, "jet-form-builder.zip");
+  createStoredZip(zipPath, entries || [
+    { name: "jetformbuilder/", directory: true },
+    { name: "jetformbuilder/jet-form-builder.php", content: "<?php\n/*\nPlugin Name: JetFormBuilder\nVersion: 3.6.5.1\n*/\n" }
+  ]);
+  return zipPath;
+}
+
 test("approved dependency sources are redacted for browser responses", () => {
   const vendorDir = fs.mkdtempSync(path.join(os.tmpdir(), "factory-vendor-"));
   createKavaZip(vendorDir);
@@ -296,6 +305,71 @@ test("managed install plan creates immutable cache metadata without exposing loc
     const cachePath = resolveCachePackagePath(projectsRoot, stored.plan.cache_ref);
     assert.equal(fs.existsSync(cachePath), true);
   });
+});
+
+test("JetFormBuilder uses its native root and identity through quarantine, cache, and an install plan", () => {
+  const projectsRoot = createTempProjectsRoot();
+  const vendorDir = fs.mkdtempSync(path.join(os.tmpdir(), "factory-vendor-"));
+  createTempProject(projectsRoot, "jet-form-builder-cache-project");
+  const zipPath = createJetFormBuilderZip(vendorDir);
+
+  withVendorDir(vendorDir, () => {
+    const dependency = resolveDependencyDefinition("jet-form-builder");
+    const validation = validateZipPackage(zipPath, dependency);
+    assert.deepEqual(validation.product, {
+      slug: "jet-form-builder",
+      type: "plugin",
+      wp_slug: "jetformbuilder",
+      zip_root: "jetformbuilder",
+      identity_file: "jetformbuilder/jet-form-builder.php",
+      version: "3.6.5.1"
+    });
+
+    const result = createManagedDependencyInstallPlan({
+      slug: "jet-form-builder-cache-project",
+      dependency: "jet-form-builder",
+      projectsRoot
+    });
+    assert.equal(result.summary.source.filename, "jet-form-builder.zip");
+    assert.equal(result.summary.package.product.version, "3.6.5.1");
+    assert.equal(result.summary.package.product.identity_file, "jetformbuilder/jet-form-builder.php");
+    assert.equal(result.summary.cache_ref.sha256, validation.sha256);
+    assert.equal(JSON.stringify(result.summary).includes(vendorDir), false);
+
+    const stored = readManagedDependencyInstallPlan({
+      slug: "jet-form-builder-cache-project",
+      planId: result.plan.plan_id,
+      projectsRoot
+    });
+    const cachePath = resolveCachePackagePath(projectsRoot, stored.plan.cache_ref, stored.plan.package);
+    fs.appendFileSync(cachePath, "tampered");
+    assert.throws(
+      () => verifyManagedPackageCacheEntry(projectsRoot, stored.plan.cache_ref, stored.plan.package),
+      /digest changed/
+    );
+  });
+});
+
+test("JetFormBuilder rejects a wrong native root, identity, and malformed package", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "factory-jfb-validator-"));
+  const dependency = resolveDependencyDefinition("jet-form-builder");
+  const wrongRoot = path.join(tempDir, "wrong-root.zip");
+  const wrongIdentity = path.join(tempDir, "wrong-identity.zip");
+  const malformed = path.join(tempDir, "malformed.zip");
+  createStoredZip(wrongRoot, [
+    { name: "jet-form-builder/", directory: true },
+    { name: "jet-form-builder/jet-form-builder.php", content: "<?php\n/*\nPlugin Name: JetFormBuilder\nVersion: 3.6.5.1\n*/\n" }
+  ]);
+  createJetFormBuilderZip(tempDir, [
+    { name: "jetformbuilder/", directory: true },
+    { name: "jetformbuilder/readme.txt", content: "wrong identity" }
+  ]);
+  fs.renameSync(path.join(tempDir, "jet-form-builder.zip"), wrongIdentity);
+  fs.writeFileSync(malformed, "not a ZIP", "utf8");
+
+  assert.throws(() => validateZipPackage(wrongRoot, dependency), /expected product root/);
+  assert.throws(() => validateZipPackage(wrongIdentity, dependency), /expected product identity file/);
+  assert.throws(() => validateZipPackage(malformed, dependency), /central directory not found/);
 });
 
 test("installer rejects direct caller-provided ZIP paths before runtime mutation", async () => {

@@ -508,11 +508,18 @@ test("Windows internal evaluation package closes the current Create Website runt
   const root = createTempRoot();
   const fakeNode = path.join(root, "node.exe");
   fs.writeFileSync(fakeNode, "packaged-node-runtime", "utf8");
+  const vendorDirectory = createApprovedVendorBundle(root);
+  const archiveDirectory = path.join(vendorDirectory, "archive", "jetformbuilder");
+  fs.mkdirSync(archiveDirectory, { recursive: true });
+  fs.copyFileSync(
+    path.join(vendorDirectory, "jet-form-builder.zip"),
+    path.join(archiveDirectory, "jetformbuilder.3.6.5.1.zip")
+  );
   const result = buildWindowsLauncherPackage({
     repositoryRoot: REPOSITORY_ROOT,
     outputRoot: path.join(root, "output"),
     nodeExecutable: fakeNode,
-    vendorDirectory: createApprovedVendorBundle(root)
+    vendorDirectory
   });
 
   const requiredFiles = [
@@ -544,7 +551,8 @@ test("Windows internal evaluation package closes the current Create Website runt
     "resources/package-manifest.json",
     "resources/managed-packages/kava.zip",
     "resources/managed-packages/jet-engine.zip",
-    "resources/managed-packages/jet-smart-filters.zip"
+    "resources/managed-packages/jet-smart-filters.zip",
+    "resources/managed-packages/jet-form-builder.zip"
   ];
   for (const relativePath of requiredFiles) {
     assert.equal(fs.existsSync(path.join(result.packageRoot, ...relativePath.split("/"))), true, relativePath);
@@ -557,8 +565,10 @@ test("Windows internal evaluation package closes the current Create Website runt
   assert.equal(result.manifest.signed, false);
   assert.equal(result.manifest.public_release_ready, false);
   assert.equal(result.manifest.rehearsal.frozen_project_slug, "win-ceo-rehearsal-smoke-3");
-  assert.equal(result.manifest.managed_packages.length, 3);
+  assert.equal(result.manifest.managed_packages.length, 4);
+  assert.deepEqual(result.manifest.managed_packages.map((entry) => entry.key), ["kava", "jet-engine", "jet-smart-filters", "jet-form-builder"]);
   assert.equal(result.manifest.managed_packages.every((entry) => /^[a-f0-9]{64}$/.test(entry.sha256)), true);
+  assert.equal(result.inventory.some((entry) => entry.includes("archive/")), false);
   assert.equal(result.inventory.some((entry) => /(?:^|\/)test(?:s)?\//i.test(entry)), false);
   assert.equal(result.inventory.filter((entry) => entry === "installer/uninstall-cleanup.ps1").length, 1);
   assert.doesNotThrow(() => scanPackageArtifact(result.packageRoot));
@@ -568,6 +578,19 @@ test("Windows internal evaluation package closes the current Create Website runt
   assert.equal(fs.existsSync(archivePath), true);
   assert.equal(fs.existsSync(checksum.checksumPath), true);
   assert.match(checksum.digest, /^[a-f0-9]{64}$/);
+});
+
+test("Windows package build rejects missing or invalid JetFormBuilder inputs", () => {
+  const root = createTempRoot();
+  const missing = createBuildFixture(root);
+  fs.unlinkSync(path.join(missing.vendorDirectory, "jet-form-builder.zip"));
+  assert.throws(() => buildWindowsLauncherPackage(buildFixtureOptions(missing)), /Windows package build filesystem layout is invalid/);
+  assert.equal(fs.existsSync(missing.outputRoot), false);
+
+  const invalidRoot = createTempRoot();
+  const invalid = createBuildFixture(invalidRoot);
+  fs.writeFileSync(path.join(invalid.vendorDirectory, "jet-form-builder.zip"), "not a zip", "utf8");
+  assert.throws(() => buildWindowsLauncherPackage(buildFixtureOptions(invalid)), /central directory not found/);
 });
 
 test("package scan rejects developer paths, credentials, and prior runtime state", () => {

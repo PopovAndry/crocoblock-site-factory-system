@@ -27,6 +27,15 @@ const SUPPORTED_DEPENDENCIES = {
     zip_root: "jet-smart-filters",
     identity_file: "jet-smart-filters/jet-smart-filters.php",
     version_header: "Version"
+  },
+  "jet-form-builder": {
+    slug: "jet-form-builder",
+    label: "JetFormBuilder",
+    type: "plugin",
+    wp_slug: "jetformbuilder",
+    zip_root: "jetformbuilder",
+    identity_file: "jetformbuilder/jet-form-builder.php",
+    version_header: "Version"
   }
 };
 

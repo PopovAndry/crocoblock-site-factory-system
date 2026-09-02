@@ -25,6 +25,7 @@ Approved package keys:
 - `kava`
 - `jet-engine`
 - `jet-smart-filters`
+- `jet-form-builder`
 
 The API response can expose only safe inventory data:
 
@@ -35,6 +36,25 @@ The API response can expose only safe inventory data:
 - file size
 
 It must not expose the absolute vendor path or any environment value.
+
+### JetFormBuilder onboarding
+
+| CSF key | Approved filename | Native package mapping |
+| --- | --- | --- |
+| `jet-form-builder` | `jet-form-builder.zip` | `wp_slug` and ZIP root `jetformbuilder`; identity `jetformbuilder/jet-form-builder.php` |
+
+The onboarded package is JetFormBuilder `3.6.5.1`, 4,038,716 bytes, SHA-256
+`1cb8319f7e8d590b7268c9387465dd563a3d916a6bbc006857479b9f34180376`.
+Its origin is a user-confirmed manual download from WordPress.org. Build verified
+local path safety, ZIP structure, native identity, header, version, size, and
+digest. Independent byte-for-byte correspondence with an official archive is
+not proven.
+
+The Windows package builder includes every current catalog entry, so the next
+Windows package build requires the fourth approved ZIP, `jet-form-builder.zip`.
+Archive-only vendor copies are not catalog inputs and are not packaged.
+JetFormBuilder is optional for the current Real Estate Create Website required
+dependency set and does not add a Generate readiness blocker.
 
 ## What This Does Not Do
 
