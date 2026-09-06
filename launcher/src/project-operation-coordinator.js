@@ -36,7 +36,8 @@ const ALLOWED_OPERATION_TYPES = new Set([
   "structural_restore_execute",
   "agent_auth_rotate",
   "agent_auth_revoke",
-  "create_website"
+  "create_website",
+  "viewing_date_apply"
 ]);
 
 function stableStringify(value) {
@@ -421,10 +422,11 @@ async function runProjectOperation(options) {
     resumeStatuses
   });
   if (replayBeforeLock && replayBeforeLock.replay) {
+    const replayResult = options.verifyIdempotentReplay ? await options.verifyIdempotentReplay({ operation: replayBeforeLock.operation }) : null;
     return {
       idempotentReplay: true,
       operation: replayBeforeLock.operation,
-      result: null
+      result: replayResult
     };
   }
   const resumeOperation = replayBeforeLock && replayBeforeLock.resume
@@ -455,10 +457,11 @@ async function runProjectOperation(options) {
       ignoreOperationId: resumeOperation ? operationId : null
     });
     if (replayAfterLock && replayAfterLock.replay) {
+      const replayResult = options.verifyIdempotentReplay ? await options.verifyIdempotentReplay({ operation: replayAfterLock.operation }) : null;
       return {
         idempotentReplay: true,
         operation: replayAfterLock.operation,
-        result: null
+        result: replayResult
       };
     }
 

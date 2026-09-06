@@ -90,6 +90,9 @@ const {
   createViewingDatePreview,
   prepareViewingDateRecovery
 } = require("./viewing-date-preview");
+const {
+  applyViewingDate
+} = require("./viewing-date-apply");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -522,6 +525,14 @@ function validateViewingDateRecoveryPayload(payload) {
   const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
   if (Object.keys(input).length !== 2 || typeof input.plan_id !== "string" || input.confirm_prepare_recovery_point !== true) {
     throw createStructuredError("Recovery Point preparation requires the prepared Preview and confirmation.", "viewing_date_recovery_request_rejected", 400);
+  }
+  return input.plan_id;
+}
+
+function validateViewingDateApplyPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length !== 2 || typeof input.plan_id !== "string" || input.confirm_apply !== true) {
+    throw createStructuredError("Preferred date Apply requires the prepared Preview and confirmation.", "viewing_date_apply_request_rejected", 400);
   }
   return input.plan_id;
 }
@@ -1967,6 +1978,22 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/viewing-date\/apply$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const planId = validateViewingDateApplyPayload(payload);
+          const applyService = options.viewingDateApplyService || applyViewingDate;
+          const result = await applyService({ projectsRoot, slug, planId, idempotencyKey: getRequestIdempotencyKey(request) });
+          sendJson(response, 200, { ok: true, status: result.status, mutation_performed: result.mutation_performed === true });
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendViewingDatePreviewError(response, error);
+        }
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname)) {
         try {
           const payload = await readJsonPayload(request);
@@ -2507,6 +2534,7 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/recovery-points$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/viewing-date\/preview$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/viewing-date\/recovery-point$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/viewing-date\/apply$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/restore\/execute$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||

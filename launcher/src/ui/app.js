@@ -422,6 +422,14 @@
       prepare.addEventListener("click", () => prepareViewingDateRecovery(payload.plan_id));
       viewingDatePreviewResult.appendChild(prepare);
     }
+    if (recovery.status === "prepared" && viewingDatePreviewView.planId) {
+      const apply = document.createElement("button");
+      apply.type = "button";
+      apply.className = "button";
+      apply.textContent = "Apply Preferred date";
+      apply.addEventListener("click", () => applyViewingDate(viewingDatePreviewView.planId));
+      viewingDatePreviewResult.appendChild(apply);
+    }
   }
 
   async function previewViewingDate() {
@@ -459,6 +467,21 @@
       renderViewingDatePreview(payload.summary || payload);
     } catch (caught) {
       if (isActiveViewingDatePreview(slug, requestId)) viewingDatePreviewResult.textContent = "Recovery Point preparation is blocked.";
+    }
+  }
+
+  async function applyViewingDate(planId) {
+    if (typeof window.confirm === "function" && !window.confirm("Apply one optional Preferred date field to the Factory Request Viewing form?")) return;
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = viewingDatePreviewView.requestId;
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/viewing-date/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan_id: planId, confirm_apply: true }) });
+      const payload = await response.json();
+      if (!isActiveViewingDatePreview(slug, requestId)) return;
+      if (!response.ok) throw new Error(payload && payload.message || "Preferred date Apply cannot proceed safely.");
+      viewingDatePreviewResult.textContent = payload.status === "already_applied" ? "Preferred date is already applied." : "Preferred date was applied. Review the updated form before using it.";
+    } catch (caught) {
+      if (isActiveViewingDatePreview(slug, requestId)) viewingDatePreviewResult.textContent = "Preferred date Apply cannot proceed safely.";
     }
   }
 

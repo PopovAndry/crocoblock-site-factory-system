@@ -17,7 +17,8 @@ async function withServer(callback) {
   const server = createLauncherServer({
     host: "127.0.0.1", port: port += 1, projectsRoot, skipRestoreReconciliation: true,
     viewingDatePreviewService: async (input) => { calls.push(["preview", input]); return Object.assign(browserSummary({ classification: { classification: "applicable" }, recovery: { status: "not_prepared" } }), { ok: true, plan_id: "viewing-date-plan-11111111-1111-4111-8111-111111111111" }); },
-    viewingDateRecoveryService: async (input) => { calls.push(["recovery", input]); return { ok: true, status: "prepared", summary: browserSummary({ classification: { classification: "applicable" }, recovery: { status: "prepared" } }) }; }
+    viewingDateRecoveryService: async (input) => { calls.push(["recovery", input]); return { ok: true, status: "prepared", summary: browserSummary({ classification: { classification: "applicable" }, recovery: { status: "prepared" } }) }; },
+    viewingDateApplyService: async (input) => { calls.push(["apply", input]); return { status: "applied", mutation_performed: true }; }
   });
   const info = await server.listen();
   const baseUrl = "http://127.0.0.1:" + info.port;
@@ -67,6 +68,25 @@ test("viewing-date recovery route remains CSRF-protected and rejects browser cla
     const rejected = await request(baseUrl, "/api/projects/csf-st-viewing-before-v1/viewing-date/recovery-point", { plan_id: "viewing-date-plan-11111111-1111-4111-8111-111111111111", confirm_prepare_recovery_point: true, verified: true });
     assert.equal(rejected.response.status, 400);
     assert.equal(calls.length, 0);
+  });
+});
+
+test("viewing-date Apply requires the exact prepared plan and confirmation", async () => {
+  await withServer(async (baseUrl, calls) => {
+    const rejected = await request(baseUrl, "/api/projects/csf-st-viewing-before-v1/viewing-date/apply", { plan_id: "viewing-date-plan-11111111-1111-4111-8111-111111111111" });
+    assert.equal(rejected.response.status, 400);
+    assert.equal(calls.length, 0);
+
+    const accepted = await request(baseUrl, "/api/projects/csf-st-viewing-before-v1/viewing-date/apply", { plan_id: "viewing-date-plan-11111111-1111-4111-8111-111111111111", confirm_apply: true });
+    assert.equal(accepted.response.status, 200);
+    assert.deepEqual(calls[0][1], {
+      projectsRoot: calls[0][1].projectsRoot,
+      slug: "csf-st-viewing-before-v1",
+      planId: "viewing-date-plan-11111111-1111-4111-8111-111111111111",
+      idempotencyKey: undefined
+    });
+    assert.deepEqual(accepted.body, { ok: true, status: "applied", mutation_performed: true });
+    assert.doesNotMatch(JSON.stringify(accepted.body), /plan_id|snapshot|path|sha256|sql/i);
   });
 });
 
