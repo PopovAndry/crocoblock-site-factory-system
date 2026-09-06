@@ -36,6 +36,8 @@
   const statePlanPrompt = document.getElementById("state-plan-prompt");
   const stateOverwriteHeroTitleCheckbox = document.getElementById("state-overwrite-hero-title-checkbox");
   const statePlanResult = document.getElementById("state-plan-result");
+  const viewingDatePreviewButton = document.getElementById("viewing-date-preview-button");
+  const viewingDatePreviewResult = document.getElementById("viewing-date-preview-result");
   const stateRollbackResult = document.getElementById("state-rollback-result");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
   const totalTokens = document.getElementById("launcher-total-tokens");
@@ -388,6 +390,77 @@
     rollback: null,
     error: null
   };
+  let viewingDatePreviewView = { slug: "", requestId: 0, planId: "" };
+
+  function isActiveViewingDatePreview(slug, requestId) {
+    return String(generateProjectSlug.value || "").trim() === String(slug || "")
+      && viewingDatePreviewView.slug === String(slug || "")
+      && viewingDatePreviewView.requestId === requestId;
+  }
+
+  function renderViewingDatePreview(payload) {
+    if (!viewingDatePreviewResult) return;
+    const recovery = payload && payload.recovery && typeof payload.recovery === "object" ? payload.recovery : {};
+    const recoveryNotices = recovery.status === "prepared"
+      ? [
+        recovery.byte_verification_notice,
+        recovery.coverage_notice,
+        recovery.row_inspection_notice,
+        recovery.restore_notice
+      ].filter((notice) => typeof notice === "string" && notice.trim())
+      : ["Recovery Point is not prepared."];
+    if (recovery.status === "prepared" && !recoveryNotices.length) {
+      recoveryNotices.push("Recovery Point preparation details are unavailable.");
+    }
+    viewingDatePreviewResult.hidden = false;
+    viewingDatePreviewResult.innerHTML = "<strong>Preferred date is optional.</strong><p>Existing Request Viewing fields and rules will stay in place. The form has not changed.</p>" + recoveryNotices.map((notice) => "<p>" + escapeHtml(notice) + "</p>").join("");
+    if (payload && payload.status === "applicable" && payload.plan_id) {
+      const prepare = document.createElement("button");
+      prepare.type = "button";
+      prepare.className = "button";
+      prepare.textContent = "Prepare Recovery Point";
+      prepare.addEventListener("click", () => prepareViewingDateRecovery(payload.plan_id));
+      viewingDatePreviewResult.appendChild(prepare);
+    }
+  }
+
+  async function previewViewingDate() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = viewingDatePreviewView.requestId + 1;
+    viewingDatePreviewView = { slug, requestId, planId: "" };
+    if (!slug) return;
+    viewingDatePreviewButton.disabled = true;
+    viewingDatePreviewResult.hidden = false;
+    viewingDatePreviewResult.textContent = "Preparing Preferred date Preview...";
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/viewing-date/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const payload = await response.json();
+      if (!isActiveViewingDatePreview(slug, requestId)) return;
+      if (!response.ok) throw new Error(payload && payload.message || "Preview unavailable.");
+      viewingDatePreviewView.planId = payload.plan_id || "";
+      renderViewingDatePreview(payload);
+    } catch (caught) {
+      if (isActiveViewingDatePreview(slug, requestId)) {
+        viewingDatePreviewResult.textContent = "Viewing-date Preview cannot be prepared safely.";
+      }
+    } finally {
+      if (isActiveViewingDatePreview(slug, requestId)) viewingDatePreviewButton.disabled = false;
+    }
+  }
+
+  async function prepareViewingDateRecovery(planId) {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = viewingDatePreviewView.requestId;
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/viewing-date/recovery-point", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan_id: planId, confirm_prepare_recovery_point: true }) });
+      const payload = await response.json();
+      if (!isActiveViewingDatePreview(slug, requestId)) return;
+      if (!response.ok) throw new Error(payload && payload.message || "Recovery preparation blocked.");
+      renderViewingDatePreview(payload.summary || payload);
+    } catch (caught) {
+      if (isActiveViewingDatePreview(slug, requestId)) viewingDatePreviewResult.textContent = "Recovery Point preparation is blocked.";
+    }
+  }
 
   function getProjectPresentation(project) {
     if (!project) {
@@ -3371,6 +3444,11 @@
     const setupRequestId = resetSetupView(generateProjectSlug.value);
     const recoveryRequestId = resetRecoveryStatusView(generateProjectSlug.value);
     const stateRequestId = resetStateChangeView(generateProjectSlug.value);
+    viewingDatePreviewView = { slug: String(generateProjectSlug.value || "").trim(), requestId: viewingDatePreviewView.requestId + 1, planId: "" };
+    if (viewingDatePreviewResult) {
+      viewingDatePreviewResult.hidden = true;
+      viewingDatePreviewResult.textContent = "";
+    }
     Promise.all([
       loadSetupStatus(generateProjectSlug.value, { requestId: setupRequestId }),
       loadRecoveryStatus(generateProjectSlug.value, { requestId: recoveryRequestId }),
@@ -3578,6 +3656,10 @@
       updateGenerateActionState();
     }
   });
+
+  if (viewingDatePreviewButton) {
+    viewingDatePreviewButton.addEventListener("click", previewViewingDate);
+  }
 
   refreshStateButton.addEventListener("click", async () => {
     const slug = String(generateProjectSlug.value || "").trim();
@@ -3809,6 +3891,10 @@
     };
     window.FactoryLauncherTestHooks.generatePreview = {
       buildGeneratePreviewHtml
+    };
+    window.FactoryLauncherTestHooks.viewingDatePreview = {
+      render: renderViewingDatePreview,
+      getHtml: () => viewingDatePreviewResult.innerHTML
     };
     window.FactoryLauncherTestHooks.recoveryStatus = {
       buildRecoveryStatusCardHtml,

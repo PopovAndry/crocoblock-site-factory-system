@@ -86,6 +86,10 @@ const {
 const {
   executeManagedWebsiteRestore
 } = require("./structural-restore-execution");
+const {
+  createViewingDatePreview,
+  prepareViewingDateRecovery
+} = require("./viewing-date-preview");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -337,6 +341,12 @@ function renderHomePage(config) {
     "              <button type=\"submit\" class=\"button\" id=\"state-plan-button\">Review changes</button>",
     "        </form>",
     "        <div id=\"state-plan-result\" class=\"result-box\" hidden></div>",
+    "        <section class=\"compact-form\" aria-labelledby=\"viewing-date-preview-title\">",
+    "          <h3 id=\"viewing-date-preview-title\">Request Viewing: Preferred date</h3>",
+    "          <p>Preview the protected preparation for one optional date field.</p>",
+    "          <button type=\"button\" class=\"button secondary\" id=\"viewing-date-preview-button\">Preview Preferred date</button>",
+    "          <div id=\"viewing-date-preview-result\" class=\"result-box\" hidden></div>",
+    "        </section>",
     "        <div id=\"state-rollback-result\" class=\"result-box\" hidden></div>",
     "            <div id=\"site-status\" class=\"project-list\"></div>",
     "            <div id=\"managed-state\" class=\"project-list\"></div>",
@@ -499,6 +509,29 @@ function validateRecoveryPointCreatePayload(payload) {
       400
     );
   }
+}
+
+function validateViewingDatePreviewPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length !== 0) {
+    throw createStructuredError("Viewing-date Preview does not accept browser-supplied change details.", "viewing_date_preview_request_rejected", 400);
+  }
+}
+
+function validateViewingDateRecoveryPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length !== 2 || typeof input.plan_id !== "string" || input.confirm_prepare_recovery_point !== true) {
+    throw createStructuredError("Recovery Point preparation requires the prepared Preview and confirmation.", "viewing_date_recovery_request_rejected", 400);
+  }
+  return input.plan_id;
+}
+
+function sendViewingDatePreviewError(response, error) {
+  const statusCode = Number.isInteger(error && error.statusCode) ? error.statusCode : 500;
+  const message = statusCode >= 500
+    ? "Viewing-date Preview is temporarily unavailable."
+    : "Viewing-date Preview cannot be prepared safely.";
+  sendJson(response, statusCode, { ok: false, status: "blocked", error: message, message });
 }
 
 function buildRecoveryPointCreateResponse(operationResult) {
@@ -1904,6 +1937,36 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/viewing-date\/preview$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          validateViewingDatePreviewPayload(payload);
+          const previewService = options.viewingDatePreviewService || createViewingDatePreview;
+          sendJson(response, 200, await previewService({ projectsRoot, slug }));
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendViewingDatePreviewError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/viewing-date\/recovery-point$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const planId = validateViewingDateRecoveryPayload(payload);
+          const recoveryService = options.viewingDateRecoveryService || prepareViewingDateRecovery;
+          sendJson(response, 200, await recoveryService({ projectsRoot, slug, planId }));
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendViewingDatePreviewError(response, error);
+        }
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname)) {
         try {
           const payload = await readJsonPayload(request);
@@ -2442,6 +2505,8 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/generation\/plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/generate$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/recovery-points$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/viewing-date\/preview$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/viewing-date\/recovery-point$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/restore\/execute$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||
