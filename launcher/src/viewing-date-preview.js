@@ -754,4 +754,4 @@ async function prepareViewingDateRecovery(options) {
   }
 }
 
-module.exports = { PROFILE_ID, PROFILE_VERSION, DATE_BLOCK, nativeFactsFromObservation, buildPatch, observeNativeRuntime, createViewingDatePreview, prepareViewingDateRecovery, browserSummary, matchingPreparedRecovery, proposedChangeFingerprint, reattestExistingSnapshot, canonicalTarEntryInventory, exactCoverage, coverageFingerprint, baselineFingerprint, snapshotIdentity, streamSha256Artifact, verifySnapshotArtifacts, inspectSnapshotSinglePass, createTarInventoryParser };
+module.exports = { PROFILE_ID, PROFILE_VERSION, DATE_BLOCK, nativeFactsFromObservation, buildPatch, observeNativeRuntime, createViewingDatePreview, prepareViewingDateRecovery, browserSummary, matchingPreparedRecovery, proposedChangeFingerprint, reattestExistingSnapshot, canonicalTarEntryInventory, exactCoverage, exactProjectMetadata, coverageFingerprint, baselineFingerprint, snapshotIdentity, streamSha256Artifact, verifySnapshotArtifacts, inspectSnapshotSinglePass, createTarInventoryParser };

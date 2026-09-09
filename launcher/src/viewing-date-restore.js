@@ -9,6 +9,7 @@ const { deriveProjectBinding } = require("./structural-snapshot-store");
 const { createRestorePlan } = require("./structural-restore-plan");
 const { executeManagedWebsiteRestore, extractTarArchive } = require("./structural-restore-execution");
 const { prepareViewingDateAuthority, assertAfter, assertBaseline, nativeRead } = require("./viewing-date-apply");
+const { exactProjectMetadata } = require("./viewing-date-preview");
 const { runCommand } = require("./runtime-tools");
 const { requireAgentSigningCredential } = require("./agent-credential-store");
 
@@ -27,6 +28,9 @@ const AGENT_CREDENTIAL_OPTION = "factory_agent_signed_auth_credentials";
 const AGENT_CREDENTIAL_FIELDS = Object.freeze(["schema", "version", "contract_version", "key_id", "status", "created_at", "revoked_at", "capabilities", "project_slug"]);
 const AGENT_REPLAY_PREFIX = "factory_agent_replay_";
 const AGENT_RATE_PREFIX = "factory_agent_rate_";
+const VERIFY_EXISTING_JOURNAL_SCHEMA = "csf_viewing_date_restore_verify_existing_journal";
+const VERIFY_EXISTING_JOURNAL_VERSION = 1;
+const VERIFY_EXISTING_JOURNAL_FILENAME = "viewing-date-verify-existing.json";
 
 function fail(code, message, statusCode) {
   const error = new Error(message || "Viewing-date Restore cannot proceed safely.");
@@ -43,6 +47,106 @@ function stable(value) {
 
 function equal(left, right) {
   return stable(left) === stable(right);
+}
+
+function digest(value) {
+  return crypto.createHash("sha256").update(stable(value), "utf8").digest("hex");
+}
+
+function verifyExistingJournalPath(workRoot, operationId) {
+  if (typeof workRoot !== "string" || !workRoot || typeof operationId !== "string" || !/^op-[a-z0-9-]+$/i.test(operationId)) {
+    throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
+  }
+  const root = path.resolve(workRoot);
+  const stat = fs.lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || path.basename(root) !== operationId) {
+    throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
+  }
+  return path.join(root, VERIFY_EXISTING_JOURNAL_FILENAME);
+}
+
+function writeJsonAtomic(filePath, value) {
+  const temporary = filePath + ".tmp-" + process.pid + "-" + crypto.randomBytes(3).toString("hex");
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value) + "\n", { encoding: "utf8", flag: "wx" });
+    fs.renameSync(temporary, filePath);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
+function exactJournalSurface(surface) {
+  assertAgentRepairSurface(surface, surface && surface.credential && surface.credential.credentials && surface.credential.credentials[0] && surface.credential.credentials[0].project_slug);
+  return { replays: surface.replays, rates: surface.rates, other_factory_options: surface.other_factory_options };
+}
+
+function makeVerifyExistingJournal(context, checkpoint, nonce, preserved) {
+  assertVerifyExistingObservation(checkpoint, context.projectSlug);
+  if (!Buffer.isBuffer(nonce) || nonce.length !== 32) throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
+  return {
+    schema: VERIFY_EXISTING_JOURNAL_SCHEMA,
+    version: VERIFY_EXISTING_JOURNAL_VERSION,
+    operation_id: context.operationId,
+    project_slug: context.projectSlug,
+    plan_id: PLAN_ID,
+    snapshot_id: SNAPSHOT_ID,
+    apply_operation_id: APPLY_OPERATION_ID,
+    phase: "b_recorded",
+    observation_nonce: nonce.toString("hex"),
+    b: {
+      credential_metadata_sha256: digest(checkpoint.surface.credential),
+      credential_hmac_sha256: digest(checkpoint.credential_hmac[0]),
+      application_password_identity_sha256: digest(checkpoint.application_passwords),
+      env_identity: preserved.envIdentity,
+      wp_config_sha256: preserved.wpConfigSha256,
+      surface: exactJournalSurface(checkpoint.surface)
+    }
+  };
+}
+
+function assertVerifyExistingJournal(value, context, phase) {
+  const expectedKeys = ["apply_operation_id", "b", "health", "observation_nonce", "operation_id", "phase", "plan_id", "project_slug", "schema", "snapshot_id", "version"];
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== expectedKeys.filter((key) => key === "health" ? phase === "health_recorded" : true).sort().join(",")
+    || value.schema !== VERIFY_EXISTING_JOURNAL_SCHEMA || value.version !== VERIFY_EXISTING_JOURNAL_VERSION
+    || value.operation_id !== context.operationId || value.project_slug !== context.projectSlug
+    || value.plan_id !== PLAN_ID || value.snapshot_id !== SNAPSHOT_ID || value.apply_operation_id !== APPLY_OPERATION_ID
+    || value.phase !== phase || !/^[a-f0-9]{64}$/.test(value.observation_nonce || "")
+    || !value.b || typeof value.b !== "object" || Array.isArray(value.b)
+    || Object.keys(value.b).sort().join(",") !== "application_password_identity_sha256,credential_hmac_sha256,credential_metadata_sha256,env_identity,surface,wp_config_sha256"
+    || ![value.b.credential_metadata_sha256, value.b.credential_hmac_sha256, value.b.application_password_identity_sha256].every((entry) => typeof entry === "string" && /^[a-f0-9]{64}$/.test(entry))) {
+    throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be verified safely.");
+  }
+  if (!value.b.env_identity || !Number.isInteger(value.b.env_identity.size) || typeof value.b.env_identity.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.b.env_identity.sha256)
+    || typeof value.b.wp_config_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.b.wp_config_sha256)) {
+    throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be verified safely.");
+  }
+  assertAgentRepairSurface(Object.assign({ credential: { option_name: AGENT_CREDENTIAL_OPTION, credentials: [{ schema: "factory_agent_signing_credential", version: 1, contract_version: "journal", key_id: "journal", status: "active", created_at: "1970-01-01T00:00:00.000Z", revoked_at: null, capabilities: [], project_slug: context.projectSlug }] } }, value.b.surface), context.projectSlug);
+  if (phase === "health_recorded" && (!value.health || typeof value.health !== "object" || Object.keys(value.health).sort().join(",") !== "expires_at,key_id,method,project_slug,request_id,route"
+    || value.health.method !== "GET" || value.health.route !== "/factory/v1/agent/health" || value.health.project_slug !== context.projectSlug
+    || typeof value.health.key_id !== "string" || typeof value.health.request_id !== "string" || !Number.isInteger(value.health.expires_at))) {
+    throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be verified safely.");
+  }
+  return value;
+}
+
+function writeVerifyExistingJournal(context, journal) {
+  const journalPath = verifyExistingJournalPath(context.workRoot, context.operationId);
+  if (fs.existsSync(journalPath)) throw fail("viewing_date_restore_verification_journal_exists", "Restore verification evidence already exists.");
+  writeJsonAtomic(journalPath, journal);
+  return journal;
+}
+
+function replaceVerifyExistingJournal(context, journal) {
+  const journalPath = verifyExistingJournalPath(context.workRoot, context.operationId);
+  if (!fs.existsSync(journalPath)) throw fail("viewing_date_restore_verification_journal_missing", "Restore verification evidence is unavailable.");
+  writeJsonAtomic(journalPath, journal);
+  return journal;
+}
+
+function readVerifyExistingJournal(context) {
+  const journalPath = verifyExistingJournalPath(context.workRoot, context.operationId);
+  try { return JSON.parse(fs.readFileSync(journalPath, "utf8")); } catch (_) { throw fail("viewing_date_restore_verification_journal_missing", "Restore verification evidence is unavailable."); }
 }
 
 function fileIdentity(filePath) {
@@ -336,31 +440,14 @@ function assertRestoredBaseline(observation, plan) {
   return { form_sha256: observation.form_sha256, records: observation.records };
 }
 
-function snapshotMetadata(projectState) {
-  const project = projectState.project;
-  return {
-    schema: "factory_structural_snapshot_metadata",
-    version: 1,
-    project_slug: project.slug,
-    project_id: project.project_id || null,
-    site_name: project.site_name || null,
-    wp_port: project.wp_port || null,
-    runtime_status: project.runtime && project.runtime.status || null,
-    agent_status: project.agent && project.agent.status || null,
-    agent_version: project.agent && project.agent.version || null,
-    binding: deriveProjectBinding(project)
-  };
-}
-
 function assertSnapshotMetadata(source, projectState) {
   const artifact = source && source.artifacts && source.artifacts.metadata;
   if (!artifact || typeof artifact.path !== "string") throw fail("viewing_date_restore_metadata_missing", "Restore metadata could not be verified.");
   let parsed;
   try { parsed = JSON.parse(fs.readFileSync(artifact.path, "utf8")); } catch (_) { throw fail("viewing_date_restore_metadata_invalid", "Restore metadata could not be verified."); }
-  const expected = snapshotMetadata(projectState);
-  const actual = Object.assign({}, parsed);
-  delete actual.created_at;
-  if (!equal(actual, expected)) throw fail("viewing_date_restore_metadata_drift", "Project metadata does not match the verified Recovery Point.");
+  if (!exactProjectMetadata(parsed, projectState, deriveProjectBinding(projectState.project).basis)) {
+    throw fail("viewing_date_restore_metadata_drift", "Project metadata does not match the verified Recovery Point.");
+  }
 }
 
 function digestFile(filePath) {
@@ -473,10 +560,6 @@ async function restoreViewingDate(options) {
   const slug = validateExplicitSlug(options && options.slug);
   if (slug !== PROJECT_SLUG) throw fail("viewing_date_restore_project_not_allowed", "Viewing-date Restore is unavailable for this project.", 404);
   const prepared = await prepareViewingDateRestoreAuthority(options || {});
-  let agentBefore = null;
-  let appPasswordsBefore = null;
-  let businessBefore = null;
-  let signedHealth = null;
   const observationNonce = crypto.randomBytes(32);
   const expectedAgentSecret = options.expectedAgentSecret || requireAgentSigningCredential(prepared.projectState).signing_secret;
   const envBeforeRestore = fileIdentity(prepared.projectState.envPath);
@@ -500,7 +583,8 @@ async function restoreViewingDate(options) {
     preRestoreVerifier: async () => {
       await prepareViewingDateRestore(options || {});
     },
-    beforeSignedHealthObserver: async () => {
+    beforeSignedHealthObserver: async (healthContext) => {
+      const journalContext = { operationId: healthContext && healthContext.operation_id, workRoot: healthContext && healthContext.work_root, projectSlug: prepared.projectState.project.slug };
       const restored = await (options.readNative || nativeRead)(prepared.projectState, { mode: "read" });
       assertRestoredBaseline(restored, prepared.authority.authority.plan);
       assertStableEnv(envBeforeRestore, fileIdentity(prepared.projectState.envPath));
@@ -510,31 +594,33 @@ async function restoreViewingDate(options) {
       assertApplicationPasswordIdentity(checkpoint.application_passwords);
       if (!Array.isArray(checkpoint.credential_hmac) || checkpoint.credential_hmac.length !== 1) throw fail("viewing_date_restore_agent_secret_mismatch", "Factory Agent credential could not be verified safely.");
       verifyCredentialChallenge(expectedAgentSecret, observationNonce, checkpoint.credential_hmac[0]);
-      businessBefore = restored;
-      agentBefore = checkpoint.surface;
-      appPasswordsBefore = checkpoint.application_passwords;
+      writeVerifyExistingJournal(journalContext, makeVerifyExistingJournal(journalContext, checkpoint, observationNonce, { envIdentity: envBeforeRestore, wpConfigSha256: wpConfigBeforeRestore }));
     },
     signedHealthObserver: async (observation) => {
-      if (signedHealth !== null) throw fail("viewing_date_restore_agent_health_ambiguous", "Factory Agent health could not be verified safely.");
-      signedHealth = Object.assign({}, observation);
+      const journalContext = { operationId: observation && observation.operation_id, workRoot: observation && observation.work_root, projectSlug: prepared.projectState.project.slug };
+      const journal = assertVerifyExistingJournal(readVerifyExistingJournal(journalContext), journalContext, "b_recorded");
+      journal.phase = "health_recorded";
+      journal.health = { method: observation.method, route: observation.route, project_slug: observation.project_slug, key_id: observation.key_id, request_id: observation.request_id, expires_at: observation.expires_at };
+      assertVerifyExistingJournal(journal, journalContext, "health_recorded");
+      replaceVerifyExistingJournal(journalContext, journal);
     },
     postRestoreVerifier: async (context) => {
       const restored = await (options.readNative || nativeRead)(context.projectState, { mode: "read" });
       assertRestoredBaseline(restored, prepared.authority.authority.plan);
-      if (!businessBefore || !equal(businessBefore, restored)) throw fail("viewing_date_restore_baseline_drift", "Restored Request Viewing baseline changed during verification.");
-      assertStableEnv(envBeforeRestore, fileIdentity(context.projectState.envPath));
+      const journalContext = { operationId: context.operationId, workRoot: context.workRoot, projectSlug: context.projectState.project.slug };
+      const journal = assertVerifyExistingJournal(readVerifyExistingJournal(journalContext), journalContext, "health_recorded");
+      assertStableEnv(journal.b.env_identity, fileIdentity(context.projectState.envPath));
       const wpConfigAfterRestore = digestFile(path.join(context.liveWordPressRoot, "wp-config.php"));
-      if (context.wpConfigSha256 !== wpConfigBeforeRestore || wpConfigAfterRestore !== wpConfigBeforeRestore) throw fail("viewing_date_restore_wp_config_changed", "Current wp-config.php was not preserved.");
+      if (context.wpConfigSha256 !== journal.b.wp_config_sha256 || wpConfigAfterRestore !== journal.b.wp_config_sha256) throw fail("viewing_date_restore_wp_config_changed", "Current wp-config.php was not preserved.");
       await (options.verifySnapshotMetadata || assertSnapshotMetadata)(context.source, context.projectState);
       await (options.verifyRestoredFilesystem || verifyRestoredFilesystem)(context);
       if (!context.agent || context.agent.successful !== true || !context.health || context.health.signed_agent !== "ok") throw fail("viewing_date_restore_agent_binding_invalid", "Factory Agent binding could not be verified.");
-      const checkpoint = await readVerifyExistingSurface(context.projectState, options, observationNonce);
-      if (!appPasswordsBefore) throw fail("viewing_date_restore_application_password_drift", "Application Password state changed during Agent verification.");
-      assertUnchangedApplicationPasswordIdentity(appPasswordsBefore, checkpoint.application_passwords);
+      const checkpoint = await readVerifyExistingSurface(context.projectState, options, Buffer.from(journal.observation_nonce, "hex"));
+      if (digest(checkpoint.application_passwords) !== journal.b.application_password_identity_sha256 || digest(checkpoint.surface.credential) !== journal.b.credential_metadata_sha256) throw fail("viewing_date_restore_application_password_drift", "Application Password state changed during Agent verification.");
       if (!Array.isArray(checkpoint.credential_hmac) || checkpoint.credential_hmac.length !== 1) throw fail("viewing_date_restore_agent_secret_mismatch", "Factory Agent credential could not be verified safely.");
-      verifyCredentialChallenge(expectedAgentSecret, observationNonce, checkpoint.credential_hmac[0]);
-      const agentAfter = checkpoint.surface;
-      const authorityPreservation = assertAgentRepairDelta(agentBefore, agentAfter, signedHealth, context.projectState.project.slug);
+      if (digest(checkpoint.credential_hmac[0]) !== journal.b.credential_hmac_sha256) throw fail("viewing_date_restore_agent_secret_mismatch", "Factory Agent credential could not be verified safely.");
+      verifyCredentialChallenge(expectedAgentSecret, Buffer.from(journal.observation_nonce, "hex"), checkpoint.credential_hmac[0]);
+      const authorityPreservation = assertAgentRepairDelta(Object.assign({ credential: checkpoint.surface.credential }, journal.b.surface), checkpoint.surface, journal.health, context.projectState.project.slug);
       await (options.verifySurfaces || verifyFunctionalSurfaces)(context.projectState);
       return { viewing_date_restore: Object.assign(restoreIdentity(context.projectState.project.slug), authorityPreservation) };
     },

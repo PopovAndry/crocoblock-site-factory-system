@@ -155,6 +155,16 @@ test("same-project Restore rejects failed or incomplete historical success and r
   writeOperation(value.state, { schema: "factory_project_operation", version: 1, operation_id: "op-failed-restore", project_slug: value.state.project.slug, operation_type: "viewing_date_restore", status: "failed", metadata: { viewing_date_plan_id: PLAN_ID }, result_summary: {} });
   await assert.rejects(() => restoreViewingDate(options(value, { value: value.after })), { code: "viewing_date_restore_prior_attempt_terminal" });
 
+  const interrupted = fixture();
+  writeOperation(interrupted.state, { schema: "factory_project_operation", version: 1, operation_id: "op-interrupted-after-health", project_slug: interrupted.state.project.slug, operation_type: "viewing_date_restore", status: "interrupted", metadata: { viewing_date_plan_id: PLAN_ID, verify_existing_phase: "health_recorded" }, result_summary: {} });
+  let interruptedNativeRestoreCalls = 0;
+  await assert.rejects(() => restoreViewingDate(options(interrupted, { value: interrupted.after }, { executeRestore: async (request) => {
+    await request.postLockTerminalResolver();
+    interruptedNativeRestoreCalls += 1;
+    return { operation: { status: "succeeded" } };
+  } })), { code: "viewing_date_restore_prior_attempt_terminal" });
+  assert.equal(interruptedNativeRestoreCalls, 0);
+
   const replay = fixture();
   writeOperation(replay.state, { schema: "factory_project_operation", version: 1, operation_id: "op-restored", project_slug: replay.state.project.slug, operation_type: "viewing_date_restore", status: "succeeded", metadata: { viewing_date_plan_id: PLAN_ID }, result_summary: { viewing_date_restore: restoreIdentity(replay.state.project.slug) } });
   let writes = 0;
@@ -176,6 +186,23 @@ test("same-project Restore rejects failed or incomplete historical success and r
   await assert.rejects(() => restoreViewingDate(options(duplicate, { value: duplicate.before }, {
     executeRestore: async (request) => ({ result: await request.postLockTerminalResolver() })
   })), { code: "viewing_date_restore_prior_attempt_terminal" });
+});
+
+test("the exact failed ST-1 Restore is non-resumable and cannot reach native Restore", async () => {
+  const value = fixture();
+  writeOperation(value.state, {
+    schema: "factory_project_operation", version: 1, operation_id: "op-2026-09-09T16-50-19-581Z-0992bf",
+    project_slug: value.state.project.slug, operation_type: "viewing_date_restore", status: "failed",
+    metadata: { viewing_date_plan_id: PLAN_ID, viewing_date_snapshot_id: SNAPSHOT_ID, viewing_date_apply_operation_id: APPLY_OPERATION_ID },
+    result_summary: { manual_recovery_required: true }, error: { code: "viewing_date_restore_metadata_drift" }
+  });
+  let nativeRestoreCalls = 0;
+  await assert.rejects(() => restoreViewingDate(options(value, { value: value.before }, { executeRestore: async (request) => {
+    await request.postLockTerminalResolver();
+    nativeRestoreCalls += 1;
+    return { operation: { status: "succeeded" } };
+  } })), { code: "viewing_date_restore_prior_attempt_terminal" });
+  assert.equal(nativeRestoreCalls, 0);
 });
 
 test("Agent credential observation accepts only the exact native metadata fields", () => {
@@ -277,6 +304,9 @@ test("same-project Restore invokes the verify-existing reader at B and C around 
   const passwords = { user_id: 1, count: 1, entries: [{ uuid: "app-1", app_id: "", name: "Factory Launcher", created: 1, last_used: null, last_ip: null }], structure_hmac: "e".repeat(64) };
   const readerNonces = [];
   const wpRoot = path.join(value.state.runtimePath, "wordpress");
+  const operationId = "op-verify-existing-journal";
+  const workRoot = path.join(value.state.runtimePath, "runs", "restore-work", operationId);
+  fs.mkdirSync(workRoot, { recursive: true });
   fs.mkdirSync(wpRoot, { recursive: true });
   fs.writeFileSync(path.join(wpRoot, "wp-config.php"), "fixture-wp-config");
   const wpConfigSha256 = digest("fixture-wp-config");
@@ -293,9 +323,18 @@ test("same-project Restore invokes the verify-existing reader at B and C around 
     executeRestore: async (request) => {
       await request.preRestoreVerifier();
       current.value = value.before;
-      await request.beforeSignedHealthObserver();
-      await request.signedHealthObserver(signed);
-      await request.postRestoreVerifier({ projectState: value.state, source: {}, liveWordPressRoot: wpRoot, workRoot: value.state.runtimePath, wpConfigSha256, agent: { successful: true }, health: { signed_agent: "ok" } });
+      await request.beforeSignedHealthObserver(Object.assign({}, signed, { operation_id: operationId, work_root: workRoot }));
+      const beforeHealthJournal = JSON.parse(fs.readFileSync(path.join(workRoot, "viewing-date-verify-existing.json"), "utf8"));
+      assert.equal(beforeHealthJournal.phase, "b_recorded");
+      assert.equal(Object.hasOwn(beforeHealthJournal, "health"), false);
+      await request.signedHealthObserver(Object.assign({}, signed, { operation_id: operationId, work_root: workRoot }));
+      const afterHealthJournal = JSON.parse(fs.readFileSync(path.join(workRoot, "viewing-date-verify-existing.json"), "utf8"));
+      assert.equal(afterHealthJournal.phase, "health_recorded");
+      assert.deepEqual(afterHealthJournal.health, signed);
+      const rawHmac = crypto.createHmac("sha256", "fixture-server-owned-secret").update(readerNonces[0], "utf8").digest("hex");
+      assert.equal(JSON.stringify(afterHealthJournal).includes(rawHmac), false);
+      assert.equal(JSON.stringify(afterHealthJournal).includes(JSON.stringify(passwords.entries)), false);
+      await request.postRestoreVerifier({ operationId, projectState: value.state, source: {}, liveWordPressRoot: wpRoot, workRoot, wpConfigSha256, agent: { successful: true }, health: { signed_agent: "ok" } });
       return { operation: { status: "succeeded" } };
     }
   }));
@@ -345,11 +384,18 @@ test("snapshot project metadata permits no non-allowlisted project drift", () =>
     runtime_status: value.state.project.runtime && value.state.project.runtime.status || null,
     agent_status: value.state.project.agent && value.state.project.agent.status || null,
     agent_version: value.state.project.agent && value.state.project.agent.version || null,
-    binding: deriveProjectBinding(value.state.project), created_at: "2026-09-04T00:00:00.000Z"
+    binding: deriveProjectBinding(value.state.project).basis, created_at: "2026-09-04T00:00:00.000Z"
   };
   fs.writeFileSync(metadataPath, JSON.stringify(metadata));
   assert.doesNotThrow(() => assertSnapshotMetadata({ artifacts: { metadata: { path: metadataPath } } }, value.state));
   metadata.site_name = "unrelated drift";
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+  assert.throws(() => assertSnapshotMetadata({ artifacts: { metadata: { path: metadataPath } } }, value.state), { code: "viewing_date_restore_metadata_drift" });
+  metadata.site_name = value.state.project.site_name;
+  metadata.binding = deriveProjectBinding(value.state.project);
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+  assert.throws(() => assertSnapshotMetadata({ artifacts: { metadata: { path: metadataPath } } }, value.state), { code: "viewing_date_restore_metadata_drift" });
+  metadata.binding = "arbitrary-binding";
   fs.writeFileSync(metadataPath, JSON.stringify(metadata));
   assert.throws(() => assertSnapshotMetadata({ artifacts: { metadata: { path: metadataPath } } }, value.state), { code: "viewing_date_restore_metadata_drift" });
 });

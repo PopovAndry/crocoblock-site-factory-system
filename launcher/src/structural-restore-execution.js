@@ -551,7 +551,9 @@ async function verifyHealth(options) {
       route: "/factory/v1/agent/health",
       project_slug: credential.project_slug,
       key_id: credential.key_id,
-      request_id: requestId
+      request_id: requestId,
+      operation_id: options.operationId || null,
+      work_root: options.workRoot || null
     });
   }
   const response = await fetchJsonWithSignedAuth(restBase + "/agent/health", credential, { timeoutMs: 10000, timestamp, requestId });
@@ -566,7 +568,9 @@ async function verifyHealth(options) {
       project_slug: credential.project_slug,
       key_id: credential.key_id,
       request_id: requestId,
-      expires_at: Math.floor(Date.parse(timestamp) / 1000) + SIGNED_AUTH_FRESHNESS_SECONDS
+      expires_at: Math.floor(Date.parse(timestamp) / 1000) + SIGNED_AUTH_FRESHNESS_SECONDS,
+      operation_id: options.operationId || null,
+      work_root: options.workRoot || null
     });
   }
   return {
@@ -1083,8 +1087,8 @@ async function executeRestoreInCoordinator(context, options) {
 
     await stage("verifying_restore");
     const health = options.healthVerifier
-      ? await options.healthVerifier({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController, beforeSignedHealthObserver: options.beforeSignedHealthObserver, signedHealthObserver: options.signedHealthObserver })
-      : await verifyHealth({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController, beforeSignedHealthObserver: options.beforeSignedHealthObserver, signedHealthObserver: options.signedHealthObserver });
+      ? await options.healthVerifier({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController, beforeSignedHealthObserver: options.beforeSignedHealthObserver, signedHealthObserver: options.signedHealthObserver, operationId: context.operationId, workRoot })
+      : await verifyHealth({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController, beforeSignedHealthObserver: options.beforeSignedHealthObserver, signedHealthObserver: options.signedHealthObserver, operationId: context.operationId, workRoot });
     let postRestoreResultSummary = null;
     if (typeof options.postRestoreVerifier === "function") {
       postRestoreResultSummary = await options.postRestoreVerifier({
