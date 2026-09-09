@@ -37,7 +37,8 @@ const ALLOWED_OPERATION_TYPES = new Set([
   "agent_auth_rotate",
   "agent_auth_revoke",
   "create_website",
-  "viewing_date_apply"
+  "viewing_date_apply",
+  "viewing_date_restore"
 ]);
 
 function stableStringify(value) {
@@ -408,13 +409,21 @@ async function runProjectOperation(options) {
   const resumeStatuses = Array.isArray(options.resumeStatuses)
     ? options.resumeStatuses.slice()
     : (options.allowInterruptedResume === true ? ["interrupted"] : []);
+  const postLockTerminalResolver = options.postLockTerminalResolver;
+  const deferIdempotencyUntilPostLock = options.deferIdempotencyUntilPostLock === true;
+  if (postLockTerminalResolver !== undefined && typeof postLockTerminalResolver !== "function") {
+    throw createCoordinatorError("Project operation terminal resolver is invalid.", "project_operation_terminal_resolver_invalid", 500);
+  }
+  if (deferIdempotencyUntilPostLock && typeof postLockTerminalResolver !== "function") {
+    throw createCoordinatorError("Project operation terminal resolver is required.", "project_operation_terminal_resolver_invalid", 500);
+  }
 
   reconcileInterruptedOperations({
     slug: projectInfo.slug,
     projectsRoot: projectInfo.projectsRoot
   });
 
-  const replayBeforeLock = checkIdempotency({
+  const replayBeforeLock = deferIdempotencyUntilPostLock ? null : checkIdempotency({
     slug: projectInfo.slug,
     projectsRoot: projectInfo.projectsRoot,
     idempotencyKeyHash,
@@ -448,6 +457,33 @@ async function runProjectOperation(options) {
   let requestedOperation = null;
 
   try {
+    if (postLockTerminalResolver) {
+      const resolved = await postLockTerminalResolver({
+        projectsRoot: projectInfo.projectsRoot,
+        slug: projectInfo.slug,
+        projectState: projectInfo.projectState,
+        operationType,
+        idempotencyKeyHash,
+        requestFingerprint
+      });
+      if (!resolved || typeof resolved !== "object" || !["continue", "handled"].includes(resolved.status)) {
+        throw createCoordinatorError("Project operation terminal resolver returned an invalid result.", "project_operation_terminal_resolver_invalid", 500);
+      }
+      if (resolved.status === "handled") {
+        if (!resolved.result || typeof resolved.result !== "object") {
+          throw createCoordinatorError("Project operation terminal resolver returned an invalid result.", "project_operation_terminal_resolver_invalid", 500);
+        }
+        return {
+          idempotentReplay: false,
+          terminalHandled: true,
+          operation: null,
+          result: resolved.result
+        };
+      }
+      if (Object.keys(resolved).some((key) => key !== "status")) {
+        throw createCoordinatorError("Project operation terminal resolver returned an invalid result.", "project_operation_terminal_resolver_invalid", 500);
+      }
+    }
     const replayAfterLock = checkIdempotency({
       slug: projectInfo.slug,
       projectsRoot: projectInfo.projectsRoot,

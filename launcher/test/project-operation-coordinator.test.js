@@ -70,6 +70,65 @@ async function fakeOperation(options) {
   }, options.override || {}));
 }
 
+test("post-lock terminal resolver runs before idempotency and creates no operation when handled or invalid", async () => {
+  const projectsRoot = createTempProjectsRoot();
+  createTempProject(projectsRoot, "terminal-resolver");
+  let executed = 0;
+  const handled = await fakeOperation({
+    projectsRoot,
+    slug: "terminal-resolver",
+    idempotencyKey: "terminal-resolver-key-001",
+    override: {
+      deferIdempotencyUntilPostLock: true,
+      postLockTerminalResolver: async () => ({ status: "handled", result: { status: "already_restored", mutation_performed: false } }),
+      execute: async () => { executed += 1; throw new Error("must not execute"); }
+    }
+  });
+  assert.equal(handled.terminalHandled, true);
+  assert.equal(executed, 0);
+  assert.equal(listOperations({ projectsRoot, slug: "terminal-resolver" }).length, 0);
+  await assert.rejects(() => fakeOperation({
+    projectsRoot,
+    slug: "terminal-resolver",
+    idempotencyKey: "terminal-resolver-key-002",
+    override: { deferIdempotencyUntilPostLock: true, postLockTerminalResolver: async () => ({ status: "handled" }) }
+  }), (error) => error.code === "project_operation_terminal_resolver_invalid");
+  assert.equal(listOperations({ projectsRoot, slug: "terminal-resolver" }).length, 0);
+  const normal = await fakeOperation({ projectsRoot, slug: "terminal-resolver", idempotencyKey: "terminal-resolver-key-003" });
+  assert.equal(normal.operation.status, "succeeded");
+});
+
+test("different idempotency keys with a post-lock resolver permit one same-project mutation", async () => {
+  const projectsRoot = createTempProjectsRoot();
+  const slug = "terminal-resolver-race";
+  createTempProject(projectsRoot, slug);
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const barrier = new Promise((resolve) => { release = resolve; });
+  let executorCalls = 0;
+  let imports = 0;
+  const common = (idempotencyKey) => fakeOperation({
+    projectsRoot,
+    slug,
+    idempotencyKey,
+    override: {
+      deferIdempotencyUntilPostLock: true,
+      postLockTerminalResolver: async () => ({ status: "continue" }),
+      execute: async () => { executorCalls += 1; imports += 1; entered(); await barrier; return { result: { status: "restored", mutation_performed: true }, resultSummary: { status: "restored", mutation_performed: true } }; }
+    }
+  });
+  const first = common("terminal-race-first-0001");
+  await started;
+  await assert.rejects(common("terminal-race-second-0002"), (error) => error.code === "project_operation_in_progress");
+  release();
+  const completed = await first;
+  assert.equal(completed.operation.status, "succeeded");
+  assert.equal(executorCalls, 1);
+  assert.equal(imports, 1);
+  assert.equal(listOperations({ projectsRoot, slug }).length, 1);
+});
+
 test("serializes concurrent operations for the same project", async () => {
   const projectsRoot = createTempProjectsRoot();
   createTempProject(projectsRoot, "same-project");

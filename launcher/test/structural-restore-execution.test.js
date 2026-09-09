@@ -29,6 +29,7 @@ const {
 } = require("../src/structural-restore-plan");
 const {
   RESTORE_WORK_DIRECTORY,
+  browserSafeResult,
   captureLightweightDatabaseRescue,
   executeManagedWebsiteRestore,
   extractTarArchive,
@@ -40,6 +41,18 @@ const {
 } = require("../src/structural-restore-reconciliation");
 
 let portCounter = 36200;
+
+test("browser-safe restore results exclude Agent credential and replay internals", () => {
+  const safe = browserSafeResult({
+    project_slug: "p", operation_id: "op", plan_id: "plan", source_snapshot_id: "source", rescue_snapshot_id: "rescue", rescue_strategy: "full_required", status: "succeeded", restored_components: [], stages: [], warnings: [],
+    agent: { successful: true, key_id: "secret-key-id", credential: { signing_secret: "secret" } },
+    verification: { successful: true, health: { signed_agent: "ok", request_id: "internal" } }
+  });
+  assert.deepEqual(safe.agent, { repaired: true, health_verified: true });
+  assert.deepEqual(safe.verification, { successful: true });
+  assert.equal(JSON.stringify(safe).includes("secret"), false);
+  assert.equal(JSON.stringify(safe).includes("request_id"), false);
+});
 
 function tempRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "factory-restore-exec-"));
@@ -344,6 +357,111 @@ test("valid fresh ready plan executes one coordinator operation and restores fil
   assert.equal(listManifests({ projectsRoot: fixture.projectsRoot, slug }).some((entry) => entry.snapshot_id === "snapshot-2026-07-16t12-01-00-000z-abcdefabcdef"), true);
 });
 
+test("verify-existing Restore skips Agent repair and executes B, one health, then C", async () => {
+  const slug = "exec-verify-existing";
+  const fixture = await setupReadyRestore(slug);
+  const calls = [];
+  const result = await executeManagedWebsiteRestore(Object.assign({}, executionInjections(fixture.projectsRoot, slug, calls), {
+    projectsRoot: fixture.projectsRoot,
+    projectSlug: slug,
+    planId: fixture.plan.plan.plan_id,
+    exactConfirmation: fixture.plan.plan.confirmation.phrase,
+    idempotencyKey: "restore-exec-key-verify-existing-0001",
+    agentAuthorityMode: "verify_existing",
+    agentRepairer: async () => { throw new Error("verify-existing must not repair Agent authority"); },
+    healthVerifier: async (input) => {
+      calls.push("health");
+      await input.beforeSignedHealthObserver();
+      await input.signedHealthObserver({ method: "GET", route: "/factory/v1/agent/health" });
+      return { wordpress: "ok", wp_json: "ok", mysql: "running", signed_agent: "ok" };
+    },
+    beforeSignedHealthObserver: async () => { calls.push("B"); },
+    signedHealthObserver: async () => { calls.push("C"); }
+  }));
+  assert.equal(result.operation.status, "succeeded");
+  assert.deepEqual(calls.filter((value) => ["B", "health", "C"].includes(value)), ["health", "B", "C"]);
+  assert.equal(calls.includes("agent"), false);
+});
+
+test("custom post-restore verification is inside the coordinator and cannot be replaced by health-only success", async () => {
+  const slug = "exec-custom-verify";
+  const fixture = await setupReadyRestore(slug);
+  let preCalls = 0;
+  let postCalls = 0;
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign({
+      projectsRoot: fixture.projectsRoot,
+      projectSlug: slug,
+      planId: fixture.plan.plan.plan_id,
+      exactConfirmation: fixture.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-custom-verify-0001",
+      operationType: "viewing_date_restore",
+      operationMetadata: { viewing_date_plan_id: "viewing-date-plan-test" },
+      preRestoreVerifier: async ({ restorePlan }) => {
+        preCalls += 1;
+        assert.equal(restorePlan.plan_id, fixture.plan.plan.plan_id);
+      },
+      postRestoreVerifier: async ({ health, wpConfigSha256 }) => {
+        postCalls += 1;
+        assert.equal(health.signed_agent, "ok");
+        assert.match(wpConfigSha256, /^[a-f0-9]{64}$/);
+        throw Object.assign(new Error("semantic verification failed"), { code: "viewing_date_restore_baseline_drift" });
+      }
+    }, executionInjections(fixture.projectsRoot, slug, []))),
+    (error) => error.code === "viewing_date_restore_baseline_drift"
+  );
+  const operation = listOperations({ projectsRoot: fixture.projectsRoot, slug }).find((entry) => entry.operation_type === "viewing_date_restore");
+  assert.equal(preCalls, 1);
+  assert.equal(postCalls, 1);
+  assert.equal(operation.status, "failed");
+});
+
+test("concurrent same-project guarded Restore permits one executor and returns a write-free exact replay", async () => {
+  const slug = "exec-custom-concurrent";
+  const fixture = await setupReadyRestore(slug);
+  let enter;
+  let release;
+  let released = false;
+  let dbWrites = 0;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const barrier = new Promise((resolve) => { release = resolve; });
+  const unblock = () => { if (!released) { released = true; release(); } };
+  const common = Object.assign({
+    projectsRoot: fixture.projectsRoot,
+    projectSlug: slug,
+    planId: fixture.plan.plan.plan_id,
+    exactConfirmation: fixture.plan.plan.confirmation.phrase,
+    operationType: "viewing_date_restore",
+    operationMetadata: { viewing_date_plan_id: "viewing-date-plan-test" },
+    preRestoreVerifier: async () => { enter(); await barrier; },
+    verifyIdempotentReplay: async () => ({ status: "already_restored", mutation_performed: false })
+  }, executionInjections(fixture.projectsRoot, slug, []));
+  const originalImporter = common.dbImporter;
+  common.dbImporter = async (input) => { dbWrites += 1; return originalImporter(input); };
+  let first;
+  try {
+    first = executeManagedWebsiteRestore(Object.assign({}, common, { idempotencyKey: "restore-exec-custom-first-0001" }));
+    await entered;
+    await assert.rejects(
+      () => executeManagedWebsiteRestore(Object.assign({}, common, { idempotencyKey: "restore-exec-custom-second-0002" })),
+      (error) => error.code === "project_operation_in_progress"
+    );
+    assert.equal(dbWrites, 0);
+    unblock();
+    const applied = await first;
+    assert.equal(applied.operation.status, "succeeded");
+    assert.equal(applied.operation.operation_type, "viewing_date_restore");
+    assert.equal(dbWrites, 1);
+    const replay = await executeManagedWebsiteRestore(Object.assign({}, common, { idempotencyKey: "restore-exec-custom-first-0001" }));
+    assert.equal(replay.idempotentReplay, true);
+    assert.deepEqual(replay.result, { status: "already_restored", mutation_performed: false });
+    assert.equal(dbWrites, 1);
+  } finally {
+    unblock();
+    if (first) await first.catch(() => {});
+  }
+});
+
 test("lightweight restore creates no Recovery Point and removes temporary DB rescue on success", async () => {
   const slug = "exec-light-success";
   const fixture = await setupLightweightRestore(slug);
@@ -576,6 +694,70 @@ test("lightweight post-import verification failure restores DB and filesystem au
   assert.equal(fs.existsSync(path.join(fixture.project.root, "wp-content", "uploads", "site-factory-restore-probe-20a5a.txt")), true);
   assert.ok(calls.includes("db-source"));
   assert.ok(calls.includes("db-rollback"));
+  assert.equal(healthCalls, 2);
+  assert.ok(calls.includes("agent"));
+});
+
+test("verify-existing lightweight rollback after B failure skips Agent repair and health", async () => {
+  const slug = "exec-light-verify-existing-b";
+  const fixture = await setupLightweightRestore(slug);
+  const calls = [];
+  let repairCalls = 0;
+  let healthCalls = 0;
+  await assert.rejects(() => executeManagedWebsiteRestore(Object.assign(lightweightInjections(fixture.projectsRoot, slug, calls), {
+    projectsRoot: fixture.projectsRoot, projectSlug: slug, planId: fixture.plan.plan.plan_id, exactConfirmation: fixture.plan.plan.confirmation.phrase, idempotencyKey: "restore-exec-key-light-verify-existing-b",
+    agentAuthorityMode: "verify_existing",
+    agentRepairer: async () => { repairCalls += 1; throw new Error("must not repair"); },
+    dbImporter: async ({ rollback }) => { calls.push(rollback ? "db-rollback" : "db-source"); return { successful: true, streamed: true }; },
+    healthVerifier: async (input) => { await input.beforeSignedHealthObserver(); healthCalls += 1; return { signed_agent: "ok" }; },
+    beforeSignedHealthObserver: async () => { throw Object.assign(new Error("B failed"), { code: "restore_b_failed" }); }
+  })), { code: "restore_b_failed" });
+  const failed = listOperations({ projectsRoot: fixture.projectsRoot, slug })[0];
+  assert.equal(failed.status, "failed");
+  assert.ok(calls.includes("db-rollback"));
+  assert.equal(repairCalls, 0);
+  assert.equal(healthCalls, 0);
+});
+
+test("verify-existing lightweight rollback after C failure adds no second health or Agent repair", async () => {
+  const slug = "exec-light-verify-existing-c";
+  const fixture = await setupLightweightRestore(slug);
+  const calls = [];
+  let repairCalls = 0;
+  let healthCalls = 0;
+  await assert.rejects(() => executeManagedWebsiteRestore(Object.assign(lightweightInjections(fixture.projectsRoot, slug, calls), {
+    projectsRoot: fixture.projectsRoot, projectSlug: slug, planId: fixture.plan.plan.plan_id, exactConfirmation: fixture.plan.plan.confirmation.phrase, idempotencyKey: "restore-exec-key-light-verify-existing-c",
+    agentAuthorityMode: "verify_existing",
+    agentRepairer: async () => { repairCalls += 1; throw new Error("must not repair"); },
+    dbImporter: async ({ rollback }) => { calls.push(rollback ? "db-rollback" : "db-source"); return { successful: true, streamed: true }; },
+    healthVerifier: async (input) => { await input.beforeSignedHealthObserver(); healthCalls += 1; await input.signedHealthObserver({ method: "GET", route: "/factory/v1/agent/health" }); return { signed_agent: "ok" }; },
+    beforeSignedHealthObserver: async () => {},
+    signedHealthObserver: async () => { throw Object.assign(new Error("C failed"), { code: "restore_c_failed" }); }
+  })), { code: "restore_c_failed" });
+  const failed = listOperations({ projectsRoot: fixture.projectsRoot, slug })[0];
+  assert.equal(failed.status, "failed");
+  assert.ok(calls.includes("db-rollback"));
+  assert.equal(repairCalls, 0);
+  assert.equal(healthCalls, 1);
+});
+
+test("verify-existing lightweight rollback failure never falls back to Agent repair", async () => {
+  const slug = "exec-light-verify-existing-rollback-fail";
+  const fixture = await setupLightweightRestore(slug);
+  let repairCalls = 0;
+  let healthCalls = 0;
+  await assert.rejects(() => executeManagedWebsiteRestore(Object.assign(lightweightInjections(fixture.projectsRoot, slug, []), {
+    projectsRoot: fixture.projectsRoot, projectSlug: slug, planId: fixture.plan.plan.plan_id, exactConfirmation: fixture.plan.plan.confirmation.phrase, idempotencyKey: "restore-exec-key-light-verify-existing-rollback-fail",
+    agentAuthorityMode: "verify_existing",
+    agentRepairer: async () => { repairCalls += 1; throw new Error("must not repair"); },
+    dbImporter: async ({ rollback }) => { if (rollback) throw Object.assign(new Error("rollback failed"), { code: "restore_rollback_failed" }); return { successful: true, streamed: true }; },
+    healthVerifier: async () => { healthCalls += 1; throw Object.assign(new Error("verification failed"), { code: "restore_verify_failed" }); }
+  })), { code: "restore_verify_failed" });
+  const failed = listOperations({ projectsRoot: fixture.projectsRoot, slug })[0];
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.result_summary.manual_recovery_required, true);
+  assert.equal(repairCalls, 0);
+  assert.equal(healthCalls, 1);
 });
 
 test("executor loads stored plan by ID and rejects resubmitted plan bodies and unsafe public fields", async () => {

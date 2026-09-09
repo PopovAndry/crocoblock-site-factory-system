@@ -28,6 +28,9 @@ const {
   bootstrapAgentSignedAuth
 } = require("./install-agent");
 const {
+  SIGNED_AUTH_FRESHNESS_SECONDS
+} = require("./agent-signed-auth");
+const {
   executeFullCapture,
   enterMaintenanceMode,
   listTarEntries,
@@ -218,7 +221,8 @@ function preserveWpConfig(options) {
     throw createRestoreExecutionError("restore_wp_config_preserve_failed", "Current wp-config.php preservation failed.", 500);
   }
   return {
-    fingerprint_abbrev: before.slice(0, 12)
+    fingerprint_abbrev: before.slice(0, 12),
+    sha256: before
   };
 }
 
@@ -524,16 +528,11 @@ async function repairAgentBinding(options) {
   const restBase = options.projectState.project.wp_url + "/wp-json/factory/v1";
   const warnings = [];
   const bootstrap = await bootstrapAgentSignedAuth(options.projectState, restBase, credential, options.proofId, warnings);
-  const health = (await fetchJsonWithSignedAuth(restBase + "/agent/health", credential, { timeoutMs: 10000 })).json;
-  if (String(health && health.status || "") !== "ok") {
-    throw createRestoreExecutionError("restore_agent_health_failed", "Signed Agent health check failed.", 502);
-  }
   return {
     successful: true,
     bootstrap_code: bootstrap && bootstrap.code || null,
     key_id: credential.key_id,
     credential: redactAgentSigningCredential(credential),
-    health_status: health.status,
     warnings
   };
 }
@@ -544,9 +543,31 @@ async function verifyHealth(options) {
   await (options.serviceController || defaultServiceController)("mysqlRunning", { runtimePath: options.runtimePath });
   const credential = requireAgentSigningCredential(options.projectState);
   const restBase = options.projectState.project.wp_url + "/wp-json/factory/v1";
-  const health = (await fetchJsonWithSignedAuth(restBase + "/agent/health", credential, { timeoutMs: 10000 })).json;
+  const timestamp = new Date().toISOString();
+  const requestId = crypto.randomUUID();
+  if (typeof options.beforeSignedHealthObserver === "function") {
+    await options.beforeSignedHealthObserver({
+      method: "GET",
+      route: "/factory/v1/agent/health",
+      project_slug: credential.project_slug,
+      key_id: credential.key_id,
+      request_id: requestId
+    });
+  }
+  const response = await fetchJsonWithSignedAuth(restBase + "/agent/health", credential, { timeoutMs: 10000, timestamp, requestId });
+  const health = response.json;
   if (String(health && health.status || "") !== "ok") {
     throw createRestoreExecutionError("restore_agent_health_failed", "Signed Agent health check failed.", 502);
+  }
+  if (typeof options.signedHealthObserver === "function") {
+    await options.signedHealthObserver({
+      method: "GET",
+      route: "/factory/v1/agent/health",
+      project_slug: credential.project_slug,
+      key_id: credential.key_id,
+      request_id: requestId,
+      expires_at: Math.floor(Date.parse(timestamp) / 1000) + SIGNED_AUTH_FRESHNESS_SECONDS
+    });
   }
   return {
     wordpress: "ok",
@@ -621,12 +642,17 @@ function browserSafeResult(result) {
     stages: Array.isArray(result.stages) ? result.stages.slice() : [],
     filesystem: Object.assign({}, result.filesystem || {}),
     database: Object.assign({}, result.database || {}),
-    agent: Object.assign({}, result.agent || {}),
+    agent: {
+      repaired: Boolean(result.agent && result.agent.successful),
+      health_verified: Boolean(result.verification && result.verification.health && result.verification.health.signed_agent === "ok")
+    },
     maintenance: Object.assign({}, result.maintenance || {}),
     service: Object.assign({}, result.service || {}),
     cleanup: Object.assign({}, result.cleanup || {}),
     manual_recovery_required: result.manual_recovery_required === true,
-    verification: result.verification,
+    verification: {
+      successful: Boolean(result.verification && result.verification.successful)
+    },
     duration_ms: result.duration_ms,
     warnings: result.warnings.slice()
   };
@@ -773,7 +799,7 @@ async function executeRestoreInCoordinator(context, options) {
         await serviceController("startWordPress", { runtimePath });
         state.wordpressStopped = false;
       }
-      if (state.rescueStrategy === "lightweight_required" && (state.lightweightDbRollbackCompleted || !state.dbImportBegan)) {
+      if (state.rescueStrategy === "lightweight_required" && options.agentAuthorityMode !== "verify_existing" && (state.lightweightDbRollbackCompleted || !state.dbImportBegan)) {
         const proofId = "restore-agent-rollback-" + timestampCompact(options.clock);
         const repairer = options.rollbackAgentRepairer || options.agentRepairer || repairAgentBinding;
         await repairer({ projectState, runtimePath, proofId, rollback: true });
@@ -825,6 +851,15 @@ async function executeRestoreInCoordinator(context, options) {
     }
     state.rescueStrategy = loaded.plan.rescue_strategy;
     state.emergencyRestore = loaded.plan.rescue_strategy === "none_emergency";
+    if (typeof options.preRestoreVerifier === "function") {
+      await options.preRestoreVerifier({
+        projectState,
+        runtimePath,
+        restorePlan: loaded.plan,
+        source: loaded.source,
+        artifactValidation: loaded.artifactValidation
+      });
+    }
     if (loaded.plan.rescue_strategy !== "full_required" && loaded.plan.rescue_strategy !== "lightweight_required" && loaded.plan.rescue_strategy !== "none_emergency") {
       throw createRestoreExecutionError("restore_rescue_strategy_unsupported", "This restore executor does not support the requested rescue strategy.", 409);
     }
@@ -1031,10 +1066,16 @@ async function executeRestoreInCoordinator(context, options) {
     state.wordpressStopped = false;
 
     await stage("repairing_agent_binding");
+    const verifyExistingAgentAuthority = options.agentAuthorityMode === "verify_existing";
+    if (options.agentAuthorityMode && !verifyExistingAgentAuthority) {
+      throw createRestoreExecutionError("restore_agent_authority_mode_invalid", "Restore Agent authority mode is invalid.", 409);
+    }
     const proofId = "restore-agent-repair-" + timestampCompact(options.clock);
-    const agent = options.agentRepairer
-      ? await options.agentRepairer({ projectState, runtimePath, proofId })
-      : await repairAgentBinding({ projectState, runtimePath, proofId });
+    const agent = verifyExistingAgentAuthority
+      ? { successful: true, mode: "verify_existing" }
+      : (options.agentRepairer
+        ? await options.agentRepairer({ projectState, runtimePath, proofId })
+        : await repairAgentBinding({ projectState, runtimePath, proofId }));
     updateJournal({
       current_stage: "repairing_agent_binding",
       agent_repair_completed: true
@@ -1042,8 +1083,25 @@ async function executeRestoreInCoordinator(context, options) {
 
     await stage("verifying_restore");
     const health = options.healthVerifier
-      ? await options.healthVerifier({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController })
-      : await verifyHealth({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController });
+      ? await options.healthVerifier({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController, beforeSignedHealthObserver: options.beforeSignedHealthObserver, signedHealthObserver: options.signedHealthObserver })
+      : await verifyHealth({ projectState, runtimePath, liveWordPressRoot, serviceController: options.serviceController, beforeSignedHealthObserver: options.beforeSignedHealthObserver, signedHealthObserver: options.signedHealthObserver });
+    let postRestoreResultSummary = null;
+    if (typeof options.postRestoreVerifier === "function") {
+      postRestoreResultSummary = await options.postRestoreVerifier({
+        projectState,
+        runtimePath,
+        liveWordPressRoot,
+        workRoot,
+        restorePlan: loaded.plan,
+        source: loaded.source,
+        health,
+        agent,
+        wpConfigSha256: wpConfig.sha256
+      });
+      if (postRestoreResultSummary !== null && (typeof postRestoreResultSummary !== "object" || Array.isArray(postRestoreResultSummary))) {
+        throw createRestoreExecutionError("restore_post_verifier_result_invalid", "Restore verification returned an invalid result.", 500);
+      }
+    }
     updateJournal({
       current_stage: "verifying_restore",
       verification_completed: true
@@ -1201,7 +1259,7 @@ async function executeRestoreInCoordinator(context, options) {
     return {
       result,
       proofRef: proof.proofRef,
-      resultSummary: browserSafeResult(result)
+      resultSummary: Object.assign({}, browserSafeResult(result), postRestoreResultSummary || {})
     };
   } catch (error) {
     const failure = sanitizeError(error);
@@ -1229,8 +1287,9 @@ async function executeManagedWebsiteRestore(options) {
   const input = validateExecutionInput(options);
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const projectState = readProjectBySlug(input.projectSlug, projectsRoot);
+  const operationType = options.operationType || OPERATION_TYPE;
   const fingerprintInput = {
-    action: "managed_website_restore_execute",
+    action: operationType,
     schema_version: 1,
     project_slug: input.projectSlug,
     plan_id: input.planId,
@@ -1244,14 +1303,14 @@ async function executeManagedWebsiteRestore(options) {
   const operationResult = await runProjectOperation({
     projectsRoot,
     slug: input.projectSlug,
-    operationType: OPERATION_TYPE,
+    operationType,
     idempotencyKey: input.idempotencyKey,
     requestFingerprint,
     fingerprintInput,
-    metadata: {
+    metadata: Object.assign({
       restore_scope: "managed_website_same_project",
       plan_id: input.planId
-    },
+    }, options.operationMetadata || {}),
     safety: {
       live_ai_used: false,
       apply_used: false,
@@ -1260,6 +1319,9 @@ async function executeManagedWebsiteRestore(options) {
       filesystem_restore_used: true,
       restore_used: true
     },
+    verifyIdempotentReplay: options.verifyIdempotentReplay,
+    postLockTerminalResolver: options.postLockTerminalResolver,
+    deferIdempotencyUntilPostLock: options.deferIdempotencyUntilPostLock === true,
     execute: async (context) => executeRestoreInCoordinator(context, Object.assign({}, options || {}, {
       planId: input.planId,
       exactConfirmation: input.exactConfirmation,
