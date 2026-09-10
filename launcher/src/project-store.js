@@ -4,6 +4,15 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { createDockerCompose, createEnvFile } = require("./templates");
+const {
+  RUNTIME_BINDING_FILENAME,
+  createPendingRuntimeBinding,
+  createReadyRuntimeBinding,
+  normalizeRuntimeBindingState,
+  sameRuntimeBindingState,
+  verifyScaffoldRuntimeBinding,
+  writeRuntimeBindingArtifact
+} = require("./runtime-binding");
 
 function getSystemRoot() {
   return path.parse(process.cwd()).root || path.sep;
@@ -462,6 +471,7 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
     db_root_password: randomPassword("root_"),
     admin_user: "factory_admin",
     admin_password: randomPassword("wp_"),
+    runtime_binding: createPendingRuntimeBinding(),
     runtime: {
       status: "not_provisioned",
       provisioned_at: null,
@@ -490,7 +500,7 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
 }
 
 function toStoredProject(project) {
-  return {
+  const stored = {
     project_id: project.project_id,
     site_name: project.site_name,
     slug: project.slug,
@@ -519,6 +529,10 @@ function toStoredProject(project) {
     created_at: project.created_at,
     updated_at: project.updated_at
   };
+  if (Object.prototype.hasOwnProperty.call(project, "runtime_binding")) {
+    stored.runtime_binding = normalizeRuntimeBindingState(project.runtime_binding);
+  }
+  return stored;
 }
 
 function sanitizeProject(project) {
@@ -539,6 +553,9 @@ function sanitizeProject(project) {
     ai: Object.assign(defaultAiMetadata(), stored.ai || {}),
     generation: Object.assign(defaultGenerationMetadata(), stored.generation || {}),
     generated_site: Object.assign(defaultGeneratedSiteMetadata(), stored.generated_site || {}),
+    runtime_binding: Object.prototype.hasOwnProperty.call(stored, "runtime_binding")
+      ? normalizeRuntimeBindingState(stored.runtime_binding)
+      : { status: "unbound_legacy" },
     create_website: stored.create_website && typeof stored.create_website === "object"
       ? {
         status: stored.create_website.status || null,
@@ -589,6 +606,13 @@ function validateStrictProjectRecord(data, runtimePath, projectsRoot) {
     && (typeof data.manifest_path !== "string" || hasParentTraversal(data.manifest_path)
       || !pathsEqual(data.manifest_path, manifestPath))) {
     throw projectStoreInventoryInvalidError();
+  }
+  if (Object.prototype.hasOwnProperty.call(data, "runtime_binding")) {
+    try {
+      normalizeRuntimeBindingState(data.runtime_binding);
+    } catch (error) {
+      throw projectStoreInventoryInvalidError();
+    }
   }
   return {
     project: data,
@@ -717,6 +741,7 @@ function createProjectScaffold(options) {
     const filesWritten = [
       path.join(runtimePath, PROJECT_MANIFEST_FILENAME),
       path.join(runtimePath, ".env"),
+      path.join(runtimePath, RUNTIME_BINDING_FILENAME),
       path.join(runtimePath, "docker-compose.yml")
     ];
     let runtimeCreated = false;
@@ -728,7 +753,11 @@ function createProjectScaffold(options) {
       }
       writeProjectManifestAtomic(filesWritten[0], project);
       writeEnvFile(filesWritten[1], parseEnvContent(createEnvFile(project)));
-      fs.writeFileSync(filesWritten[2], createDockerCompose(project), "utf8");
+      const bindingArtifact = writeRuntimeBindingArtifact(runtimePath, project);
+      fs.writeFileSync(filesWritten[3], createDockerCompose(project), "utf8");
+      verifyScaffoldRuntimeBinding(runtimePath, project, bindingArtifact.sha256);
+      project.runtime_binding = createReadyRuntimeBinding(bindingArtifact.sha256);
+      writeProjectManifestAtomic(filesWritten[0], project);
     } catch (error) {
       if (runtimeCreated) {
         try {
@@ -851,6 +880,9 @@ function saveProjectRecord(projectState, project) {
           || !pathsEqual(project.manifest_path, current.manifestPath))) {
       throw projectIdentityMismatchError();
     }
+    if (!sameRuntimeBindingState(current.project.runtime_binding, project.runtime_binding)) {
+      throw projectIdentityMismatchError();
+    }
     const requestedPort = normalizeCanonicalProjectPort(project && project.wp_port);
     if (typeof project.wp_port !== "number" || requestedPort === null) {
       throw projectStoreInventoryInvalidError();
@@ -901,6 +933,7 @@ module.exports = {
   parseEnvFile,
   writeEnvFile,
   readProjectBySlug,
+  readStrictProjectInventory,
   resolveProjectsRoot,
   saveProjectRecord,
   validateExplicitSlug,

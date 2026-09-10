@@ -8,10 +8,12 @@ const {
   assertSafeRuntimePath,
   ensureDirectory,
   readProjectBySlug,
+  readStrictProjectInventory,
   resolveProjectsRoot,
   saveProjectRecord,
   writeJsonFile
 } = require("./project-store");
+const { assertReadyRuntimeBinding, isRuntimeBindingDeclared } = require("./runtime-binding");
 const { runCommand, tailText } = require("./runtime-tools");
 
 const DOCKER_TIMEOUT_MS = 120000;
@@ -113,16 +115,32 @@ async function ensureDockerAvailable(runtimePath, proofStem) {
   return runCommand("docker", ["compose", "version"], {
     cwd: runtimePath,
     logPath: path.join(runtimePath, "logs", proofStem + "-docker-version.log"),
-    timeoutMs: 30000
+    timeoutMs: 30000,
+    env: dockerComposeEnvironment()
   });
 }
 
+function dockerComposeEnvironment() {
+  const env = Object.assign({}, process.env);
+  delete env.COMPOSE_FILE;
+  return env;
+}
+
+function buildDockerComposeInvocation(runtimePath, args) {
+  return {
+    args: ["compose", "-f", path.join(runtimePath, "docker-compose.yml")].concat(args),
+    env: dockerComposeEnvironment()
+  };
+}
+
 async function runDockerCompose(runtimePath, proofStem, args, options) {
-  return runCommand("docker", ["compose"].concat(args), {
+  const invocation = buildDockerComposeInvocation(runtimePath, args);
+  return runCommand("docker", invocation.args, {
     cwd: runtimePath,
     logPath: path.join(runtimePath, "logs", proofStem + "-" + options.logSuffix + ".log"),
     timeoutMs: options.timeoutMs || DOCKER_TIMEOUT_MS,
-    ignoreExitCode: Boolean(options.ignoreExitCode)
+    ignoreExitCode: Boolean(options.ignoreExitCode),
+    env: invocation.env
   });
 }
 
@@ -133,6 +151,17 @@ async function runDocker(runtimePath, proofStem, args, options) {
     timeoutMs: options.timeoutMs || DOCKER_TIMEOUT_MS,
     ignoreExitCode: Boolean(options.ignoreExitCode)
   });
+}
+
+function assertRuntimeBindingBeforeProvision(projectState, projectsRoot) {
+  if (isRuntimeBindingDeclared(projectState.project)) {
+    return assertReadyRuntimeBinding({
+      projectState,
+      projectsRoot,
+      readStrictProjectInventory
+    });
+  }
+  return null;
 }
 
 async function runWpCli(runtimePath, proofStem, wpArgs, options) {
@@ -314,6 +343,8 @@ async function provisionProject(options) {
     throw new Error(".env must live inside the project runtime path.");
   }
 
+  assertRuntimeBindingBeforeProvision(projectState, projectsRoot);
+
   await ensureDockerAvailable(safeRuntimePath, proofStem);
   await ensureWordPressFiles(projectState, proofStem);
   await runDockerCompose(safeRuntimePath, proofStem, ["up", "-d", "wordpress"], {
@@ -374,5 +405,7 @@ async function provisionProject(options) {
 }
 
 module.exports = {
-  provisionProject
+  provisionProject,
+  assertRuntimeBindingBeforeProvision,
+  buildDockerComposeInvocation
 };

@@ -4,6 +4,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/runtime-binding.php';
 require_once __DIR__ . '/contracts/adapter-interface.php';
 require_once __DIR__ . '/adapters/plugin-adapter.php';
 require_once __DIR__ . '/adapters/wp-core-adapter.php';

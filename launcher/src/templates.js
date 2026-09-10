@@ -44,6 +44,7 @@ function createDockerCompose() {
     "      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}",
     "    volumes:",
     "      - ./wordpress:/var/www/html",
+    "      - ./runtime-binding-v1.json:/run/csf/project-binding.json:ro",
     "  wpcli:",
     "    image: wordpress:cli-php8.2",
     "    depends_on:",
@@ -57,6 +58,7 @@ function createDockerCompose() {
     "      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}",
     "    volumes:",
     "      - ./wordpress:/var/www/html",
+    "      - ./runtime-binding-v1.json:/run/csf/project-binding.json:ro",
     ""
   ].join("\n");
 }

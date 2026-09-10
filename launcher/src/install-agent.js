@@ -7,11 +7,13 @@ const {
   assertSafeRuntimePath,
   ensureDirectory,
   readProjectBySlug,
+  readStrictProjectInventory,
   resolveProjectsRoot,
   saveProjectRecord,
   writeEnvFile,
   writeJsonFile
 } = require("./project-store");
+const { assertReadyRuntimeBinding, isRuntimeBindingDeclared } = require("./runtime-binding");
 const { runCommand } = require("./runtime-tools");
 const {
   fetchJsonWithBasicAuth,
@@ -76,12 +78,34 @@ function copyPluginIntoRuntime(projectState) {
 }
 
 async function runDockerCompose(runtimePath, proofStem, args, options) {
-  return runCommand("docker", ["compose"].concat(args), {
+  const invocation = buildDockerComposeInvocation(runtimePath, args);
+  return runCommand("docker", invocation.args, {
     cwd: runtimePath,
     logPath: path.join(runtimePath, "logs", proofStem + "-" + options.logSuffix + ".log"),
     timeoutMs: options.timeoutMs || DOCKER_TIMEOUT_MS,
-    ignoreExitCode: Boolean(options.ignoreExitCode)
+    ignoreExitCode: Boolean(options.ignoreExitCode),
+    env: invocation.env
   });
+}
+
+function buildDockerComposeInvocation(runtimePath, args) {
+  const env = Object.assign({}, process.env);
+  delete env.COMPOSE_FILE;
+  return {
+    args: ["compose", "-f", path.join(runtimePath, "docker-compose.yml")].concat(args),
+    env
+  };
+}
+
+function assertRuntimeBindingBeforeAgentInstall(projectState, projectsRoot) {
+  if (isRuntimeBindingDeclared(projectState.project)) {
+    return assertReadyRuntimeBinding({
+      projectState,
+      projectsRoot,
+      readStrictProjectInventory
+    });
+  }
+  return null;
 }
 
 async function runWpCli(runtimePath, proofStem, wpArgs, options) {
@@ -234,6 +258,8 @@ async function installAgent(options) {
     throw new Error("Provisioned launcher runtime is missing docker-compose.yml or .env.");
   }
 
+  assertRuntimeBindingBeforeAgentInstall(projectState, projectsRoot);
+
   await waitForUrl(projectState.project.wp_url);
 
   const pluginPaths = copyPluginIntoRuntime(projectState);
@@ -356,6 +382,8 @@ async function installAgent(options) {
 
 module.exports = {
   installAgent,
+  assertRuntimeBindingBeforeAgentInstall,
+  buildDockerComposeInvocation,
   bootstrapAgentSignedAuth,
   createRestNonce,
   ensureAgentApplicationPassword,

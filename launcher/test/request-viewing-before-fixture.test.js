@@ -75,7 +75,8 @@ test("before-state controls are Factory-owned, idempotent, and fail closed on co
   assert.match(bootstrap, /FACTORY_REQUEST_VIEWING_BEFORE_V1_CONTROL_META/);
   assert.match(bootstrap, /function factory_request_viewing_before_v1_control_post/);
   assert.match(bootstrap, /get_post_stati\( \[\], 'names' \)/);
-  assert.match(bootstrap, /in_array\( 'trash', \$all_statuses, true \)/);
+  assert.match(bootstrap, /function factory_request_viewing_before_v1_all_statuses/);
+  assert.match(bootstrap, /in_array\( 'trash', \$statuses, true \)/);
   assert.match(bootstrap, /fixture_control_duplicate/);
   assert.match(bootstrap, /fixture_control_conflict/);
   assert.match(bootstrap, /fixture_control_slug_conflict/);
@@ -85,6 +86,9 @@ test("before-state controls are Factory-owned, idempotent, and fail closed on co
   assert.match(bootstrap, /fixture_entities_invalid/);
   assert.match(bootstrap, /array_merge\( \$entities, \$controls \)/);
   assert.match(bootstrap, /'controls' === \$mode/);
+  assert.match(bootstrap, /factory_runtime_binding_v1_read/);
+  assert.match(bootstrap, /fixture_runtime_identity_injection/);
+  assert.doesNotMatch(bootstrap, /csf-st-viewing-before-v1/);
 });
 
 test("Request Viewing policy executes through real PHP functions and fails closed on invalid bindings", () => {
@@ -119,4 +123,20 @@ test("controls search trash explicitly and block duplicate or ownership conflict
   assert.equal(controls.duplicate_no_mutation, true);
   assert.equal(controls.conflict_error, "fixture_control_conflict");
   assert.equal(controls.conflict_no_mutation, true);
+  assert.equal(controls.malformed_entities_error, "fixture_entities_invalid");
+  assert.equal(controls.malformed_entities_no_mutation, true);
+});
+
+test("fixture baseline and form are runtime-bound, idempotent, and preflight conflicts before writes", () => {
+  const { baseline } = policyBehavior();
+  assert.deepEqual(baseline.base_twice, baseline.base_once);
+  assert.equal(baseline.base_no_repeat_mutation, true);
+  assert.deepEqual(baseline.form_twice, baseline.form_once);
+  assert.equal(baseline.form_no_repeat_mutation, true);
+  assert.equal(baseline.redirected_entities_error, "fixture_entities_invalid");
+  assert.equal(baseline.redirected_entities_no_mutation, true);
+  assert.equal(baseline.entity_conflict_error, "fixture_entity_conflict");
+  assert.equal(baseline.entity_conflict_no_mutation, true);
+  assert.equal(baseline.identity_injection_error, "fixture_runtime_identity_injection");
+  assert.equal(baseline.identity_injection_no_mutation, true);
 });
