@@ -21,7 +21,8 @@ const {
   coverageFingerprint,
   proposedChangeFingerprint,
   streamSha256Artifact,
-  inspectSnapshotSinglePass
+  inspectSnapshotSinglePass,
+  exactPlanAuthority
 } = require("../src/viewing-date-preview");
 const { classifyAddOptionalViewingDateChange } = require("../src/real-estate-contract");
 const { createProjectScaffold, readProjectBySlug } = require("../src/project-store");
@@ -45,6 +46,7 @@ function observation(overrides) {
     ],
     actions: [{ type: "save_record" }],
     binding: { form_id: 13, form_sha256: "a".repeat(64), email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" },
+    records: { count: 0, fingerprint: "b".repeat(64) },
     policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14"
   }, overrides || {});
 }
@@ -253,7 +255,7 @@ function createSinglePassSnapshot(projectsRoot, options) {
   for (const artifact of artifacts) fs.writeFileSync(path.join(context.snapshotDirectory, artifact.relative_filename), [db, tar, metadata][artifacts.indexOf(artifact)]);
   transitionManifestStatus({ projectsRoot, slug, snapshotId, status: "complete" });
   transitionManifestStatus({ projectsRoot, slug, snapshotId, status: "verified", patch: { verification: { status: "passed", successful: true, checks: ["file_exists", "size_positive", "sha256_valid", "sql_create_table_markers", "wordpress_options_table", "wordpress_posts_table", "wordpress_postmeta_table"] }, restore_compatibility: { status: "compatible", blocking: false, blockers: [] } } });
-  return { projectState, context, manifest: created.manifest, plan: { baseline: { project_binding: { fingerprint: binding.fingerprint } } }, artifacts };
+  return { projectState, context, snapshotId, manifest: created.manifest, plan: { baseline: { project_binding: { fingerprint: binding.fingerprint } } }, artifacts };
 }
 
 function countedFileSystem(counts, options) {
@@ -278,6 +280,18 @@ function countedFileSystem(counts, options) {
 async function preview(projectsRoot, observe) {
   return createViewingDatePreview({ projectsRoot, slug: "csf-st-viewing-before-v1", observe });
 }
+
+test("a new server-created project receives a plan bound to its persisted identity", async () => {
+  const projectsRoot = fixtureProject();
+  createProjectScaffold({ name: "Fresh Viewing Authority", slug: "csf-st-viewing-fresh-authority-v1", port: 31003, projectsRoot });
+  const state = readProjectBySlug("csf-st-viewing-fresh-authority-v1", projectsRoot);
+  await assert.rejects(() => createViewingDatePreview({ projectsRoot, slug: state.project.slug, projectId: "caller-injected-project-id", observe: async () => clone(observation()) }), { code: "viewing_date_preview_authority_injected" });
+  await assert.rejects(() => createViewingDatePreview({ projectsRoot, slug: state.project.slug, project_id: "caller-injected-project-id", observe: async () => clone(observation()) }), { code: "viewing_date_preview_authority_injected" });
+  const result = await createViewingDatePreview({ projectsRoot, slug: state.project.slug, observe: async () => clone(observation()) });
+  const plan = JSON.parse(fs.readFileSync(path.join(state.runtimePath, "proofs", "viewing-date-preview-v1", "plans", result.plan_id + ".json"), "utf8"));
+  assert.equal(plan.project_id, state.project.project_id);
+  assert.deepEqual(plan.baseline.project_binding, deriveProjectBinding(state.project));
+});
 
 function resultPath(projectsRoot, planId) {
   return path.join(projectsRoot, "csf-st-viewing-before-v1", "proofs", "viewing-date-preview-v1", "recovery-results", planId + ".json");
@@ -309,10 +323,14 @@ function approvedReattestation(plan, overrides) {
     snapshot_identity: identity,
     coverage: approvedCoverage(),
     inspection: { artifact_verification: "single_pass", manifest_read_count: 1, artifact_stream_count: 3 },
-    snapshot_reused: true,
-    new_snapshot_created: false,
-    capture_not_invoked: true
+    snapshot_reused: false,
+    new_snapshot_created: true,
+    capture_not_invoked: false
   }, overrides || {});
+}
+
+function capturedSnapshot(snapshotId) {
+  return async () => ({ result: { snapshot_id: snapshotId || "snapshot-exact" } });
 }
 
 function approvedArtifactVerification(plan) {
@@ -322,7 +340,7 @@ function approvedArtifactVerification(plan) {
 async function matching(projectsRoot, plan, snapshot) {
   const reattestation = snapshot || approvedReattestation(plan);
   return await matchingPreparedRecovery(
-    { project: { slug: "csf-st-viewing-before-v1" }, runtimePath: path.join(projectsRoot, "csf-st-viewing-before-v1") },
+    readProjectBySlug("csf-st-viewing-before-v1", projectsRoot),
     plan,
     projectsRoot,
     () => reattestation,
@@ -334,11 +352,11 @@ test("capture failure is blocked, sanitized, and never automatically retries", a
   const projectsRoot = fixtureProject();
   const observed = observation();
   const result = await preview(projectsRoot, async () => clone(observed));
-  let reattestations = 0;
-  const options = { projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(observed), reattest: async () => { reattestations += 1; throw Object.assign(new Error("C:\\private\\failure"), { code: "capture_failed" }); } };
+  let captures = 0;
+  const options = { projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(observed), captureSnapshot: async () => { captures += 1; throw Object.assign(new Error("C:\\private\\failure"), { code: "capture_failed" }); } };
   await assert.rejects(() => prepareViewingDateRecovery(options), { code: "capture_failed" });
   await assert.rejects(() => prepareViewingDateRecovery(options), { code: "viewing_date_recovery_already_attempted" });
-  assert.equal(reattestations, 1);
+  assert.equal(captures, 1);
   const persisted = JSON.parse(fs.readFileSync(resultPath(projectsRoot, result.plan_id), "utf8"));
   assert.equal(persisted.status, "blocked");
   const publicSummary = browserSummary({ classification: { classification: "applicable" }, recovery: { status: persisted.status } });
@@ -353,7 +371,7 @@ test("baseline drift after capture blocks association and does not bless the cre
   const result = await preview(projectsRoot, async () => clone(before));
   let reads = 0;
   let reattestations = 0;
-  await assert.rejects(() => prepareViewingDateRecovery({ projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(reads++ === 0 ? before : after), reattest: async ({ plan }) => { reattestations += 1; return approvedReattestation(plan); }, verifyArtifacts: async ({ plan }) => approvedArtifactVerification(plan) }), { code: "viewing_date_baseline_drift" });
+  await assert.rejects(() => prepareViewingDateRecovery({ projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(reads++ === 0 ? before : after), captureSnapshot: capturedSnapshot(), reattest: async ({ plan }) => { reattestations += 1; return approvedReattestation(plan); }, verifyArtifacts: async ({ plan }) => approvedArtifactVerification(plan) }), { code: "viewing_date_baseline_drift" });
   assert.equal(reattestations, 1);
   assert.equal(JSON.parse(fs.readFileSync(resultPath(projectsRoot, result.plan_id), "utf8")).status, "blocked");
 });
@@ -372,7 +390,7 @@ test("missing or optimistic scope assertions block preparation", async () => {
     const result = await preview(projectsRoot, async () => clone(observed));
     const coverage = clone(approvedCoverage());
     mutate(coverage);
-    await assert.rejects(() => prepareViewingDateRecovery({ projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(observed), reattest: async ({ plan }) => approvedReattestation(plan, { coverage }) }), { code: "viewing_date_recovery_coverage_missing" }, label);
+    await assert.rejects(() => prepareViewingDateRecovery({ projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(observed), captureSnapshot: capturedSnapshot(), reattest: async ({ plan }) => approvedReattestation(plan, { coverage }) }), { code: "viewing_date_recovery_coverage_missing" }, label);
     assert.equal(JSON.parse(fs.readFileSync(resultPath(projectsRoot, result.plan_id), "utf8")).status, "blocked", label);
   }
 });
@@ -458,7 +476,7 @@ test("single-pass inspection derives full-database scope without interpreting SQ
   const projectsRoot = fixtureProject();
   const snapshot = createSinglePassSnapshot(projectsRoot, { database: "-- comment mentions Form 13, _jf_actions, and a fake binding\nSELECT 'unrelated SQL content';" });
   const counts = { manifest: 0, "database.sql": 0, "wordpress.tar": 0, "project-metadata.json": 0 };
-  const inspected = await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, fs: countedFileSystem(counts, { streamOptions: { highWaterMark: 7 } }) });
+  const inspected = await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId, fs: countedFileSystem(counts, { streamOptions: { highWaterMark: 7 } }) });
   assert.ok(inspected);
   assert.deepEqual(inspected.coverage, approvedCoverage());
   assert.equal(inspected.inspection.artifact_verification, "single_pass");
@@ -477,7 +495,7 @@ test("full-database capture authority and metadata identity fail closed", async 
     const manifest = JSON.parse(fs.readFileSync(snapshot.context.manifestPath, "utf8"));
     mutate(manifest);
     fs.writeFileSync(snapshot.context.manifestPath, JSON.stringify(manifest));
-    assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan }), null, label);
+    assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId }), null, label);
   }
   for (const [label, metadata] of [
     ["null", "null"], ["scalar", "1"], ["array", "[]"], ["malformed", "{"],
@@ -485,7 +503,7 @@ test("full-database capture authority and metadata identity fail closed", async 
   ]) {
     const projectsRoot = fixtureProject();
     const snapshot = createSinglePassSnapshot(projectsRoot, { metadata });
-    assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan }), null, label);
+    assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId }), null, label);
   }
 });
 
@@ -503,7 +521,7 @@ test("single-pass inspection fails closed before opens for reparse paths and out
     const counts = { manifest: 0, "database.sql": 0, "wordpress.tar": 0, "project-metadata.json": 0 };
     const proxy = countedFileSystem(counts);
     mutate(snapshot, proxy);
-    assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, fs: proxy }), null, label);
+    assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId, fs: proxy }), null, label);
     if (label !== "database artifact") assert.equal(counts.manifest, 0, label + " has no manifest open");
     assert.equal(counts["database.sql"] + counts["wordpress.tar"] + counts["project-metadata.json"], 0, label + " has no artifact opens");
   }
@@ -512,7 +530,7 @@ test("single-pass inspection fails closed before opens for reparse paths and out
   const manifest = JSON.parse(fs.readFileSync(snapshot.context.manifestPath, "utf8"));
   manifest.artifacts.find((artifact) => artifact.type === "database_dump").relative_filename = "../outside.sql";
   fs.writeFileSync(snapshot.context.manifestPath, JSON.stringify(manifest));
-  assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan }), null, "artifact containment");
+  assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId }), null, "artifact containment");
 });
 
 test("single-pass inspection rejects directories, pre-open identity swaps, stream swaps, and hash or coverage failures without retries", async () => {
@@ -526,7 +544,7 @@ test("single-pass inspection rejects directories, pre-open identity swaps, strea
     const snapshot = createSinglePassSnapshot(projectsRoot);
     mutate(snapshot);
     const counts = { manifest: 0, "database.sql": 0, "wordpress.tar": 0, "project-metadata.json": 0 };
-    const inspected = await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, fs: countedFileSystem(counts) });
+    const inspected = await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId, fs: countedFileSystem(counts) });
     if (label.startsWith("unrelated database")) assert.deepEqual(inspected.coverage, approvedCoverage(), label);
     else assert.equal(inspected, null, label);
     assert.ok(counts.manifest <= 1 && counts["database.sql"] <= 1 && counts["wordpress.tar"] <= 1 && counts["project-metadata.json"] <= 1, label + " no retry");
@@ -544,7 +562,7 @@ test("single-pass inspection rejects directories, pre-open identity swaps, strea
     if (fstats === 2) return Object.assign(Object.create(stat), { ino: stat.ino + 1 });
     return stat;
   };
-  assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, fs: proxy }), null, "handle identity differs after open");
+  assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId, fs: proxy }), null, "handle identity differs after open");
   assert.equal(counts["database.sql"], 1, "one stream before fail");
 });
 
@@ -553,21 +571,22 @@ test("prepared matcher waits for the complete single-pass inspection and never r
   const observed = observation();
   const previewResult = await preview(projectsRoot, async () => clone(observed));
   const plan = JSON.parse(fs.readFileSync(path.join(projectsRoot, "csf-st-viewing-before-v1", "proofs", "viewing-date-preview-v1", "plans", previewResult.plan_id + ".json"), "utf8"));
+  assert.equal(exactPlanAuthority(plan, readProjectBySlug("csf-st-viewing-before-v1", projectsRoot), plan.plan_id), true);
   const snapshot = approvedReattestation(plan);
   fs.mkdirSync(path.dirname(resultPath(projectsRoot, plan.plan_id)), { recursive: true });
   fs.writeFileSync(resultPath(projectsRoot, plan.plan_id), JSON.stringify({
-    schema: "csf_viewing_date_recovery_result", version: 3, coverage_schema: "csf_viewing_date_recovery_scope_coverage", coverage_version: 1, plan_id: plan.plan_id, project_slug: plan.project_slug,
+    schema: "csf_viewing_date_recovery_result", version: 3, coverage_schema: "csf_viewing_date_recovery_scope_coverage", coverage_version: 1, plan_id: plan.plan_id, project_slug: plan.project_slug, project_id: plan.project_id,
     project_identity_fingerprint: plan.baseline.project_binding.fingerprint, profile_id: "add_optional_viewing_date", profile_version: 1,
     baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "prepared",
-    snapshot_id: snapshot.snapshot_identity.snapshot_id, snapshot_identity: snapshot.snapshot_identity, snapshot_reused: true,
-    new_snapshot_created: false, capture_not_invoked: true, coverage: snapshot.coverage,
+    snapshot_id: snapshot.snapshot_identity.snapshot_id, snapshot_identity: snapshot.snapshot_identity, snapshot_reused: false,
+    new_snapshot_created: true, capture_not_invoked: false, coverage: snapshot.coverage,
     coverage_sha256: coverageFingerprint(snapshot.coverage)
   }));
   let release;
   const delayed = new Promise((resolve) => { release = resolve; });
   let settled = false;
   const pending = matchingPreparedRecovery(
-    { project: { slug: "csf-st-viewing-before-v1" }, runtimePath: path.join(projectsRoot, "csf-st-viewing-before-v1") },
+    readProjectBySlug("csf-st-viewing-before-v1", projectsRoot),
     plan,
     projectsRoot,
     async () => { await delayed; return approvedReattestation(plan, { snapshot_identity: Object.assign({}, snapshot.snapshot_identity, { artifacts_sha256: "0".repeat(64) }) }); }
@@ -578,14 +597,15 @@ test("prepared matcher waits for the complete single-pass inspection and never r
   assert.equal(await pending, null, "mismatched final single-pass identity cannot prepare");
 });
 
-test("wrong project is rejected before capture and prepared recovery belongs only to its exact immutable plan", async () => {
+test("another server-created project cannot use a plan outside its exact immutable lineage", async () => {
   const projectsRoot = fixtureProject();
   const observed = observation();
   const result = await preview(projectsRoot, async () => clone(observed));
   let reattestations = 0;
-  await assert.rejects(() => prepareViewingDateRecovery({ projectsRoot, slug: "other-project", planId: result.plan_id, reattest: async () => { reattestations += 1; } }), { code: "viewing_date_project_not_allowed" });
+  createProjectScaffold({ name: "Other Project", slug: "other-project", port: 31002, projectsRoot });
+  await assert.rejects(() => prepareViewingDateRecovery({ projectsRoot, slug: "other-project", planId: result.plan_id, reattest: async () => { reattestations += 1; } }), { code: "viewing_date_plan_missing" });
   assert.equal(reattestations, 0);
-  const options = { projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(observed), reattest: async ({ plan }) => { reattestations += 1; return approvedReattestation(plan); }, verifyArtifacts: async ({ plan }) => approvedArtifactVerification(plan), idempotencyKey: "same-key" };
+  const options = { projectsRoot, slug: "csf-st-viewing-before-v1", planId: result.plan_id, observe: async () => clone(observed), captureSnapshot: capturedSnapshot(), reattest: async ({ plan }) => { reattestations += 1; return approvedReattestation(plan); }, verifyArtifacts: async ({ plan }) => approvedArtifactVerification(plan), idempotencyKey: "same-key" };
   await prepareViewingDateRecovery(options);
   await assert.rejects(() => prepareViewingDateRecovery(options), { code: "viewing_date_recovery_already_attempted" });
   assert.equal(reattestations, 1);
@@ -598,7 +618,7 @@ test("prepared recovery requires exact plan baseline, coverage, and snapshot ide
     const projectsRoot = fixtureProject();
     const observed = observation();
     const first = await preview(projectsRoot, async () => clone(observed));
-    await prepareViewingDateRecovery({ projectsRoot, slug: "csf-st-viewing-before-v1", planId: first.plan_id, observe: async () => clone(observed), reattest: async ({ plan }) => approvedReattestation(plan), verifyArtifacts: async ({ plan }) => approvedArtifactVerification(plan) });
+    await prepareViewingDateRecovery({ projectsRoot, slug: "csf-st-viewing-before-v1", planId: first.plan_id, observe: async () => clone(observed), captureSnapshot: capturedSnapshot(), reattest: async ({ plan }) => approvedReattestation(plan), verifyArtifacts: async ({ plan }) => approvedArtifactVerification(plan) });
     const planFile = path.join(projectsRoot, "csf-st-viewing-before-v1", "proofs", "viewing-date-preview-v1", "plans", first.plan_id + ".json");
     const recoveryFile = resultPath(projectsRoot, first.plan_id);
     return {
@@ -670,13 +690,13 @@ test("prepared recovery requires exact plan baseline, coverage, and snapshot ide
   assert.equal(fixture.recovery.coverage_sha256, coverageFingerprint(fixture.recovery.coverage));
   assert.deepEqual(await matching(fixture.projectsRoot, fixture.plan), { status: "prepared", snapshot_id: "snapshot-exact" });
   assert.equal(await matchingPreparedRecovery(
-    { project: { slug: "csf-st-viewing-before-v1" }, runtimePath: path.join(fixture.projectsRoot, "csf-st-viewing-before-v1") },
+    readProjectBySlug("csf-st-viewing-before-v1", fixture.projectsRoot),
     fixture.plan,
     fixture.projectsRoot,
     () => approvedReattestation(fixture.plan, { inspection: null })
   ), null, "structural result without actual artifact verification");
   assert.equal(await matchingPreparedRecovery(
-    { project: { slug: "csf-st-viewing-before-v1" }, runtimePath: path.join(fixture.projectsRoot, "csf-st-viewing-before-v1") },
+    readProjectBySlug("csf-st-viewing-before-v1", fixture.projectsRoot),
     fixture.plan,
     fixture.projectsRoot,
     () => approvedReattestation(fixture.plan, { snapshot_identity: Object.assign({}, approvedArtifactVerification(fixture.plan).snapshot_identity, { artifacts_sha256: "0".repeat(64) }) })

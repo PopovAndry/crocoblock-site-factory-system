@@ -11,7 +11,6 @@ const { buildPatch, matchingPreparedRecovery, nativeFactsFromObservation } = req
 const { classifyAddOptionalViewingDateChange } = require("./real-estate-contract");
 const { deriveProjectBinding } = require("./structural-snapshot-store");
 
-const PROJECT_SLUG = "csf-st-viewing-before-v1";
 const PROFILE = "add_optional_viewing_date@1";
 const PROFILE_ID = "add_optional_viewing_date";
 const FORM_OWNER = "request_viewing_before_v1";
@@ -47,12 +46,14 @@ function planPaths(projectState, planId) {
 
 function assertPlan(plan, projectState, planId) {
   const baseline = plan && plan.baseline;
-  const baselineKeys = ["actions_sha256", "binding_sha256", "facts_sha256", "form_id", "form_sha256", "policy_sha256", "project_binding"];
+  const baselineKeys = ["actions_sha256", "binding_sha256", "facts_sha256", "form_id", "form_sha256", "policy_sha256", "project_binding", "records"];
   if (!plan || typeof plan !== "object" || plan.schema !== "csf_viewing_date_preview" || plan.version !== 1
-    || plan.plan_id !== planId || plan.project_slug !== projectState.project.slug || plan.profile !== PROFILE
+    || plan.plan_id !== planId || plan.project_slug !== projectState.project.slug || plan.project_id !== projectState.project.project_id || plan.profile !== PROFILE
     || plan.profile_id !== PROFILE_ID || plan.profile_version !== 1 || !baseline || typeof baseline !== "object"
     || Object.keys(baseline).sort().join("\n") !== baselineKeys.join("\n") || !Number.isInteger(baseline.form_id) || baseline.form_id <= 0
     || ![baseline.form_sha256, baseline.actions_sha256, baseline.binding_sha256, baseline.policy_sha256, baseline.facts_sha256].every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
+    || !baseline.records || typeof baseline.records !== "object" || Array.isArray(baseline.records) || Object.keys(baseline.records).sort().join(",") !== "count,fingerprint"
+    || !Number.isInteger(baseline.records.count) || baseline.records.count < 0 || typeof baseline.records.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(baseline.records.fingerprint)
     || !plan.expected || typeof plan.expected.form_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(plan.expected.form_sha256)
     || JSON.stringify(baseline.project_binding) !== JSON.stringify(deriveProjectBinding(projectState.project))
     || !plan.proposed_delta || !plan.proposed_delta.add_optional_date_field || typeof plan.proposed_delta.add_optional_date_field.native_block !== "string") {
@@ -62,7 +63,7 @@ function assertPlan(plan, projectState, planId) {
 
 function assertPreparedResult(result, plan) {
   if (!result || typeof result !== "object" || result.schema !== RECOVERY_SCHEMA || result.version !== RECOVERY_VERSION
-    || result.status !== "prepared" || result.plan_id !== plan.plan_id || result.project_slug !== plan.project_slug
+    || result.status !== "prepared" || result.plan_id !== plan.plan_id || result.project_slug !== plan.project_slug || result.project_id !== plan.project_id
     || result.profile_id !== plan.profile_id || result.profile_version !== plan.profile_version
     || typeof result.snapshot_id !== "string" || !result.snapshot_id) {
     throw fail("viewing_date_apply_recovery_missing", "Preferred date Apply requires the verified Recovery Point.");
@@ -99,7 +100,8 @@ function assertBaseline(observation, plan) {
     || hash(observation.actions) !== plan.baseline.actions_sha256
     || hash(observation.binding) !== plan.baseline.binding_sha256
     || observation.policy_sha256 !== plan.baseline.policy_sha256
-    || hash(facts) !== plan.baseline.facts_sha256) {
+    || hash(facts) !== plan.baseline.facts_sha256
+    || observation.records.count !== plan.baseline.records.count || observation.records.fingerprint !== plan.baseline.records.fingerprint) {
     throw fail("viewing_date_apply_baseline_drift", "The Request Viewing form changed after the prepared Preview.");
   }
   const patch = buildPatch(observation.form_content);
@@ -177,7 +179,6 @@ async function nativeWrite(projectState, input) {
 async function prepareViewingDateApply(options) {
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const slug = validateExplicitSlug(options && options.slug);
-  if (slug !== PROJECT_SLUG) throw fail("viewing_date_apply_project_not_allowed", "Preferred date Apply is unavailable for this project.", 404);
   const projectState = readProjectBySlug(slug, projectsRoot);
   const authority = await readAuthority(Object.assign({}, options, { projectsRoot }), projectState);
   const observation = await (options.readNative || nativeRead)(projectState, { mode: "read" });
@@ -188,7 +189,6 @@ async function prepareViewingDateApply(options) {
 async function prepareViewingDateAuthority(options) {
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const slug = validateExplicitSlug(options && options.slug);
-  if (slug !== PROJECT_SLUG) throw fail("viewing_date_apply_project_not_allowed", "Preferred date Apply is unavailable for this project.", 404);
   const projectState = readProjectBySlug(slug, projectsRoot);
   const authority = await readAuthority(Object.assign({}, options, { projectsRoot }), projectState);
   return { projectState, authority };
@@ -208,7 +208,12 @@ async function applyViewingDate(options) {
   }
   const operationResult = await runProjectOperation({
     slug: authority.projectState.project.slug, projectsRoot: options.projectsRoot, operationType: "viewing_date_apply", idempotencyKey: options.idempotencyKey,
-    fingerprintInput, metadata: { plan_id: authority.authority.plan.plan_id, recovery_snapshot_id: authority.authority.recovery.snapshot_id }, safety: { apply_used: true },
+    fingerprintInput, metadata: {
+      plan_id: authority.authority.plan.plan_id,
+      project_id: authority.projectState.project.project_id,
+      project_binding_fingerprint: authority.authority.plan.baseline.project_binding.fingerprint,
+      recovery_snapshot_id: authority.authority.recovery.snapshot_id
+    }, safety: { apply_used: true },
     verifyIdempotentReplay: async ({ operation }) => {
       const current = await (options.readNative || nativeRead)(authority.projectState, { mode: "read" });
       const expectedRecords = operation && operation.result_summary && operation.result_summary.records_before;

@@ -7,7 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { classifyLauncherRoute } = require("../src/http-security");
 const { RESTORE_HANDLE } = require("../src/viewing-date-restore");
-const { createProjectScaffold } = require("../src/project-store");
+const { createProjectScaffold, readProjectBySlug } = require("../src/project-store");
 
 let port = 32200;
 
@@ -78,10 +78,30 @@ test("generic Restore endpoints cannot bypass the same-project guard", async () 
   let genericPlans = 0;
   await withServer({
     createRestorePlan: async () => { genericPlans += 1; throw new Error("generic plan must not run"); }
-  }, async ({ baseUrl }) => {
+  }, async ({ baseUrl, projectsRoot }) => {
+    const project = readProjectBySlug("csf-st-viewing-before-v1", projectsRoot);
+    fs.mkdirSync(path.join(project.runtimePath, "proofs", "viewing-date-preview-v1", "plans"), { recursive: true });
+    fs.writeFileSync(path.join(project.runtimePath, "proofs", "viewing-date-preview-v1", "plans", "viewing-date-plan-persisted.json"), "{}\n", "utf8");
     const result = await requestJson(baseUrl, "/api/projects/csf-st-viewing-before-v1/recovery-points/snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce/restore-plan", { method: "POST", body: JSON.stringify({}) });
     assert.equal(result.response.status, 409);
     assert.equal(result.body.status, "error");
+    createProjectScaffold({ name: "CSF ST Fresh Viewing", slug: "csf-st-fresh-viewing", port: port += 1, projectsRoot });
+    const fresh = readProjectBySlug("csf-st-fresh-viewing", projectsRoot);
+    fs.mkdirSync(path.join(fresh.runtimePath, "proofs", "viewing-date-preview-v1", "plans"), { recursive: true });
+    fs.writeFileSync(path.join(fresh.runtimePath, "proofs", "viewing-date-preview-v1", "plans", "viewing-date-plan-persisted.json"), "{}\n", "utf8");
+    const freshResult = await requestJson(baseUrl, "/api/projects/csf-st-fresh-viewing/recovery-points/snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce/restore-plan", { method: "POST", body: JSON.stringify({}) });
+    assert.equal(freshResult.response.status, 409);
+    assert.equal(freshResult.body.status, "error");
+    createProjectScaffold({ name: "CSF ST Reparse Viewing", slug: "csf-st-reparse-viewing", port: port += 1, projectsRoot });
+    const reparse = readProjectBySlug("csf-st-reparse-viewing", projectsRoot);
+    const reparseProofs = path.join(reparse.runtimePath, "proofs");
+    const externalProofs = path.join(projectsRoot, "external-viewing-proofs");
+    fs.rmSync(reparseProofs, { recursive: true, force: true });
+    fs.mkdirSync(externalProofs, { recursive: true });
+    fs.symlinkSync(externalProofs, reparseProofs, "junction");
+    const reparseResult = await requestJson(baseUrl, "/api/projects/csf-st-reparse-viewing/recovery-points/snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce/restore-plan", { method: "POST", body: JSON.stringify({}) });
+    assert.equal(reparseResult.response.status, 409);
+    assert.equal(reparseResult.body.status, "error");
   });
   assert.equal(genericPlans, 0);
   assert.equal(classifyLauncherRoute("POST", "/api/projects/csf-st-viewing-before-v1/viewing-date/restore").id, "viewing_date_restore");

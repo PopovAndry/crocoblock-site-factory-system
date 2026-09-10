@@ -88,13 +88,13 @@ const {
 } = require("./structural-restore-execution");
 const {
   createViewingDatePreview,
+  hasPersistedViewingDatePlan,
   prepareViewingDateRecovery
 } = require("./viewing-date-preview");
 const {
   applyViewingDate
 } = require("./viewing-date-apply");
 const {
-  PROJECT_SLUG: VIEWING_DATE_RESTORE_PROJECT_SLUG,
   RESTORE_HANDLE: VIEWING_DATE_RESTORE_HANDLE,
   restoreViewingDate
 } = require("./viewing-date-restore");
@@ -549,8 +549,8 @@ function validateViewingDateRestorePayload(payload) {
   }
 }
 
-function assertGenericRestoreAllowed(slug) {
-  if (slug === VIEWING_DATE_RESTORE_PROJECT_SLUG) {
+function assertGenericRestoreAllowed(slug, projectsRoot) {
+  if (hasPersistedViewingDatePlan({ slug, projectsRoot })) {
     throw createStructuredError("This project requires its guarded Restore flow.", "viewing_date_restore_required", 409);
   }
 }
@@ -2044,7 +2044,7 @@ function createLauncherServer(options) {
           const slug = normalizeProjectSlugForRoute(decodeURIComponent(parts[3] || ""));
           const snapshotId = decodeURIComponent(parts[5] || "");
           assertProjectExistsForRoute(slug, projectsRoot);
-          assertGenericRestoreAllowed(slug);
+          assertGenericRestoreAllowed(slug, projectsRoot);
           validateRestorePlanPayload(payload);
           const planResult = await createRestorePlan({
             projectsRoot,

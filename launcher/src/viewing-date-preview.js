@@ -9,15 +9,14 @@ const { runCommand } = require("./runtime-tools");
 const { readProjectBySlug, resolveProjectsRoot, validateExplicitSlug, ensureDirectory } = require("./project-store");
 const { classifyAddOptionalViewingDateChange } = require("./real-estate-contract");
 const { deriveProjectBinding, isRestorable, resolveSnapshotDirectory, validateManifest } = require("./structural-snapshot-store");
+const { createFullStructuralSnapshot } = require("./structural-snapshot-capture");
 
 const PROFILE_ID = "add_optional_viewing_date";
 const PROFILE_VERSION = 1;
-const PROJECT_SLUG = "csf-st-viewing-before-v1";
 const FORM_ID = 13;
 const DATE_BLOCK = '<!-- wp:jet-forms/date-field {"label":"Preferred date","name":"preferred_date","blockID":"factory-request-viewing-preferred-date-v1"} /-->';
 const PLAN_ROOT = "viewing-date-preview-v1";
 const TRUSTED_POLICY_SHA256 = "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14";
-const REATTEST_SNAPSHOT_ID = "snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce";
 const RECOVERY_RESULT_SCHEMA = "csf_viewing_date_recovery_result";
 const RECOVERY_RESULT_VERSION = 3;
 const RECOVERY_COVERAGE_SCHEMA = "csf_viewing_date_recovery_scope_coverage";
@@ -55,6 +54,41 @@ function profileMatches(plan) {
   return plan && plan.profile === "add_optional_viewing_date@1"
     && plan.profile_id === PROFILE_ID
     && plan.profile_version === PROFILE_VERSION;
+}
+
+function exactRecords(records) {
+  return records && typeof records === "object" && !Array.isArray(records)
+    && Object.keys(records).sort().join(",") === "count,fingerprint"
+    && Number.isInteger(records.count) && records.count >= 0
+    && typeof records.fingerprint === "string" && /^[a-f0-9]{64}$/.test(records.fingerprint);
+}
+
+function exactPlanAuthority(plan, projectState, planId) {
+  const project = projectState && projectState.project;
+  const baseline = plan && plan.baseline;
+  const baselineKeys = ["actions_sha256", "binding_sha256", "facts_sha256", "form_id", "form_sha256", "policy_sha256", "project_binding", "records"];
+  if (!project || !plan || typeof plan !== "object" || Array.isArray(plan)
+    || plan.schema !== "csf_viewing_date_preview" || plan.version !== 1
+    || plan.plan_id !== planId || plan.project_slug !== project.slug || plan.project_id !== project.project_id
+    || !profileMatches(plan) || !baseline || typeof baseline !== "object" || Array.isArray(baseline)
+    || Object.keys(baseline).sort().join(",") !== baselineKeys.join(",")
+    || !Number.isInteger(baseline.form_id) || baseline.form_id <= 0
+    || ![baseline.form_sha256, baseline.actions_sha256, baseline.binding_sha256, baseline.policy_sha256, baseline.facts_sha256].every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
+    || !exactRecords(baseline.records)
+    || JSON.stringify(baseline.project_binding) !== JSON.stringify(deriveProjectBinding(project))
+    || !plan.proposed_delta || !plan.proposed_delta.add_optional_date_field || typeof plan.proposed_delta.add_optional_date_field.native_block !== "string"
+    || !plan.expected || typeof plan.expected.form_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(plan.expected.form_sha256)
+    || plan.recovery_result_version !== RECOVERY_RESULT_VERSION || plan.recovery_coverage_schema !== RECOVERY_COVERAGE_SCHEMA
+    || plan.recovery_coverage_version !== RECOVERY_COVERAGE_VERSION) return false;
+  return true;
+}
+
+function rejectCallerSuppliedProjectAuthority(options) {
+  for (const key of ["projectId", "project_id"]) {
+    if (options && Object.hasOwn(options, key)) {
+      throw error("viewing_date_preview_authority_injected", "Viewing-date Preview derives project authority from the server-owned project record only.", 400);
+    }
+  }
 }
 
 function proposedChangeFingerprint(plan) {
@@ -397,7 +431,8 @@ async function inspectSnapshotSinglePass(options) {
   const fileSystem = options && options.fs || fs;
   const projectState = options && options.projectState;
   const plan = options && options.plan;
-  const snapshotId = options && options.snapshotId || REATTEST_SNAPSHOT_ID;
+  const snapshotId = options && options.snapshotId;
+  if (!isSnapshotId(snapshotId)) return null;
   if (!projectState || !plan || !isSnapshotId(snapshotId)) return null;
   let context;
   try { context = resolveSnapshotDirectory({ projectsRoot: options.projectsRoot, slug: projectState.project.slug, snapshotId }); } catch (caught) { return null; }
@@ -479,11 +514,11 @@ async function verifySnapshotArtifacts(manifest, projectState, projectsRoot, opt
 async function matchingPreparedRecovery(projectState, plan, projectsRoot, reattest) {
   const directory = path.join(planDirectory(projectState), "recovery-results");
   const resultPath = path.join(directory, plan.plan_id + ".json");
-  if (!fs.existsSync(resultPath) || !profileMatches(plan)) return null;
+  if (!fs.existsSync(resultPath) || !exactPlanAuthority(plan, projectState, plan.plan_id)) return null;
   const result = safeJson(fs.readFileSync(resultPath, "utf8"));
   const coverage = exactCoverage(result && result.coverage);
   if (!result || result.schema !== RECOVERY_RESULT_SCHEMA || result.version !== RECOVERY_RESULT_VERSION
-    || result.plan_id !== plan.plan_id || result.status !== "prepared" || result.project_slug !== plan.project_slug
+    || result.plan_id !== plan.plan_id || result.status !== "prepared" || result.project_slug !== plan.project_slug || result.project_id !== plan.project_id
     || result.project_identity_fingerprint !== plan.baseline.project_binding.fingerprint
     || result.profile_id !== PROFILE_ID || result.profile_version !== PROFILE_VERSION
     || result.baseline_sha256 !== baselineFingerprint(plan)
@@ -492,10 +527,10 @@ async function matchingPreparedRecovery(projectState, plan, projectsRoot, reatte
     || plan.recovery_coverage_version !== RECOVERY_COVERAGE_VERSION
     || result.coverage_schema !== RECOVERY_COVERAGE_SCHEMA || result.coverage_version !== RECOVERY_COVERAGE_VERSION
     || !isSnapshotId(result.snapshot_id) || !coverage || result.coverage_sha256 !== coverageFingerprint(coverage)
-    || result.snapshot_reused !== true || result.new_snapshot_created !== false || result.capture_not_invoked !== true) return null;
+    || result.snapshot_reused !== false || result.new_snapshot_created !== true || result.capture_not_invoked !== false) return null;
   let verified;
   try {
-    verified = await (reattest ? reattest({ projectsRoot, plan, projectState }) : reattestExistingSnapshot({ projectsRoot, plan, projectState }));
+    verified = await (reattest ? reattest({ projectsRoot, plan, projectState, snapshotId: result.snapshot_id }) : reattestExistingSnapshot({ projectsRoot, plan, projectState, snapshotId: result.snapshot_id }));
   } catch (caught) {
     return null;
   }
@@ -610,8 +645,9 @@ async function observeNativeRuntime(options) {
     "$p=get_post(13);", "if(!$p){echo '{}';return;}",
     "$blocks=parse_blocks($p->post_content); $fields=[]; foreach($blocks as $b){$a=$b['attrs']??[]; if(isset($a['name'])){$fields[]=['name'=>$a['name'],'block'=>$b['blockName'],'type'=>$a['field_type']??($b['blockName']==='jet-forms/textarea-field'?'textarea':'text'),'required'=>($a['required']??false)===true,'label'=>$a['label']??null,'attrs'=>$a];}}",
     "$actions=get_post_meta(13,'_jf_actions',true); if(is_string($actions)){$actions=json_decode($actions,true);} $actions=is_array($actions)?$actions:[]; $out=[]; foreach($actions as $a){$out[]=['type'=>$a['type']??null];}",
+    "global $wpdb;$records=null;$tables=['records'=>$wpdb->prefix.'jet_fb_records','fields'=>$wpdb->prefix.'jet_fb_records_fields'];$available=true;foreach($tables as $table){if($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$table))!==$table){$available=false;break;}}if($available){$r='`'.str_replace('`','',$tables['records']).'`';$f='`'.str_replace('`','',$tables['fields']).'`';$record_rows=$wpdb->get_results($wpdb->prepare('SELECT id,form_id,user_id,from_content_id,from_content_type,status,ip_address,user_agent,referrer,submit_type,is_viewed,created_at,updated_at FROM '.$r.' WHERE form_id=%d ORDER BY id ASC',(int)$p->ID),ARRAY_A);$where=$wpdb->prepare(' WHERE record_id IN (SELECT id FROM '.$r.' WHERE form_id=%d) ORDER BY id ASC',(int)$p->ID);$field_rows=$wpdb->get_results('SELECT id,record_id,field_name,field_value,field_type,field_attrs FROM '.$f.$where,ARRAY_A);$records=['count'=>count($record_rows),'fingerprint'=>hash('sha256',wp_json_encode(['records'=>$record_rows,'fields'=>$field_rows]))];}",
     "$b=get_option('factory_request_viewing_before_v1_binding',[]);",
-    "echo wp_json_encode(['form_id'=>(int)$p->ID,'owner'=>get_post_meta(13,'_factory_request_viewing_before_v1_owner',true),'form_content'=>$p->post_content,'form_sha256'=>hash('sha256',$p->post_content),'fields'=>$fields,'actions'=>$out,'binding'=>$b,'plugin_version'=>defined('JET_FORM_BUILDER_VERSION')?JET_FORM_BUILDER_VERSION:null,'policy_sha256'=>file_exists(WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php')?hash_file('sha256',WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php'):null]);"
+    "echo wp_json_encode(['form_id'=>(int)$p->ID,'owner'=>get_post_meta(13,'_factory_request_viewing_before_v1_owner',true),'form_content'=>$p->post_content,'form_sha256'=>hash('sha256',$p->post_content),'fields'=>$fields,'actions'=>$out,'binding'=>$b,'records'=>$records,'plugin_version'=>defined('JET_FORM_BUILDER_VERSION')?JET_FORM_BUILDER_VERSION:null,'policy_sha256'=>file_exists(WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php')?hash_file('sha256',WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php'):null]);"
   ].join("");
   const result = await runCommand("docker", ["compose", "run", "--rm", "-T", "--entrypoint", "php", "wpcli", "-d", "memory_limit=512M", "/usr/local/bin/wp", "eval", script, "--path=/var/www/html", "--allow-root"], {
     cwd: projectState.runtimePath,
@@ -645,7 +681,7 @@ function browserSummary(result) {
 async function createViewingDatePreview(options) {
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const slug = validateExplicitSlug(options && options.slug);
-  if (slug !== PROJECT_SLUG) throw error("viewing_date_project_not_allowed", "This preview is not available for the selected project.", 404);
+  rejectCallerSuppliedProjectAuthority(options);
   const projectState = readProjectBySlug(slug, projectsRoot);
   const observation = await (options && options.observe ? options.observe({ projectState }) : observeNativeRuntime({ projectState }));
   const facts = nativeFactsFromObservation(observation);
@@ -654,6 +690,7 @@ async function createViewingDatePreview(options) {
   if (classification.classification !== "applicable") return Object.assign({ ok: true }, browserSummary(result));
   const patch = buildPatch(observation.form_content);
   const binding = deriveProjectBinding(projectState.project);
+  if (!exactRecords(observation.records)) throw error("viewing_date_runtime_records_unavailable", "The managed form records could not be read safely.");
   const baseline = {
     project_binding: binding,
     form_id: FORM_ID,
@@ -661,10 +698,11 @@ async function createViewingDatePreview(options) {
     actions_sha256: hash(observation.actions),
     binding_sha256: hash(observation.binding),
     policy_sha256: observation.policy_sha256,
-    facts_sha256: hash(facts)
+    facts_sha256: hash(facts),
+    records: { count: observation.records.count, fingerprint: observation.records.fingerprint }
   };
   const planId = "viewing-date-plan-" + crypto.randomUUID();
-  const plan = { schema: "csf_viewing_date_preview", version: 1, plan_id: planId, project_slug: slug, profile: "add_optional_viewing_date@1", profile_id: PROFILE_ID, profile_version: PROFILE_VERSION, recovery_result_version: RECOVERY_RESULT_VERSION, recovery_coverage_schema: RECOVERY_COVERAGE_SCHEMA, recovery_coverage_version: RECOVERY_COVERAGE_VERSION, baseline, classification, proposed_delta: { add_optional_date_field: { native_block: patch.native_block }, update_binding: ["form_sha256"] }, expected: { form_sha256: patch.expected_form_sha256 }, created_at: new Date().toISOString() };
+  const plan = { schema: "csf_viewing_date_preview", version: 1, plan_id: planId, project_slug: slug, project_id: projectState.project.project_id, profile: "add_optional_viewing_date@1", profile_id: PROFILE_ID, profile_version: PROFILE_VERSION, recovery_result_version: RECOVERY_RESULT_VERSION, recovery_coverage_schema: RECOVERY_COVERAGE_SCHEMA, recovery_coverage_version: RECOVERY_COVERAGE_VERSION, baseline, classification, proposed_delta: { add_optional_date_field: { native_block: patch.native_block }, update_binding: ["form_sha256"] }, expected: { form_sha256: patch.expected_form_sha256 }, created_at: new Date().toISOString() };
   atomicJson(path.join(planDirectory(projectState), "plans", planId + ".json"), plan);
   result.plan = plan;
   result.recovery = await matchingPreparedRecovery(projectState, plan, projectsRoot) || result.recovery;
@@ -678,15 +716,39 @@ function readPlan(projectState, planId) {
   return safeJson(fs.readFileSync(filePath, "utf8"));
 }
 
+function hasPersistedViewingDatePlan(options) {
+  const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
+  const slug = validateExplicitSlug(options && options.slug);
+  const projectState = readProjectBySlug(slug, projectsRoot);
+  const directories = [
+    projectState.runtimePath,
+    path.join(projectState.runtimePath, "proofs"),
+    planDirectory(projectState),
+    path.join(planDirectory(projectState), "plans")
+  ];
+  try {
+    for (let index = 0; index < directories.length; index += 1) {
+      const directory = directories[index];
+      if (!fs.existsSync(directory)) return index === 0;
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return true;
+    }
+    return fs.readdirSync(directories[directories.length - 1], { withFileTypes: true }).length > 0;
+  } catch (caught) {
+    return true;
+  }
+}
+
 async function reattestExistingSnapshot(options) {
+  if (!isSnapshotId(options && options.snapshotId)) throw error("viewing_date_recovery_snapshot_invalid", "Recovery Point preparation could not verify the required coverage.");
   const inspected = await inspectSnapshotSinglePass({
     projectsRoot: options.projectsRoot,
     plan: options.plan,
     projectState: options.projectState,
-    snapshotId: REATTEST_SNAPSHOT_ID,
+    snapshotId: options.snapshotId,
     fs: options && options.fs
   });
-  if (!inspected || inspected.snapshot_identity.snapshot_id !== REATTEST_SNAPSHOT_ID
+  if (!inspected || inspected.snapshot_identity.snapshot_id !== options.snapshotId
     || inspected.snapshot_identity.project_identity_fingerprint !== options.plan.baseline.project_binding.fingerprint) {
     throw error("viewing_date_recovery_coverage_missing", "Recovery Point preparation could not verify the required coverage.");
   }
@@ -725,11 +787,9 @@ function canonicalTarEntryInventory(entries) {
 async function prepareViewingDateRecovery(options) {
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const slug = validateExplicitSlug(options && options.slug);
-  if (slug !== PROJECT_SLUG) throw error("viewing_date_project_not_allowed", "This preview is not available for the selected project.", 404);
   const projectState = readProjectBySlug(slug, projectsRoot);
   const plan = readPlan(projectState, options && options.planId);
-  if (plan.project_slug !== slug || !profileMatches(plan) || plan.recovery_result_version !== RECOVERY_RESULT_VERSION
-    || plan.recovery_coverage_schema !== RECOVERY_COVERAGE_SCHEMA || plan.recovery_coverage_version !== RECOVERY_COVERAGE_VERSION) throw error("viewing_date_plan_project_mismatch", "The prepared preview is unavailable.");
+  if (!exactPlanAuthority(plan, projectState, options && options.planId)) throw error("viewing_date_plan_project_mismatch", "The prepared preview is unavailable.");
   const attemptPath = path.join(planDirectory(projectState), "recovery-attempts", plan.plan_id + ".json");
   if (fs.existsSync(attemptPath)) throw error("viewing_date_recovery_already_attempted", "Recovery Point preparation has already been attempted for this preview.");
   const observation = await (options && options.observe ? options.observe({ projectState }) : observeNativeRuntime({ projectState }));
@@ -737,16 +797,20 @@ async function prepareViewingDateRecovery(options) {
   if (hash(facts) !== plan.baseline.facts_sha256 || observation.form_sha256 !== plan.baseline.form_sha256 || hash(observation.actions) !== plan.baseline.actions_sha256 || hash(observation.binding) !== plan.baseline.binding_sha256 || observation.policy_sha256 !== plan.baseline.policy_sha256) throw error("viewing_date_baseline_drift", "The managed form changed before Recovery Point preparation.");
   atomicJson(attemptPath, { schema: "csf_viewing_date_recovery_attempt", version: 1, plan_id: plan.plan_id, project_slug: slug, started_at: new Date().toISOString() });
   try {
+    const capture = options && options.captureSnapshot || createFullStructuralSnapshot;
+    const captureResult = await capture({ projectsRoot, slug, idempotencyKey: options && options.idempotencyKey });
+    const snapshotId = captureResult && captureResult.result && captureResult.result.snapshot_id;
+    if (!isSnapshotId(snapshotId)) throw error("viewing_date_recovery_capture_invalid", "Recovery Point preparation could not verify the required coverage.");
     const reattestation = options && options.reattest
-      ? await options.reattest({ projectsRoot, slug, plan, projectState })
-      : await reattestExistingSnapshot({ projectsRoot, plan, projectState });
+      ? await options.reattest({ projectsRoot, slug, plan, projectState, snapshotId })
+      : await reattestExistingSnapshot({ projectsRoot, plan, projectState, snapshotId });
     const manifest = reattestation && reattestation.manifest;
     const coverage = exactCoverage(reattestation && reattestation.coverage);
     const identity = reattestation && reattestation.snapshot_identity;
-    if (!manifest || !coverage || !identity || !reattestation.inspection || reattestation.inspection.artifact_verification !== "single_pass") throw error("viewing_date_recovery_coverage_missing", "Recovery Point preparation could not verify the required coverage.");
+    if (!manifest || !coverage || !identity || identity.snapshot_id !== snapshotId || !reattestation.inspection || reattestation.inspection.artifact_verification !== "single_pass") throw error("viewing_date_recovery_coverage_missing", "Recovery Point preparation could not verify the required coverage.");
     const after = await (options && options.observe ? options.observe({ projectState }) : observeNativeRuntime({ projectState }));
     if (after.form_sha256 !== plan.baseline.form_sha256 || hash(after.actions) !== plan.baseline.actions_sha256 || hash(after.binding) !== plan.baseline.binding_sha256 || after.policy_sha256 !== plan.baseline.policy_sha256) throw error("viewing_date_baseline_drift", "The managed form changed during Recovery Point preparation.");
-    atomicJson(path.join(planDirectory(projectState), "recovery-results", plan.plan_id + ".json"), { schema: RECOVERY_RESULT_SCHEMA, version: RECOVERY_RESULT_VERSION, coverage_schema: RECOVERY_COVERAGE_SCHEMA, coverage_version: RECOVERY_COVERAGE_VERSION, plan_id: plan.plan_id, project_slug: slug, project_identity_fingerprint: plan.baseline.project_binding.fingerprint, profile_id: PROFILE_ID, profile_version: PROFILE_VERSION, baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "prepared", snapshot_id: identity.snapshot_id, snapshot_identity: identity, snapshot_reused: reattestation.snapshot_reused === true, new_snapshot_created: false, capture_not_invoked: true, coverage, coverage_sha256: coverageFingerprint(coverage), created_at: new Date().toISOString() });
+    atomicJson(path.join(planDirectory(projectState), "recovery-results", plan.plan_id + ".json"), { schema: RECOVERY_RESULT_SCHEMA, version: RECOVERY_RESULT_VERSION, coverage_schema: RECOVERY_COVERAGE_SCHEMA, coverage_version: RECOVERY_COVERAGE_VERSION, plan_id: plan.plan_id, project_slug: slug, project_id: projectState.project.project_id, project_identity_fingerprint: plan.baseline.project_binding.fingerprint, profile_id: PROFILE_ID, profile_version: PROFILE_VERSION, baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "prepared", snapshot_id: identity.snapshot_id, snapshot_identity: identity, snapshot_reused: false, new_snapshot_created: true, capture_not_invoked: false, coverage, coverage_sha256: coverageFingerprint(coverage), created_at: new Date().toISOString() });
     return { ok: true, status: "prepared", summary: browserSummary({ classification: plan.classification, recovery: { status: "prepared" } }) };
   } catch (caught) {
     atomicJson(path.join(planDirectory(projectState), "recovery-results", plan.plan_id + ".json"), { schema: RECOVERY_RESULT_SCHEMA, version: RECOVERY_RESULT_VERSION, coverage_schema: RECOVERY_COVERAGE_SCHEMA, coverage_version: RECOVERY_COVERAGE_VERSION, plan_id: plan.plan_id, project_slug: slug, project_identity_fingerprint: plan.baseline.project_binding.fingerprint, profile_id: PROFILE_ID, profile_version: PROFILE_VERSION, baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "blocked", code: caught.code || "capture_failed", created_at: new Date().toISOString() });
@@ -754,4 +818,4 @@ async function prepareViewingDateRecovery(options) {
   }
 }
 
-module.exports = { PROFILE_ID, PROFILE_VERSION, DATE_BLOCK, nativeFactsFromObservation, buildPatch, observeNativeRuntime, createViewingDatePreview, prepareViewingDateRecovery, browserSummary, matchingPreparedRecovery, proposedChangeFingerprint, reattestExistingSnapshot, canonicalTarEntryInventory, exactCoverage, exactProjectMetadata, coverageFingerprint, baselineFingerprint, snapshotIdentity, streamSha256Artifact, verifySnapshotArtifacts, inspectSnapshotSinglePass, createTarInventoryParser };
+module.exports = { PROFILE_ID, PROFILE_VERSION, DATE_BLOCK, nativeFactsFromObservation, buildPatch, observeNativeRuntime, createViewingDatePreview, prepareViewingDateRecovery, browserSummary, matchingPreparedRecovery, proposedChangeFingerprint, reattestExistingSnapshot, canonicalTarEntryInventory, exactCoverage, exactProjectMetadata, coverageFingerprint, baselineFingerprint, snapshotIdentity, streamSha256Artifact, verifySnapshotArtifacts, inspectSnapshotSinglePass, createTarInventoryParser, exactPlanAuthority, hasPersistedViewingDatePlan };

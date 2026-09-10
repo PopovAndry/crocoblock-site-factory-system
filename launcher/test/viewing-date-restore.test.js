@@ -8,15 +8,8 @@ const path = require("node:path");
 const test = require("node:test");
 const { createProjectScaffold, readProjectBySlug } = require("../src/project-store");
 const { deriveProjectBinding } = require("../src/structural-snapshot-store");
-const { DATE_BLOCK, nativeFactsFromObservation } = require("../src/viewing-date-preview");
+const { DATE_BLOCK, buildPatch, nativeFactsFromObservation } = require("../src/viewing-date-preview");
 const {
-  PLAN_ID,
-  SNAPSHOT_ID,
-  APPLY_OPERATION_ID,
-  AFTER_FORM_SHA256,
-  BASELINE_FORM_SHA256,
-  AFTER_RECORDS,
-  BASELINE_RECORDS,
   AGENT_CREDENTIAL_FIELDS,
   assertAgentCredentialObservation,
   assertAgentRepairDelta,
@@ -46,7 +39,8 @@ function digest(value) {
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
 function observation(after) {
-  const sha = after ? AFTER_FORM_SHA256 : BASELINE_FORM_SHA256;
+  const content = after ? buildPatch(BASELINE_CONTENT).next_content : BASELINE_CONTENT;
+  const sha = digest(content);
   const fields = [
     ["property_id", "jet-forms/hidden-field", "hidden", true, { field_value: "query_var", query_var_key: "factory_property_id", name: "property_id", required: true }],
     ["name", "jet-forms/text-field", "text", true, { label: "Name", name: "name", required: true }],
@@ -58,10 +52,14 @@ function observation(after) {
   if (after) fields.splice(5, 0, { name: "preferred_date", block: "jet-forms/date-field", type: "date", required: false, label: "Preferred date", attrs: { label: "Preferred date", name: "preferred_date", blockID: "factory-request-viewing-preferred-date-v1" } });
   return {
     candidate_ids: [13], resolved_form_id: 13, form_id: 13, post_type: "jet-form-builder", post_status: "publish", owner: "request_viewing_before_v1",
-    form_content: after ? "after-form" : BASELINE_CONTENT, form_sha256: sha, fields, actions: [{ type: "save_record" }],
+    form_content: content, form_sha256: sha, fields, actions: [{ type: "save_record" }],
     binding: { form_id: 13, form_sha256: sha, email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" },
-    records: clone(after ? AFTER_RECORDS : BASELINE_RECORDS), plugin_version: "3.6.5.1", policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14"
+    records: after ? { count: 97, fingerprint: "3".repeat(64) } : { count: 95, fingerprint: "e".repeat(64) }, plugin_version: "3.6.5.1", policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14"
   };
+}
+
+function afterState(value) {
+  return { form_id: value.form_id, form_sha256: value.form_sha256, actions_sha256: digest(value.actions), binding_sha256: digest(value.binding), policy_sha256: value.policy_sha256, records: clone(value.records) };
 }
 
 function writeOperation(state, operation) {
@@ -70,41 +68,73 @@ function writeOperation(state, operation) {
   fs.writeFileSync(path.join(directory, operation.operation_id + ".json"), JSON.stringify(operation));
 }
 
-function fixture() {
+function fixture(slug) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-viewing-date-restore-"));
-  createProjectScaffold({ name: "CSF ST Viewing Before v1", slug: "csf-st-viewing-before-v1", port: 32100, projectsRoot });
-  const state = readProjectBySlug("csf-st-viewing-before-v1", projectsRoot);
+  const projectSlug = slug || "csf-st-viewing-before-v1";
+  createProjectScaffold({ name: "CSF ST Viewing Before v1", slug: projectSlug, port: 32100, projectsRoot });
+  const state = readProjectBySlug(projectSlug, projectsRoot);
   fs.mkdirSync(path.join(state.runtimePath, "wordpress"), { recursive: true });
   fs.writeFileSync(path.join(state.runtimePath, "wordpress", "wp-config.php"), "fixture-wp-config");
   const before = observation(false);
   const after = observation(true);
+  const planId = "viewing-date-plan-a3b7868a-4c58-4ec1-93ea-28dd8c9003ba";
+  const snapshotId = "snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce";
+  const applyOperationId = "op-2026-09-06T13-49-59-817Z-1a5aa2";
   const plan = {
-    schema: "csf_viewing_date_preview", version: 1, plan_id: PLAN_ID, project_slug: state.project.slug,
+    schema: "csf_viewing_date_preview", version: 1, plan_id: planId, project_slug: state.project.slug, project_id: state.project.project_id,
     profile: "add_optional_viewing_date@1", profile_id: "add_optional_viewing_date", profile_version: 1,
-    baseline: { project_binding: deriveProjectBinding(state.project), form_id: 13, form_sha256: BASELINE_FORM_SHA256, actions_sha256: digest(before.actions), binding_sha256: digest(before.binding), policy_sha256: before.policy_sha256, facts_sha256: digest(nativeFactsFromObservation(before)) },
+    baseline: { project_binding: deriveProjectBinding(state.project), form_id: 13, form_sha256: before.form_sha256, actions_sha256: digest(before.actions), binding_sha256: digest(before.binding), policy_sha256: before.policy_sha256, facts_sha256: digest(nativeFactsFromObservation(before)), records: clone(before.records) },
     proposed_delta: { add_optional_date_field: { native_block: DATE_BLOCK } },
-    expected: { form_sha256: AFTER_FORM_SHA256 }
+    expected: { form_sha256: after.form_sha256 }
   };
   const proofRoot = path.join(state.runtimePath, "proofs", "viewing-date-preview-v1");
   fs.mkdirSync(path.join(proofRoot, "plans"), { recursive: true });
   fs.mkdirSync(path.join(proofRoot, "recovery-results"), { recursive: true });
-  fs.writeFileSync(path.join(proofRoot, "plans", PLAN_ID + ".json"), JSON.stringify(plan));
-  fs.writeFileSync(path.join(proofRoot, "recovery-results", PLAN_ID + ".json"), JSON.stringify({ schema: "csf_viewing_date_recovery_result", version: 3, status: "prepared", plan_id: PLAN_ID, project_slug: state.project.slug, profile_id: "add_optional_viewing_date", profile_version: 1, snapshot_id: SNAPSHOT_ID }));
-  writeOperation(state, { schema: "factory_project_operation", version: 1, operation_id: APPLY_OPERATION_ID, project_slug: state.project.slug, operation_type: "viewing_date_apply", status: "succeeded", metadata: { plan_id: PLAN_ID }, result_summary: { status: "applied", mutation_performed: true } });
-  return { projectsRoot, state, plan, before, after };
+  fs.writeFileSync(path.join(proofRoot, "plans", planId + ".json"), JSON.stringify(plan));
+  fs.writeFileSync(path.join(proofRoot, "recovery-results", planId + ".json"), JSON.stringify({ schema: "csf_viewing_date_recovery_result", version: 3, status: "prepared", plan_id: planId, project_slug: state.project.slug, project_id: state.project.project_id, profile_id: "add_optional_viewing_date", profile_version: 1, snapshot_id: snapshotId }));
+  const recovery = { status: "prepared", snapshot_id: snapshotId };
+  const apply = { schema: "factory_project_operation", version: 1, operation_id: applyOperationId, project_slug: state.project.slug, operation_type: "viewing_date_apply", status: "succeeded", metadata: { plan_id: planId, project_id: state.project.project_id, project_binding_fingerprint: deriveProjectBinding(state.project).fingerprint, recovery_snapshot_id: snapshotId }, result_summary: { status: "applied", mutation_performed: true, plan_id: planId, records_before: clone(before.records), after_state: afterState(after) } };
+  writeOperation(state, apply);
+  const prepared = { projectsRoot, projectState: state, authority: { plan, recovery }, apply: Object.assign({ raw: apply }, apply) };
+  return { projectsRoot, state, plan, before, after, planId, snapshotId, applyOperationId, recovery, apply, prepared };
+}
+
+function restoreMetadata(value) {
+  return {
+    viewing_date_plan_id: value.planId,
+    viewing_date_snapshot_id: value.snapshotId,
+    viewing_date_apply_operation_id: value.applyOperationId,
+    viewing_date_project_id: value.state.project.project_id,
+    viewing_date_project_binding_fingerprint: deriveProjectBinding(value.state.project).fingerprint
+  };
+}
+
+function restoreSource(value) {
+  return { manifest: { snapshot_id: value.snapshotId, project_slug: value.state.project.slug, project_identity_fingerprint: deriveProjectBinding(value.state.project).fingerprint } };
 }
 
 function options(value, current, extra) {
   return Object.assign({
     projectsRoot: value.projectsRoot,
-    slug: "csf-st-viewing-before-v1",
+    slug: value.state.project.slug,
     idempotencyKey: "viewing-date-restore-test-key",
     expectedAgentSecret: "fixture-server-owned-secret",
-    verifyPrepared: async () => ({ status: "prepared", snapshot_id: SNAPSHOT_ID }),
+    verifyPrepared: async () => ({ status: "prepared", snapshot_id: value.snapshotId }),
     readNative: async () => clone(current.value),
-    createRestorePlan: async () => ({ plan: { plan_id: "restore-plan-2026-09-07t12-00-00-000z-abcdef", snapshot_id: SNAPSHOT_ID, confirmation: { phrase: "Restore Website for csf-st-viewing-before-v1" } } })
+    createRestorePlan: async () => ({ plan: { plan_id: "restore-plan-2026-09-07t12-00-00-000z-abcdef", snapshot_id: value.snapshotId, project_slug: value.state.project.slug, project_identity_fingerprint: deriveProjectBinding(value.state.project).fingerprint, confirmation: { phrase: "Restore Website for " + value.state.project.slug } } })
   }, extra || {});
 }
+
+test("a new server-created project reaches Restore only through matching persisted lineage", async () => {
+  const value = fixture("csf-st-viewing-fresh-authority-v1");
+  const current = { value: value.after };
+  let executions = 0;
+  const result = await restoreViewingDate(options(value, current, {
+    executeRestore: async (request) => { executions += 1; assert.deepEqual(await request.postLockTerminalResolver(), { status: "continue" }); return { operation: { status: "succeeded" } }; }
+  }));
+  assert.deepEqual(result, { status: "restored", mutation_performed: true });
+  assert.equal(executions, 1);
+});
 
 test("same-project Restore reaches the executor once only after the exact accepted post-Apply authority", async () => {
   const value = fixture();
@@ -116,7 +146,7 @@ test("same-project Restore reaches the executor once only after the exact accept
   assert.deepEqual(result, { status: "restored", mutation_performed: true });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].operationType, "viewing_date_restore");
-  assert.deepEqual(calls[0].operationMetadata, { viewing_date_plan_id: PLAN_ID, viewing_date_snapshot_id: SNAPSHOT_ID, viewing_date_apply_operation_id: APPLY_OPERATION_ID });
+  assert.deepEqual(calls[0].operationMetadata, restoreMetadata(value));
   assert.equal(typeof calls[0].preRestoreVerifier, "function");
   assert.equal(typeof calls[0].postRestoreVerifier, "function");
   assert.equal(calls[0].deferIdempotencyUntilPostLock, true);
@@ -127,11 +157,10 @@ test("same-project Restore blocks wrong recovery, current drift, missing date, a
   for (const mutate of [
     (input) => { input.recoverySnapshot = "wrong"; },
     (input) => { input.current.value.form_sha256 = "f".repeat(64); input.current.value.binding.form_sha256 = input.current.value.form_sha256; },
-    (input) => { input.current.value.fields = input.current.value.fields.filter((field) => field.name !== "preferred_date"); },
-    (input) => { input.current.value.records = { count: 98, fingerprint: "c".repeat(64) }; }
+    (input) => { input.current.value.fields = input.current.value.fields.filter((field) => field.name !== "preferred_date"); }
   ]) {
     const current = { value: clone(value.after) };
-    const input = { current, recoverySnapshot: SNAPSHOT_ID };
+    const input = { current, recoverySnapshot: value.snapshotId };
     mutate(input);
     let calls = 0;
     await assert.rejects(() => restoreViewingDate(options(value, current, {
@@ -144,19 +173,44 @@ test("same-project Restore blocks wrong recovery, current drift, missing date, a
 
 test("same-project Restore rejects another project, another plan, or a missing accepted Apply operation", async () => {
   const value = fixture();
-  await assert.rejects(() => restoreViewingDate(options(value, { value: value.after }, { slug: "another-project" })), { code: "viewing_date_restore_project_not_allowed" });
-  await assert.rejects(() => restoreViewingDate(options(value, { value: value.after }, { planId: "viewing-date-plan-00000000-0000-4000-8000-000000000000" })), { code: "viewing_date_restore_plan_mismatch" });
-  fs.rmSync(path.join(value.state.runtimePath, "runs", "operations", APPLY_OPERATION_ID + ".json"));
+  await assert.rejects(() => restoreViewingDate(options(value, { value: value.after }, { planId: "viewing-date-plan-00000000-0000-4000-8000-000000000000" })), { code: "viewing_date_restore_authority_injected" });
+  await assert.rejects(() => restoreViewingDate(options(value, { value: value.after }, { snapshotId: "snapshot-other" })), { code: "viewing_date_restore_authority_injected" });
+  fs.rmSync(path.join(value.state.runtimePath, "runs", "operations", value.applyOperationId + ".json"));
   await assert.rejects(() => restoreViewingDate(options(value, { value: value.after })), { code: "viewing_date_restore_apply_missing" });
+});
+
+test("Restore blocks a snapshot from another project and an Apply operation from another plan before native Restore", async () => {
+  for (const mutate of [
+    (value) => {
+      const recoveryPath = path.join(value.state.runtimePath, "proofs", "viewing-date-preview-v1", "recovery-results", value.planId + ".json");
+      const recovery = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
+      recovery.snapshot_id = "snapshot-other-project";
+      fs.writeFileSync(recoveryPath, JSON.stringify(recovery));
+    },
+    (value) => {
+      const applyPath = path.join(value.state.runtimePath, "runs", "operations", value.applyOperationId + ".json");
+      const apply = JSON.parse(fs.readFileSync(applyPath, "utf8"));
+      apply.metadata.plan_id = "viewing-date-plan-00000000-0000-4000-8000-000000000000";
+      fs.writeFileSync(applyPath, JSON.stringify(apply));
+    }
+  ]) {
+    const value = fixture();
+    mutate(value);
+    let nativeRestoreCalls = 0;
+    await assert.rejects(() => restoreViewingDate(options(value, { value: value.after }, {
+      executeRestore: async () => { nativeRestoreCalls += 1; return { operation: { status: "succeeded" } }; }
+    })));
+    assert.equal(nativeRestoreCalls, 0);
+  }
 });
 
 test("same-project Restore rejects failed or incomplete historical success and returns only exact restored history", async () => {
   const value = fixture();
-  writeOperation(value.state, { schema: "factory_project_operation", version: 1, operation_id: "op-failed-restore", project_slug: value.state.project.slug, operation_type: "viewing_date_restore", status: "failed", metadata: { viewing_date_plan_id: PLAN_ID }, result_summary: {} });
+  writeOperation(value.state, { schema: "factory_project_operation", version: 1, operation_id: "op-failed-restore", project_slug: value.state.project.slug, operation_type: "viewing_date_restore", status: "failed", metadata: restoreMetadata(value), result_summary: {} });
   await assert.rejects(() => restoreViewingDate(options(value, { value: value.after })), { code: "viewing_date_restore_prior_attempt_terminal" });
 
   const interrupted = fixture();
-  writeOperation(interrupted.state, { schema: "factory_project_operation", version: 1, operation_id: "op-interrupted-after-health", project_slug: interrupted.state.project.slug, operation_type: "viewing_date_restore", status: "interrupted", metadata: { viewing_date_plan_id: PLAN_ID, verify_existing_phase: "health_recorded" }, result_summary: {} });
+  writeOperation(interrupted.state, { schema: "factory_project_operation", version: 1, operation_id: "op-interrupted-after-health", project_slug: interrupted.state.project.slug, operation_type: "viewing_date_restore", status: "interrupted", metadata: Object.assign(restoreMetadata(interrupted), { verify_existing_phase: "health_recorded" }), result_summary: {} });
   let interruptedNativeRestoreCalls = 0;
   await assert.rejects(() => restoreViewingDate(options(interrupted, { value: interrupted.after }, { executeRestore: async (request) => {
     await request.postLockTerminalResolver();
@@ -166,22 +220,22 @@ test("same-project Restore rejects failed or incomplete historical success and r
   assert.equal(interruptedNativeRestoreCalls, 0);
 
   const replay = fixture();
-  writeOperation(replay.state, { schema: "factory_project_operation", version: 1, operation_id: "op-restored", project_slug: replay.state.project.slug, operation_type: "viewing_date_restore", status: "succeeded", metadata: { viewing_date_plan_id: PLAN_ID }, result_summary: { viewing_date_restore: restoreIdentity(replay.state.project.slug) } });
+  writeOperation(replay.state, { schema: "factory_project_operation", version: 1, operation_id: "op-restored", project_slug: replay.state.project.slug, operation_type: "viewing_date_restore", status: "succeeded", metadata: restoreMetadata(replay), result_summary: { viewing_date_restore: restoreIdentity(replay.prepared) } });
   let writes = 0;
   const result = await restoreViewingDate(options(replay, { value: replay.before }, { executeRestore: async (request) => { const terminal = await request.postLockTerminalResolver(); if (terminal.status === "handled") return { terminalHandled: true, result: terminal.result }; writes += 1; return { operation: { status: "succeeded" } }; } }));
   assert.deepEqual(result, { status: "already_restored", mutation_performed: false });
   assert.equal(writes, 0);
 
   const tampered = fixture();
-  writeOperation(tampered.state, { schema: "factory_project_operation", version: 1, operation_id: "op-legacy-restored", project_slug: tampered.state.project.slug, operation_type: "viewing_date_restore", status: "succeeded", metadata: { viewing_date_plan_id: PLAN_ID }, result_summary: { status: "restored", mutation_performed: true } });
+  writeOperation(tampered.state, { schema: "factory_project_operation", version: 1, operation_id: "op-legacy-restored", project_slug: tampered.state.project.slug, operation_type: "viewing_date_restore", status: "succeeded", metadata: restoreMetadata(tampered), result_summary: { status: "restored", mutation_performed: true } });
   await assert.rejects(() => restoreViewingDate(options(tampered, { value: tampered.before }, {
     executeRestore: async (request) => ({ result: await request.postLockTerminalResolver() })
   })), { code: "viewing_date_restore_prior_attempt_terminal" });
 
   const duplicate = fixture();
-  const identity = restoreIdentity(duplicate.state.project.slug);
+  const identity = restoreIdentity(duplicate.prepared);
   for (const operationId of ["op-restored-one", "op-restored-two"]) {
-    writeOperation(duplicate.state, { schema: "factory_project_operation", version: 1, operation_id: operationId, project_slug: duplicate.state.project.slug, operation_type: "viewing_date_restore", status: "succeeded", metadata: { viewing_date_plan_id: PLAN_ID }, result_summary: { viewing_date_restore: identity } });
+    writeOperation(duplicate.state, { schema: "factory_project_operation", version: 1, operation_id: operationId, project_slug: duplicate.state.project.slug, operation_type: "viewing_date_restore", status: "succeeded", metadata: restoreMetadata(duplicate), result_summary: { viewing_date_restore: identity } });
   }
   await assert.rejects(() => restoreViewingDate(options(duplicate, { value: duplicate.before }, {
     executeRestore: async (request) => ({ result: await request.postLockTerminalResolver() })
@@ -193,7 +247,7 @@ test("the exact failed ST-1 Restore is non-resumable and cannot reach native Res
   writeOperation(value.state, {
     schema: "factory_project_operation", version: 1, operation_id: "op-2026-09-09T16-50-19-581Z-0992bf",
     project_slug: value.state.project.slug, operation_type: "viewing_date_restore", status: "failed",
-    metadata: { viewing_date_plan_id: PLAN_ID, viewing_date_snapshot_id: SNAPSHOT_ID, viewing_date_apply_operation_id: APPLY_OPERATION_ID },
+    metadata: restoreMetadata(value),
     result_summary: { manual_recovery_required: true }, error: { code: "viewing_date_restore_metadata_drift" }
   });
   let nativeRestoreCalls = 0;
@@ -334,13 +388,55 @@ test("same-project Restore invokes the verify-existing reader at B and C around 
       const rawHmac = crypto.createHmac("sha256", "fixture-server-owned-secret").update(readerNonces[0], "utf8").digest("hex");
       assert.equal(JSON.stringify(afterHealthJournal).includes(rawHmac), false);
       assert.equal(JSON.stringify(afterHealthJournal).includes(JSON.stringify(passwords.entries)), false);
-      await request.postRestoreVerifier({ operationId, projectState: value.state, source: {}, liveWordPressRoot: wpRoot, workRoot, wpConfigSha256, agent: { successful: true }, health: { signed_agent: "ok" } });
+      await request.postRestoreVerifier({ operationId, projectState: value.state, source: restoreSource(value), liveWordPressRoot: wpRoot, workRoot, wpConfigSha256, agent: { successful: true }, health: { signed_agent: "ok" } });
       return { operation: { status: "succeeded" } };
     }
   }));
   assert.deepEqual(result, { status: "restored", mutation_performed: true });
   assert.equal(readerNonces.length, 2);
   assert.equal(readerNonces[0], readerNonces[1]);
+});
+
+test("health correlation I/O failure is terminal after one health and cannot create retry authority", async () => {
+  const value = fixture();
+  const current = { value: value.after };
+  const credential = { schema: "factory_agent_signing_credential", version: 1, contract_version: "factory-agent-hmac-v1", key_id: "factory_agent_test", status: "active", created_at: "2026-09-01T00:00:00.000Z", revoked_at: null, capabilities: ["health.read"], project_slug: value.state.project.slug };
+  const beforeSurface = { credential: { option_name: "factory_agent_signed_auth_credentials", credentials: [credential] }, replays: [], rates: [], other_factory_options: [] };
+  const passwords = { user_id: 1, count: 1, entries: [{ uuid: "app-1", app_id: "", name: "Factory Launcher", created: 1, last_used: null, last_ip: null }], structure_hmac: "e".repeat(64) };
+  const workRoot = path.join(value.state.runtimePath, "runs", "restore-work", "op-correlation-write-failure");
+  fs.mkdirSync(workRoot, { recursive: true });
+  let healthCalls = 0;
+  let cCalls = 0;
+  let nativeRestoreCalls = 0;
+  await assert.rejects(() => restoreViewingDate(options(value, current, {
+    expectedAgentSecret: "fixture-server-owned-secret",
+    readVerifyExistingSurface: async (_state, nonce) => ({
+      surface: clone(beforeSurface),
+      credential_hmac: [crypto.createHmac("sha256", "fixture-server-owned-secret").update(nonce.toString("hex"), "utf8").digest("hex")],
+      application_passwords: clone(passwords)
+    }),
+    replaceVerifyExistingJournal: () => { throw Object.assign(new Error("disk full"), { code: "EIO" }); },
+    executeRestore: async (request) => {
+      await request.preRestoreVerifier();
+      current.value = value.before;
+      await request.beforeSignedHealthObserver({ operation_id: "op-correlation-write-failure", work_root: workRoot });
+      const bJournal = fs.readFileSync(path.join(workRoot, "viewing-date-verify-existing.json"), "utf8");
+      assert.match(bJournal, /"phase":"b_recorded"/);
+      assert.doesNotMatch(bJournal, /fixture-server-owned-secret|app-1/i);
+      healthCalls += 1;
+      await request.signedHealthObserver({ method: "GET", route: "/factory/v1/agent/health", project_slug: value.state.project.slug, key_id: credential.key_id, request_id: "health-correlation-write-failure", expires_at: 1780000000, operation_id: "op-correlation-write-failure", work_root: workRoot });
+      cCalls += 1;
+      nativeRestoreCalls += 1;
+      return { operation: { status: "succeeded" } };
+    }
+  })), { code: "viewing_date_restore_verification_journal_write_failed" });
+  assert.equal(healthCalls, 1);
+  assert.equal(cCalls, 0);
+  assert.equal(nativeRestoreCalls, 0);
+  writeOperation(value.state, { schema: "factory_project_operation", version: 1, operation_id: "op-correlation-write-failure", project_slug: value.state.project.slug, operation_type: "viewing_date_restore", status: "failed", metadata: restoreMetadata(value), result_summary: { manual_recovery_required: true } });
+  let retryNativeCalls = 0;
+  await assert.rejects(() => restoreViewingDate(options(value, { value: value.after }, { executeRestore: async (request) => { await request.postLockTerminalResolver(); retryNativeCalls += 1; } })), { code: "viewing_date_restore_prior_attempt_terminal" });
+  assert.equal(retryNativeCalls, 0);
 });
 
 test("checkpoint B failure prevents health and restored success", async () => {
@@ -358,17 +454,17 @@ test("checkpoint B failure prevents health and restored success", async () => {
       healthCalls += 1;
       return { operation: { status: "succeeded" } };
     }
-  })), { code: "viewing_date_apply_baseline_drift" });
+  })), { code: "viewing_date_restore_records_baseline_drift" });
   assert.equal(healthCalls, 0);
 });
 
 test("post-Apply and restored-baseline assertions reject duplicate date fields and unexpected record graphs", () => {
   const value = fixture();
-  assert.equal(assertPostApply(value.after, value.plan).form_sha256, AFTER_FORM_SHA256);
-  assert.equal(assertRestoredBaseline(value.before, value.plan).form_sha256, BASELINE_FORM_SHA256);
+  assert.equal(assertPostApply(value.after, value.prepared).form_sha256, value.after.form_sha256);
+  assert.equal(assertRestoredBaseline(value.before, value.plan).form_sha256, value.before.form_sha256);
   const duplicateDate = clone(value.after);
   duplicateDate.fields.push(clone(duplicateDate.fields.find((field) => field.name === "preferred_date")));
-  assert.throws(() => assertPostApply(duplicateDate, value.plan));
+  assert.throws(() => assertPostApply(duplicateDate, value.prepared));
   const unexpectedBaselineRecord = clone(value.before);
   unexpectedBaselineRecord.records = { count: 96, fingerprint: "d".repeat(64) };
   assert.throws(() => assertRestoredBaseline(unexpectedBaselineRecord, value.plan), { code: "viewing_date_restore_records_baseline_drift" });

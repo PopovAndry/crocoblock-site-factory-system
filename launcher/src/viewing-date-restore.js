@@ -13,15 +13,7 @@ const { exactProjectMetadata } = require("./viewing-date-preview");
 const { runCommand } = require("./runtime-tools");
 const { requireAgentSigningCredential } = require("./agent-credential-store");
 
-const PROJECT_SLUG = "csf-st-viewing-before-v1";
-const PLAN_ID = "viewing-date-plan-a3b7868a-4c58-4ec1-93ea-28dd8c9003ba";
-const SNAPSHOT_ID = "snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce";
-const APPLY_OPERATION_ID = "op-2026-09-06T13-49-59-817Z-1a5aa2";
 const RESTORE_HANDLE = "viewing-date-restore-st1-v1";
-const AFTER_FORM_SHA256 = "34384225dd3c4cdfaa45c8916d4358533d526127c34e64e621512b9cf76dcb78";
-const BASELINE_FORM_SHA256 = "d29de1ec4d8a16db103b005f31e0be293a556c80eed6fb55f1b420cb239527f4";
-const AFTER_RECORDS = Object.freeze({ count: 97, fingerprint: "3b7e29d6538897677b46e9030583a6384167d34e257b5cfc3a8306dc4eae2355" });
-const BASELINE_RECORDS = Object.freeze({ count: 95, fingerprint: "eb693ce888d1147c575314e8102c37348bc8848f7d4103fec29e80b4a50cfb9b" });
 const RESTORE_IDENTITY_SCHEMA = "csf_viewing_date_restore_identity";
 const RESTORE_IDENTITY_VERSION = 1;
 const AGENT_CREDENTIAL_OPTION = "factory_agent_signed_auth_credentials";
@@ -88,9 +80,11 @@ function makeVerifyExistingJournal(context, checkpoint, nonce, preserved) {
     version: VERIFY_EXISTING_JOURNAL_VERSION,
     operation_id: context.operationId,
     project_slug: context.projectSlug,
-    plan_id: PLAN_ID,
-    snapshot_id: SNAPSHOT_ID,
-    apply_operation_id: APPLY_OPERATION_ID,
+    project_id: context.projectId,
+    project_binding_fingerprint: context.projectBindingFingerprint,
+    plan_id: context.planId,
+    snapshot_id: context.snapshotId,
+    apply_operation_id: context.applyOperationId,
     phase: "b_recorded",
     observation_nonce: nonce.toString("hex"),
     b: {
@@ -105,12 +99,13 @@ function makeVerifyExistingJournal(context, checkpoint, nonce, preserved) {
 }
 
 function assertVerifyExistingJournal(value, context, phase) {
-  const expectedKeys = ["apply_operation_id", "b", "health", "observation_nonce", "operation_id", "phase", "plan_id", "project_slug", "schema", "snapshot_id", "version"];
+  const expectedKeys = ["apply_operation_id", "b", "health", "observation_nonce", "operation_id", "phase", "plan_id", "project_binding_fingerprint", "project_id", "project_slug", "schema", "snapshot_id", "version"];
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value).sort().join(",") !== expectedKeys.filter((key) => key === "health" ? phase === "health_recorded" : true).sort().join(",")
     || value.schema !== VERIFY_EXISTING_JOURNAL_SCHEMA || value.version !== VERIFY_EXISTING_JOURNAL_VERSION
-    || value.operation_id !== context.operationId || value.project_slug !== context.projectSlug
-    || value.plan_id !== PLAN_ID || value.snapshot_id !== SNAPSHOT_ID || value.apply_operation_id !== APPLY_OPERATION_ID
+    || value.operation_id !== context.operationId || value.project_slug !== context.projectSlug || value.project_id !== context.projectId
+    || value.project_binding_fingerprint !== context.projectBindingFingerprint
+    || value.plan_id !== context.planId || value.snapshot_id !== context.snapshotId || value.apply_operation_id !== context.applyOperationId
     || value.phase !== phase || !/^[a-f0-9]{64}$/.test(value.observation_nonce || "")
     || !value.b || typeof value.b !== "object" || Array.isArray(value.b)
     || Object.keys(value.b).sort().join(",") !== "application_password_identity_sha256,credential_hmac_sha256,credential_metadata_sha256,env_identity,surface,wp_config_sha256"
@@ -349,42 +344,88 @@ async function readVerifyExistingSurface(projectState, options, nonce) {
   }
 }
 
-function exactRecords(records, expected, code) {
-  if (!records || records.count !== expected.count || records.fingerprint !== expected.fingerprint) {
-    throw fail(code, "Request Viewing records no longer match the accepted state.");
-  }
+function exactRecords(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === "count,fingerprint"
+    && Number.isInteger(value.count) && value.count >= 0
+    && typeof value.fingerprint === "string" && /^[a-f0-9]{64}$/.test(value.fingerprint);
 }
 
-function findExactOperation(projectsRoot, slug, operationId) {
-  return listOperations({ projectsRoot, slug, includeRaw: true })
-    .find((entry) => entry.operation_id === operationId) || null;
+function exactAfterState(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === "actions_sha256,binding_sha256,form_id,form_sha256,policy_sha256,records"
+    && Number.isInteger(value.form_id) && value.form_id > 0
+    && [value.form_sha256, value.actions_sha256, value.binding_sha256, value.policy_sha256].every((entry) => typeof entry === "string" && /^[a-f0-9]{64}$/.test(entry))
+    && exactRecords(value.records);
 }
 
-function assertAcceptedApply(projectsRoot, slug) {
-  const operation = findExactOperation(projectsRoot, slug, APPLY_OPERATION_ID);
+function postApplyStructure(value) {
+  return {
+    form_id: value.form_id,
+    form_sha256: value.form_sha256,
+    actions_sha256: value.actions_sha256,
+    binding_sha256: value.binding_sha256,
+    policy_sha256: value.policy_sha256
+  };
+}
+
+function isAcceptedApply(operation, projectState) {
+  const project = projectState && projectState.project;
   const raw = operation && operation.raw;
-  if (!operation || operation.operation_type !== "viewing_date_apply" || operation.status !== "succeeded"
-    || !raw || !raw.metadata || raw.metadata.plan_id !== PLAN_ID || !raw.result_summary
-    || raw.result_summary.status !== "applied" || raw.result_summary.mutation_performed !== true) {
+  const metadata = raw && raw.metadata;
+  const summary = raw && raw.result_summary;
+  const requiredMetadata = ["plan_id", "project_binding_fingerprint", "project_id", "recovery_snapshot_id"];
+  return Boolean(project && operation && operation.operation_type === "viewing_date_apply" && operation.status === "succeeded"
+    && raw && raw.project_slug === project.slug && metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    && Object.keys(metadata).sort().join(",") === requiredMetadata.join(",")
+    && typeof metadata.plan_id === "string" && /^viewing-date-plan-[0-9a-f-]{36}$/.test(metadata.plan_id)
+    && metadata.project_id === project.project_id && metadata.project_binding_fingerprint === deriveProjectBinding(project).fingerprint
+    && typeof metadata.recovery_snapshot_id === "string" && /^snapshot-[a-z0-9-]+$/.test(metadata.recovery_snapshot_id)
+    && summary && summary.status === "applied" && summary.mutation_performed === true && summary.plan_id === metadata.plan_id
+    && exactAfterState(summary.after_state));
+}
+
+function resolveAcceptedApply(projectsRoot, projectState) {
+  const candidates = listOperations({ projectsRoot, slug: projectState.project.slug, includeRaw: true })
+    .filter((entry) => isAcceptedApply(entry, projectState));
+  if (candidates.length !== 1) throw fail("viewing_date_restore_apply_missing", "Viewing-date Restore requires one accepted Apply operation.");
+  return candidates[0];
+}
+
+function assertAcceptedApply(operation, authority) {
+  const projectState = authority && authority.projectState;
+  const plan = authority && authority.authority && authority.authority.plan;
+  const recovery = authority && authority.authority && authority.authority.recovery;
+  if (!isAcceptedApply(operation, projectState) || !plan || !recovery
+    || operation.raw.metadata.plan_id !== plan.plan_id || operation.raw.metadata.recovery_snapshot_id !== recovery.snapshot_id
+    || operation.raw.metadata.project_id !== plan.project_id
+    || operation.raw.metadata.project_binding_fingerprint !== plan.baseline.project_binding.fingerprint) {
     throw fail("viewing_date_restore_apply_missing", "Viewing-date Restore requires the accepted Apply operation.");
   }
+  return operation;
 }
 
-function restoreIdentity(projectSlug) {
+function restoreIdentity(authority) {
+  const project = authority.projectState.project;
+  const plan = authority.authority.plan;
+  const recovery = authority.authority.recovery;
+  const apply = authority.apply;
   return {
     schema: RESTORE_IDENTITY_SCHEMA,
     version: RESTORE_IDENTITY_VERSION,
-    project_slug: projectSlug,
-    plan_id: PLAN_ID,
+    project_slug: project.slug,
+    project_id: project.project_id,
+    project_binding_fingerprint: plan.baseline.project_binding.fingerprint,
+    plan_id: plan.plan_id,
     profile_id: "add_optional_viewing_date",
     profile_version: 1,
-    apply_operation_id: APPLY_OPERATION_ID,
+    apply_operation_id: apply.operation_id,
     recovery_result_schema: "csf_viewing_date_recovery_result",
     recovery_result_version: 3,
     recovery_status: "prepared",
-    snapshot_id: SNAPSHOT_ID,
-    post_apply: { form_sha256: AFTER_FORM_SHA256, records: AFTER_RECORDS },
-    restored_baseline: { form_sha256: BASELINE_FORM_SHA256, records: BASELINE_RECORDS },
+    snapshot_id: recovery.snapshot_id,
+    post_apply: postApplyStructure(apply.raw.result_summary.after_state),
+    restored_baseline: { form_sha256: plan.baseline.form_sha256, records: plan.baseline.records },
     preservation_mode: "same_project_structural_restore",
     preservation_version: 1,
     runtime_authority_mode: "same_project_runtime_authority_v1",
@@ -395,11 +436,14 @@ function restoreIdentity(projectSlug) {
   };
 }
 
-function isExactRestoreSuccess(entry, slug) {
+function isExactRestoreSuccess(entry, authority) {
   const raw = entry && entry.raw;
   return Boolean(entry && entry.operation_type === "viewing_date_restore" && entry.status === "succeeded"
-    && raw && raw.project_slug === slug && raw.metadata && raw.metadata.viewing_date_plan_id === PLAN_ID
-    && raw.result_summary && equal(raw.result_summary.viewing_date_restore, restoreIdentity(slug)));
+    && raw && raw.project_slug === authority.projectState.project.slug && raw.metadata
+    && raw.metadata.viewing_date_plan_id === authority.authority.plan.plan_id
+    && raw.metadata.viewing_date_snapshot_id === authority.authority.recovery.snapshot_id
+    && raw.metadata.viewing_date_apply_operation_id === authority.apply.operation_id
+    && raw.result_summary && equal(raw.result_summary.viewing_date_restore, restoreIdentity(authority)));
 }
 
 async function resolveRestoreTerminal(options, authority) {
@@ -410,33 +454,39 @@ async function resolveRestoreTerminal(options, authority) {
   }
   const succeeded = operations.filter((entry) => entry.status === "succeeded");
   if (succeeded.length) {
-    if (succeeded.length !== 1 || !isExactRestoreSuccess(succeeded[0], authority.projectState.project.slug)) {
+    if (succeeded.length !== 1 || !isExactRestoreSuccess(succeeded[0], authority)) {
       throw fail("viewing_date_restore_prior_attempt_terminal", "Viewing-date Restore requires independent review after an earlier incomplete attempt.");
     }
     const restored = await (options.readNative || nativeRead)(authority.projectState, { mode: "read" });
-    assertRestoredBaseline(restored, authority.authority.plan);
+    assertRestoredBaseline(restored, authority);
     return { status: "handled", result: { status: "already_restored", mutation_performed: false } };
   }
   const current = await (options.readNative || nativeRead)(authority.projectState, { mode: "read" });
-  assertPostApply(current, authority.authority.plan);
+  assertPostApply(current, authority);
   return { status: "continue" };
 }
 
-function assertPostApply(observation, plan) {
+function assertPostApply(observation, authority) {
+  const plan = authority && authority.authority && authority.authority.plan;
+  const apply = authority && authority.apply;
   const after = assertAfter(observation, plan, null);
-  if (after.form_sha256 !== AFTER_FORM_SHA256) {
+  if (!apply || !apply.raw || !equal(postApplyStructure(after), postApplyStructure(apply.raw.result_summary.after_state))) {
     throw fail("viewing_date_restore_after_state_drift", "The approved Preferred date state no longer matches.");
   }
-  exactRecords(after.records, AFTER_RECORDS, "viewing_date_restore_records_drift");
   return after;
 }
 
-function assertRestoredBaseline(observation, plan) {
-  assertBaseline(observation, plan);
-  if (observation.form_sha256 !== BASELINE_FORM_SHA256) {
-    throw fail("viewing_date_restore_baseline_drift", "The Request Viewing baseline was not restored exactly.");
+function assertRestoredBaseline(observation, authority) {
+  const plan = authority && authority.authority && authority.authority.plan || authority && (authority.plan || authority);
+  try {
+    assertBaseline(observation, plan);
+  } catch (caught) {
+    if (plan && plan.baseline && exactRecords(plan.baseline.records) && observation && observation.records
+      && (observation.records.count !== plan.baseline.records.count || observation.records.fingerprint !== plan.baseline.records.fingerprint)) {
+      throw fail("viewing_date_restore_records_baseline_drift", "Request Viewing records no longer match the accepted baseline.");
+    }
+    throw caught;
   }
-  exactRecords(observation.records, BASELINE_RECORDS, "viewing_date_restore_records_baseline_drift");
   return { form_sha256: observation.form_sha256, records: observation.records };
 }
 
@@ -530,35 +580,66 @@ async function verifyFunctionalSurfaces(projectState, options) {
   }
 }
 
+function rejectCallerSuppliedRestoreAuthority(options) {
+  for (const key of ["planId", "projectId", "snapshotId", "applyOperationId"]) {
+    if (options && Object.hasOwn(options, key)) throw fail("viewing_date_restore_authority_injected", "Viewing-date Restore derives authority from server-owned records only.", 400);
+  }
+}
+
+function restoreJournalContext(input, prepared) {
+  const plan = prepared.authority.plan;
+  return {
+    operationId: input && input.operation_id,
+    workRoot: input && input.work_root,
+    projectSlug: prepared.projectState.project.slug,
+    projectId: prepared.projectState.project.project_id,
+    projectBindingFingerprint: plan.baseline.project_binding.fingerprint,
+    planId: plan.plan_id,
+    snapshotId: prepared.authority.recovery.snapshot_id,
+    applyOperationId: prepared.apply.operation_id
+  };
+}
+
+function assertRestoreSourceLineage(source, prepared) {
+  const manifest = source && source.manifest;
+  const project = prepared.projectState.project;
+  if (!manifest || manifest.snapshot_id !== prepared.authority.recovery.snapshot_id
+    || manifest.project_slug !== project.slug
+    || manifest.project_identity_fingerprint !== prepared.authority.plan.baseline.project_binding.fingerprint) {
+    throw fail("viewing_date_restore_snapshot_mismatch", "Viewing-date Restore requires the verified Recovery Point.");
+  }
+}
+
 async function prepareViewingDateRestore(options) {
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const slug = validateExplicitSlug(options && options.slug);
-  if (slug !== PROJECT_SLUG) throw fail("viewing_date_restore_project_not_allowed", "Viewing-date Restore is unavailable for this project.", 404);
-  if (String(options && options.planId || PLAN_ID) !== PLAN_ID) throw fail("viewing_date_restore_plan_mismatch", "Viewing-date Restore requires the accepted Preview.");
-  const projectState = readProjectBySlug(slug, projectsRoot);
-  const authority = await prepareViewingDateAuthority(Object.assign({}, options, { projectsRoot, slug, planId: PLAN_ID }));
-  if (authority.authority.recovery.snapshot_id !== SNAPSHOT_ID) throw fail("viewing_date_restore_snapshot_mismatch", "Viewing-date Restore requires the verified Recovery Point.");
-  assertAcceptedApply(projectsRoot, slug);
-  const observation = await (options.readNative || nativeRead)(projectState, { mode: "read" });
-  assertPostApply(observation, authority.authority.plan);
-  return { projectsRoot, projectState, authority, observation };
+  rejectCallerSuppliedRestoreAuthority(options);
+  const prepared = await prepareViewingDateRestoreAuthority(Object.assign({}, options, { projectsRoot, slug }));
+  const observation = await (options.readNative || nativeRead)(prepared.projectState, { mode: "read" });
+  assertPostApply(observation, prepared);
+  return Object.assign({ observation }, prepared);
 }
 
 async function prepareViewingDateRestoreAuthority(options) {
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const slug = validateExplicitSlug(options && options.slug);
-  if (slug !== PROJECT_SLUG) throw fail("viewing_date_restore_project_not_allowed", "Viewing-date Restore is unavailable for this project.", 404);
-  if (String(options && options.planId || PLAN_ID) !== PLAN_ID) throw fail("viewing_date_restore_plan_mismatch", "Viewing-date Restore requires the accepted Preview.");
-  const authority = await prepareViewingDateAuthority(Object.assign({}, options, { projectsRoot, slug, planId: PLAN_ID }));
-  if (authority.authority.recovery.snapshot_id !== SNAPSHOT_ID) throw fail("viewing_date_restore_snapshot_mismatch", "Viewing-date Restore requires the verified Recovery Point.");
-  assertAcceptedApply(projectsRoot, slug);
-  return { projectsRoot, projectState: authority.projectState, authority };
+  rejectCallerSuppliedRestoreAuthority(options);
+  const projectState = readProjectBySlug(slug, projectsRoot);
+  const apply = resolveAcceptedApply(projectsRoot, projectState);
+  const authority = await prepareViewingDateAuthority(Object.assign({}, options, {
+    projectsRoot,
+    slug,
+    planId: apply.raw.metadata.plan_id
+  }));
+  const prepared = { projectsRoot, projectState: authority.projectState, authority: authority.authority, apply };
+  assertAcceptedApply(apply, prepared);
+  return prepared;
 }
 
 async function restoreViewingDate(options) {
   const projectsRoot = resolveProjectsRoot(options && options.projectsRoot);
   const slug = validateExplicitSlug(options && options.slug);
-  if (slug !== PROJECT_SLUG) throw fail("viewing_date_restore_project_not_allowed", "Viewing-date Restore is unavailable for this project.", 404);
+  rejectCallerSuppliedRestoreAuthority(options);
   const prepared = await prepareViewingDateRestoreAuthority(options || {});
   const observationNonce = crypto.randomBytes(32);
   const expectedAgentSecret = options.expectedAgentSecret || requireAgentSigningCredential(prepared.projectState).signing_secret;
@@ -566,27 +647,35 @@ async function restoreViewingDate(options) {
   const wpConfigPath = path.join(prepared.projectState.runtimePath, "wordpress", "wp-config.php");
   const wpConfigBeforeRestore = digestFile(wpConfigPath);
   const planner = options.createRestorePlan || createRestorePlan;
-  const planned = await planner({ projectsRoot: prepared.projectsRoot, slug: PROJECT_SLUG, snapshotId: SNAPSHOT_ID, idempotencyKey: options.idempotencyKey });
-  if (!planned || !planned.plan || planned.plan.snapshot_id !== SNAPSHOT_ID) throw fail("viewing_date_restore_snapshot_mismatch", "Viewing-date Restore requires the verified Recovery Point.");
+  const planned = await planner({ projectsRoot: prepared.projectsRoot, slug: prepared.projectState.project.slug, snapshotId: prepared.authority.recovery.snapshot_id, idempotencyKey: options.idempotencyKey });
+  if (!planned || !planned.plan || planned.plan.snapshot_id !== prepared.authority.recovery.snapshot_id
+    || planned.plan.project_slug !== prepared.projectState.project.slug
+    || planned.plan.project_identity_fingerprint !== prepared.authority.plan.baseline.project_binding.fingerprint) throw fail("viewing_date_restore_snapshot_mismatch", "Viewing-date Restore requires the verified Recovery Point.");
   const executor = options.executeRestore || executeManagedWebsiteRestore;
   const execution = await executor({
     projectsRoot: prepared.projectsRoot,
-    projectSlug: PROJECT_SLUG,
+    projectSlug: prepared.projectState.project.slug,
     planId: planned.plan.plan_id,
     exactConfirmation: planned.plan.confirmation && planned.plan.confirmation.phrase,
     idempotencyKey: options.idempotencyKey,
     operationType: "viewing_date_restore",
     agentAuthorityMode: "verify_existing",
-    operationMetadata: { viewing_date_plan_id: PLAN_ID, viewing_date_snapshot_id: SNAPSHOT_ID, viewing_date_apply_operation_id: APPLY_OPERATION_ID },
+    operationMetadata: {
+      viewing_date_plan_id: prepared.authority.plan.plan_id,
+      viewing_date_snapshot_id: prepared.authority.recovery.snapshot_id,
+      viewing_date_apply_operation_id: prepared.apply.operation_id,
+      viewing_date_project_id: prepared.projectState.project.project_id,
+      viewing_date_project_binding_fingerprint: prepared.authority.plan.baseline.project_binding.fingerprint
+    },
     deferIdempotencyUntilPostLock: true,
-    postLockTerminalResolver: async () => resolveRestoreTerminal(Object.assign({}, options, { projectsRoot: prepared.projectsRoot }), prepared.authority),
+    postLockTerminalResolver: async () => resolveRestoreTerminal(Object.assign({}, options, { projectsRoot: prepared.projectsRoot }), prepared),
     preRestoreVerifier: async () => {
       await prepareViewingDateRestore(options || {});
     },
     beforeSignedHealthObserver: async (healthContext) => {
-      const journalContext = { operationId: healthContext && healthContext.operation_id, workRoot: healthContext && healthContext.work_root, projectSlug: prepared.projectState.project.slug };
+      const journalContext = restoreJournalContext(healthContext, prepared);
       const restored = await (options.readNative || nativeRead)(prepared.projectState, { mode: "read" });
-      assertRestoredBaseline(restored, prepared.authority.authority.plan);
+      assertRestoredBaseline(restored, prepared);
       assertStableEnv(envBeforeRestore, fileIdentity(prepared.projectState.envPath));
       if (digestFile(wpConfigPath) !== wpConfigBeforeRestore) throw fail("viewing_date_restore_wp_config_changed", "Current wp-config.php was not preserved.");
       const checkpoint = await readVerifyExistingSurface(prepared.projectState, options, observationNonce);
@@ -597,21 +686,29 @@ async function restoreViewingDate(options) {
       writeVerifyExistingJournal(journalContext, makeVerifyExistingJournal(journalContext, checkpoint, observationNonce, { envIdentity: envBeforeRestore, wpConfigSha256: wpConfigBeforeRestore }));
     },
     signedHealthObserver: async (observation) => {
-      const journalContext = { operationId: observation && observation.operation_id, workRoot: observation && observation.work_root, projectSlug: prepared.projectState.project.slug };
+      const journalContext = restoreJournalContext(observation, prepared);
       const journal = assertVerifyExistingJournal(readVerifyExistingJournal(journalContext), journalContext, "b_recorded");
       journal.phase = "health_recorded";
       journal.health = { method: observation.method, route: observation.route, project_slug: observation.project_slug, key_id: observation.key_id, request_id: observation.request_id, expires_at: observation.expires_at };
       assertVerifyExistingJournal(journal, journalContext, "health_recorded");
-      replaceVerifyExistingJournal(journalContext, journal);
+      try {
+        const persist = options.replaceVerifyExistingJournal || replaceVerifyExistingJournal;
+        persist(journalContext, journal);
+      } catch (_) {
+        const failure = fail("viewing_date_restore_verification_journal_write_failed", "Restore verification evidence could not be stored safely.");
+        failure.manualRecoveryRequired = true;
+        throw failure;
+      }
     },
     postRestoreVerifier: async (context) => {
       const restored = await (options.readNative || nativeRead)(context.projectState, { mode: "read" });
-      assertRestoredBaseline(restored, prepared.authority.authority.plan);
-      const journalContext = { operationId: context.operationId, workRoot: context.workRoot, projectSlug: context.projectState.project.slug };
+      assertRestoredBaseline(restored, prepared);
+      const journalContext = restoreJournalContext({ operation_id: context.operationId, work_root: context.workRoot }, prepared);
       const journal = assertVerifyExistingJournal(readVerifyExistingJournal(journalContext), journalContext, "health_recorded");
       assertStableEnv(journal.b.env_identity, fileIdentity(context.projectState.envPath));
       const wpConfigAfterRestore = digestFile(path.join(context.liveWordPressRoot, "wp-config.php"));
       if (context.wpConfigSha256 !== journal.b.wp_config_sha256 || wpConfigAfterRestore !== journal.b.wp_config_sha256) throw fail("viewing_date_restore_wp_config_changed", "Current wp-config.php was not preserved.");
+      assertRestoreSourceLineage(context.source, prepared);
       await (options.verifySnapshotMetadata || assertSnapshotMetadata)(context.source, context.projectState);
       await (options.verifyRestoredFilesystem || verifyRestoredFilesystem)(context);
       if (!context.agent || context.agent.successful !== true || !context.health || context.health.signed_agent !== "ok") throw fail("viewing_date_restore_agent_binding_invalid", "Factory Agent binding could not be verified.");
@@ -622,11 +719,11 @@ async function restoreViewingDate(options) {
       verifyCredentialChallenge(expectedAgentSecret, Buffer.from(journal.observation_nonce, "hex"), checkpoint.credential_hmac[0]);
       const authorityPreservation = assertAgentRepairDelta(Object.assign({ credential: checkpoint.surface.credential }, journal.b.surface), checkpoint.surface, journal.health, context.projectState.project.slug);
       await (options.verifySurfaces || verifyFunctionalSurfaces)(context.projectState);
-      return { viewing_date_restore: Object.assign(restoreIdentity(context.projectState.project.slug), authorityPreservation) };
+      return { viewing_date_restore: Object.assign(restoreIdentity(prepared), authorityPreservation) };
     },
     verifyIdempotentReplay: async () => {
       const restored = await (options.readNative || nativeRead)(prepared.projectState, { mode: "read" });
-      assertRestoredBaseline(restored, prepared.authority.authority.plan);
+      assertRestoredBaseline(restored, prepared);
       return { status: "already_restored", mutation_performed: false };
     }
   });
@@ -635,4 +732,4 @@ async function restoreViewingDate(options) {
   return { status: "restored", mutation_performed: true };
 }
 
-module.exports = { PROJECT_SLUG, PLAN_ID, SNAPSHOT_ID, APPLY_OPERATION_ID, RESTORE_HANDLE, AFTER_FORM_SHA256, BASELINE_FORM_SHA256, AFTER_RECORDS, BASELINE_RECORDS, RESTORE_IDENTITY_SCHEMA, RESTORE_IDENTITY_VERSION, AGENT_CREDENTIAL_OPTION, AGENT_CREDENTIAL_FIELDS, AGENT_REPLAY_PREFIX, assertAgentCredentialObservation, assertAgentRepairDelta, assertAgentRepairSurface, assertApplicationPasswordIdentity, assertPostApply, assertRestoredBaseline, assertSnapshotMetadata, assertStableEnv, assertUnchangedApplicationPasswordIdentity, assertVerifyExistingObservation, fileIdentity, isExactRestoreSuccess, parseCanonicalRateCounter, prepareViewingDateRestore, readAgentRepairSurface, readVerifyExistingSurface, replayOptionName, restoreViewingDate, restoreIdentity, resolveRestoreTerminal, verifyCredentialChallenge, verifyFunctionalSurfaces, verifyRestoredFilesystem };
+module.exports = { RESTORE_HANDLE, RESTORE_IDENTITY_SCHEMA, RESTORE_IDENTITY_VERSION, AGENT_CREDENTIAL_OPTION, AGENT_CREDENTIAL_FIELDS, AGENT_REPLAY_PREFIX, assertAgentCredentialObservation, assertAgentRepairDelta, assertAgentRepairSurface, assertApplicationPasswordIdentity, assertPostApply, assertRestoredBaseline, assertSnapshotMetadata, assertStableEnv, assertUnchangedApplicationPasswordIdentity, assertVerifyExistingObservation, fileIdentity, isAcceptedApply, isExactRestoreSuccess, parseCanonicalRateCounter, prepareViewingDateRestore, prepareViewingDateRestoreAuthority, readAgentRepairSurface, readVerifyExistingSurface, replayOptionName, restoreViewingDate, restoreIdentity, resolveRestoreTerminal, verifyCredentialChallenge, verifyFunctionalSurfaces, verifyRestoredFilesystem };

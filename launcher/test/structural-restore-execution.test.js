@@ -732,13 +732,14 @@ test("verify-existing lightweight rollback after C failure adds no second health
     dbImporter: async ({ rollback }) => { calls.push(rollback ? "db-rollback" : "db-source"); return { successful: true, streamed: true }; },
     healthVerifier: async (input) => { await input.beforeSignedHealthObserver(); healthCalls += 1; await input.signedHealthObserver({ method: "GET", route: "/factory/v1/agent/health" }); return { signed_agent: "ok" }; },
     beforeSignedHealthObserver: async () => {},
-    signedHealthObserver: async () => { throw Object.assign(new Error("C failed"), { code: "restore_c_failed" }); }
-  })), { code: "restore_c_failed" });
+    signedHealthObserver: async () => { throw Object.assign(new Error("C failed"), { code: "viewing_date_restore_verification_journal_write_failed", manualRecoveryRequired: true }); }
+  })), { code: "viewing_date_restore_verification_journal_write_failed" });
   const failed = listOperations({ projectsRoot: fixture.projectsRoot, slug })[0];
   assert.equal(failed.status, "failed");
   assert.ok(calls.includes("db-rollback"));
   assert.equal(repairCalls, 0);
   assert.equal(healthCalls, 1);
+  assert.equal(failed.result_summary.manual_recovery_required, true);
 });
 
 test("verify-existing lightweight rollback failure never falls back to Agent repair", async () => {
