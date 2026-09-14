@@ -354,7 +354,7 @@ function exactRecords(value) {
 function exactAfterState(value) {
   return value && typeof value === "object" && !Array.isArray(value)
     && Object.keys(value).sort().join(",") === "actions_sha256,binding_sha256,form_id,form_sha256,policy_sha256,records"
-    && Number.isInteger(value.form_id) && value.form_id > 0
+    && Number.isSafeInteger(value.form_id) && value.form_id > 0
     && [value.form_sha256, value.actions_sha256, value.binding_sha256, value.policy_sha256].every((entry) => typeof entry === "string" && /^[a-f0-9]{64}$/.test(entry))
     && exactRecords(value.records);
 }
@@ -399,7 +399,8 @@ function assertAcceptedApply(operation, authority) {
   if (!isAcceptedApply(operation, projectState) || !plan || !recovery
     || operation.raw.metadata.plan_id !== plan.plan_id || operation.raw.metadata.recovery_snapshot_id !== recovery.snapshot_id
     || operation.raw.metadata.project_id !== plan.project_id
-    || operation.raw.metadata.project_binding_fingerprint !== plan.baseline.project_binding.fingerprint) {
+    || operation.raw.metadata.project_binding_fingerprint !== plan.baseline.project_binding.fingerprint
+    || operation.raw.result_summary.after_state.form_id !== plan.baseline.form_id) {
     throw fail("viewing_date_restore_apply_missing", "Viewing-date Restore requires the accepted Apply operation.");
   }
   return operation;

@@ -50,7 +50,7 @@ function assertPlan(plan, projectState, planId) {
   if (!plan || typeof plan !== "object" || plan.schema !== "csf_viewing_date_preview" || plan.version !== 1
     || plan.plan_id !== planId || plan.project_slug !== projectState.project.slug || plan.project_id !== projectState.project.project_id || plan.profile !== PROFILE
     || plan.profile_id !== PROFILE_ID || plan.profile_version !== 1 || !baseline || typeof baseline !== "object"
-    || Object.keys(baseline).sort().join("\n") !== baselineKeys.join("\n") || !Number.isInteger(baseline.form_id) || baseline.form_id <= 0
+    || Object.keys(baseline).sort().join("\n") !== baselineKeys.join("\n") || !Number.isSafeInteger(baseline.form_id) || baseline.form_id <= 0
     || ![baseline.form_sha256, baseline.actions_sha256, baseline.binding_sha256, baseline.policy_sha256, baseline.facts_sha256].every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
     || !baseline.records || typeof baseline.records !== "object" || Array.isArray(baseline.records) || Object.keys(baseline.records).sort().join(",") !== "count,fingerprint"
     || !Number.isInteger(baseline.records.count) || baseline.records.count < 0 || typeof baseline.records.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(baseline.records.fingerprint)
@@ -72,7 +72,7 @@ function assertPreparedResult(result, plan) {
 
 function normalizeTarget(observation) {
   if (!observation || typeof observation !== "object" || !Array.isArray(observation.candidate_ids) || observation.candidate_ids.length !== 1
-    || !Number.isInteger(observation.resolved_form_id) || observation.resolved_form_id !== observation.candidate_ids[0]
+    || !Number.isSafeInteger(observation.resolved_form_id) || observation.resolved_form_id <= 0 || observation.resolved_form_id !== observation.candidate_ids[0]
     || observation.form_id !== observation.resolved_form_id || observation.owner !== FORM_OWNER
     || observation.post_type !== "jet-form-builder" || observation.post_status !== "publish") {
     throw fail("viewing_date_apply_target_ambiguous", "The Factory Request Viewing form could not be resolved safely.");
@@ -164,7 +164,7 @@ function nativeScript(mode, input) {
     + "$blocks=$p?parse_blocks($p->post_content):[];$fields=[];foreach($blocks as $x){$a=$x['attrs']??[];if(isset($a['name']))$fields[]=['name'=>$a['name'],'block'=>$x['blockName'],'type'=>$a['field_type']??($x['blockName']==='jet-forms/textarea-field'?'textarea':'text'),'required'=>($a['required']??false)===true,'label'=>$a['label']??null,'attrs'=>$a];}"
     + "$actions=$id?get_post_meta($id,'_jf_actions',true):[];if(is_string($actions))$actions=json_decode($actions,true);$actions=is_array($actions)?$actions:[];$out=[];foreach($actions as $x)$out[]=['type'=>$x['type']??null];"
     + "$records=null;$tables=['records'=>$wpdb->prefix.'jet_fb_records','fields'=>$wpdb->prefix.'jet_fb_records_fields'];$available=true;foreach($tables as $table){if($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$table))!==$table){$available=false;break;}}if($available){$r='`'.str_replace('`','',$tables['records']).'`';$f='`'.str_replace('`','',$tables['fields']).'`';$record_rows=$wpdb->get_results($wpdb->prepare('SELECT id,form_id,user_id,from_content_id,from_content_type,status,ip_address,user_agent,referrer,submit_type,is_viewed,created_at,updated_at FROM '.$r.' WHERE form_id=%d ORDER BY id ASC',$id),ARRAY_A);$where=$wpdb->prepare(' WHERE record_id IN (SELECT id FROM '.$r.' WHERE form_id=%d) ORDER BY id ASC',$id);$field_rows=$wpdb->get_results('SELECT id,record_id,field_name,field_value,field_type,field_attrs FROM '.$f.$where,ARRAY_A);$records=['count'=>count($record_rows),'fingerprint'=>hash('sha256',wp_json_encode(['records'=>$record_rows,'fields'=>$field_rows]))];}"
-    + "echo wp_json_encode(['candidate_ids'=>array_map('intval',$ids),'resolved_form_id'=>$id,'form_id'=>$id,'post_type'=>$p?$p->post_type:null,'post_status'=>$p?$p->post_status:null,'owner'=>$id?get_post_meta($id,'" + FORM_OWNER_META + "',true):null,'form_content'=>$p?(string)$p->post_content:null,'form_sha256'=>$p?hash('sha256',$p->post_content):null,'fields'=>$fields,'actions'=>$out,'binding'=>$b,'records'=>$records,'plugin_version'=>defined('JET_FORM_BUILDER_VERSION')?JET_FORM_BUILDER_VERSION:null,'policy_sha256'=>file_exists(WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php')?hash_file('sha256',WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php'):null]);";
+    + "echo wp_json_encode(['candidate_ids'=>array_map('intval',$ids),'resolved_form_id'=>$id,'form_id'=>$id,'post_exists'=>!!$p,'post_type'=>$p?$p->post_type:null,'post_status'=>$p?$p->post_status:null,'post_parent'=>$p?(int)$p->post_parent:null,'owner'=>$id?get_post_meta($id,'" + FORM_OWNER_META + "',true):null,'form_content'=>$p?(string)$p->post_content:null,'form_sha256'=>$p?hash('sha256',$p->post_content):null,'fields'=>$fields,'actions'=>$out,'binding'=>$b,'records'=>$records,'plugin_version'=>defined('JET_FORM_BUILDER_VERSION')?JET_FORM_BUILDER_VERSION:null,'policy_sha256'=>file_exists(WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php')?hash_file('sha256',WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php'):null]);";
 }
 
 async function nativeRead(projectState, input) {
@@ -236,4 +236,4 @@ async function applyViewingDate(options) {
     : Object.assign({ operation: operationResult.operation }, operationResult.result);
 }
 
-module.exports = { applyViewingDate, prepareViewingDateApply, prepareViewingDateAuthority, assertBaseline, assertAfter, assertRecordsObservation, normalizeTarget, nativeRead, nativeWrite };
+module.exports = { applyViewingDate, prepareViewingDateApply, prepareViewingDateAuthority, assertBaseline, assertAfter, assertRecordsObservation, normalizeTarget, nativeRead, nativeWrite, nativeScript };

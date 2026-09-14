@@ -30,8 +30,15 @@ const { createManifestRecord, deriveProjectBinding, resolveSnapshotDirectory, tr
 const { MYSQLDUMP_SCRIPT } = require("../src/structural-snapshot-db-capture");
 
 function observation(overrides) {
+  const supplied = overrides || {};
+  const formId = Object.hasOwn(supplied, "form_id") ? supplied.form_id : 12;
+  const binding = Object.assign({ form_id: formId, form_sha256: "a".repeat(64), email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" }, supplied.binding || {});
   return Object.assign({
-    form_id: 13,
+    form_id: formId,
+    post_exists: true,
+    post_type: "jet-form-builder",
+    post_status: "publish",
+    post_parent: 0,
     plugin_version: "3.6.5.1",
     owner: "request_viewing_before_v1",
     form_sha256: "a".repeat(64),
@@ -45,10 +52,10 @@ function observation(overrides) {
       { name: "_factory_policy_guard", block: "jet-forms/text-field", type: "hidden", required: true, attrs: { field_type: "hidden", default: "request_viewing_before_v1", name: "_factory_policy_guard", required: true, validation: { rules: [{ type: "ssr", value: "factory_request_viewing_before_v1_validate_contacts" }, { type: "ssr", value: "factory_request_viewing_before_v1_validate_property" }] } } }
     ],
     actions: [{ type: "save_record" }],
-    binding: { form_id: 13, form_sha256: "a".repeat(64), email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" },
+    binding,
     records: { count: 0, fingerprint: "b".repeat(64) },
     policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14"
-  }, overrides || {});
+  }, supplied, { binding });
 }
 
 test("actual-observation facts classify the accepted no-date before-state as applicable", () => {
@@ -92,6 +99,46 @@ test("strict observation rejects policy, binding, field, context, and guard coun
     mutate(value);
     assert.throws(() => nativeFactsFromObservation(value), undefined, label);
   }
+});
+
+test("Preview derives a positive bound form ID and rejects revision or post-identity drift", () => {
+  assert.equal(nativeFactsFromObservation(observation({ form_id: 12 })).form.id, "request_viewing_form");
+  const cases = [
+    ["non-positive binding ID", (value) => { value.form_id = 0; value.binding.form_id = 0; }],
+    ["binding form mismatch", (value) => { value.binding.form_id = 17; }],
+    ["revision", (value) => { value.post_type = "revision"; value.post_parent = 12; }],
+    ["non-canonical parent", (value) => { value.post_parent = 44; }],
+    ["wrong post type", (value) => { value.post_type = "page"; }],
+    ["wrong post status", (value) => { value.post_status = "draft"; }],
+    ["wrong ownership", (value) => { value.owner = "other"; }],
+    ["missing bound post", (value) => { value.post_exists = false; }]
+  ];
+  for (const [label, mutate] of cases) {
+    const value = observation({ form_id: 12 });
+    mutate(value);
+    assert.throws(() => nativeFactsFromObservation(value), undefined, label);
+  }
+});
+
+test("Preview persists each project's verified bound form ID without caller authority", async () => {
+  const projectsRoot = fixtureProject();
+  createProjectScaffold({ name: "Second Viewing Authority", slug: "csf-st-viewing-second-authority-v1", port: 31004, projectsRoot });
+  const first = readProjectBySlug("csf-st-viewing-before-v1", projectsRoot);
+  const second = readProjectBySlug("csf-st-viewing-second-authority-v1", projectsRoot);
+  await assert.rejects(() => createViewingDatePreview({ projectsRoot, slug: first.project.slug, formId: 17, observe: async () => observation({ form_id: 12 }) }), { code: "viewing_date_preview_authority_injected" });
+  await assert.rejects(() => createViewingDatePreview({ projectsRoot, slug: first.project.slug, form_id: 17, observe: async () => observation({ form_id: 12 }) }), { code: "viewing_date_preview_authority_injected" });
+  const firstResult = await createViewingDatePreview({ projectsRoot, slug: first.project.slug, observe: async () => observation({ form_id: 12 }) });
+  const secondResult = await createViewingDatePreview({ projectsRoot, slug: second.project.slug, observe: async () => observation({ form_id: 17 }) });
+  const firstPlan = JSON.parse(fs.readFileSync(path.join(first.runtimePath, "proofs", "viewing-date-preview-v1", "plans", firstResult.plan_id + ".json"), "utf8"));
+  const secondPlan = JSON.parse(fs.readFileSync(path.join(second.runtimePath, "proofs", "viewing-date-preview-v1", "plans", secondResult.plan_id + ".json"), "utf8"));
+  assert.equal(firstPlan.baseline.form_id, 12);
+  assert.equal(secondPlan.baseline.form_id, 17);
+  assert.notEqual(firstPlan.project_id, secondPlan.project_id);
+});
+
+test("production Preview source contains no fixed form ID authority", () => {
+  const source = fs.readFileSync(path.resolve(__dirname, "../src/viewing-date-preview.js"), "utf8");
+  assert.doesNotMatch(source, /\bFORM_ID\b|\bget_post\(13\)|\bget_post_meta\(13/);
 });
 
 test("planned native delta is deterministic and only inserts the JFB optional date before submit", () => {

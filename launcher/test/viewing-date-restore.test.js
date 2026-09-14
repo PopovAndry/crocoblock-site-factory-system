@@ -38,7 +38,8 @@ function digest(value) {
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
-function observation(after) {
+function observation(after, formId) {
+  const id = formId === undefined ? 12 : formId;
   const content = after ? buildPatch(BASELINE_CONTENT).next_content : BASELINE_CONTENT;
   const sha = digest(content);
   const fields = [
@@ -51,9 +52,9 @@ function observation(after) {
   ].map(([name, block, type, required, attrs]) => ({ name, block, type, required, label: attrs.label || null, attrs }));
   if (after) fields.splice(5, 0, { name: "preferred_date", block: "jet-forms/date-field", type: "date", required: false, label: "Preferred date", attrs: { label: "Preferred date", name: "preferred_date", blockID: "factory-request-viewing-preferred-date-v1" } });
   return {
-    candidate_ids: [13], resolved_form_id: 13, form_id: 13, post_type: "jet-form-builder", post_status: "publish", owner: "request_viewing_before_v1",
+    candidate_ids: [id], resolved_form_id: id, form_id: id, post_exists: true, post_type: "jet-form-builder", post_status: "publish", post_parent: 0, owner: "request_viewing_before_v1",
     form_content: content, form_sha256: sha, fields, actions: [{ type: "save_record" }],
-    binding: { form_id: 13, form_sha256: sha, email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" },
+    binding: { form_id: id, form_sha256: sha, email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" },
     records: after ? { count: 97, fingerprint: "3".repeat(64) } : { count: 95, fingerprint: "e".repeat(64) }, plugin_version: "3.6.5.1", policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14"
   };
 }
@@ -68,22 +69,22 @@ function writeOperation(state, operation) {
   fs.writeFileSync(path.join(directory, operation.operation_id + ".json"), JSON.stringify(operation));
 }
 
-function fixture(slug) {
+function fixture(slug, formId) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-viewing-date-restore-"));
   const projectSlug = slug || "csf-st-viewing-before-v1";
   createProjectScaffold({ name: "CSF ST Viewing Before v1", slug: projectSlug, port: 32100, projectsRoot });
   const state = readProjectBySlug(projectSlug, projectsRoot);
   fs.mkdirSync(path.join(state.runtimePath, "wordpress"), { recursive: true });
   fs.writeFileSync(path.join(state.runtimePath, "wordpress", "wp-config.php"), "fixture-wp-config");
-  const before = observation(false);
-  const after = observation(true);
+  const before = observation(false, formId);
+  const after = observation(true, before.form_id);
   const planId = "viewing-date-plan-a3b7868a-4c58-4ec1-93ea-28dd8c9003ba";
   const snapshotId = "snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce";
   const applyOperationId = "op-2026-09-06T13-49-59-817Z-1a5aa2";
   const plan = {
     schema: "csf_viewing_date_preview", version: 1, plan_id: planId, project_slug: state.project.slug, project_id: state.project.project_id,
     profile: "add_optional_viewing_date@1", profile_id: "add_optional_viewing_date", profile_version: 1,
-    baseline: { project_binding: deriveProjectBinding(state.project), form_id: 13, form_sha256: before.form_sha256, actions_sha256: digest(before.actions), binding_sha256: digest(before.binding), policy_sha256: before.policy_sha256, facts_sha256: digest(nativeFactsFromObservation(before)), records: clone(before.records) },
+    baseline: { project_binding: deriveProjectBinding(state.project), form_id: before.form_id, form_sha256: before.form_sha256, actions_sha256: digest(before.actions), binding_sha256: digest(before.binding), policy_sha256: before.policy_sha256, facts_sha256: digest(nativeFactsFromObservation(before)), records: clone(before.records) },
     proposed_delta: { add_optional_date_field: { native_block: DATE_BLOCK } },
     expected: { form_sha256: after.form_sha256 }
   };
@@ -140,6 +141,8 @@ test("same-project Restore reaches the executor once only after the exact accept
   const value = fixture();
   const current = { value: value.after };
   const calls = [];
+  assert.equal(value.plan.baseline.form_id, 12);
+  assert.equal(value.apply.result_summary.after_state.form_id, value.plan.baseline.form_id);
   const result = await restoreViewingDate(options(value, current, {
     executeRestore: async (input) => { calls.push(input); assert.deepEqual(await input.postLockTerminalResolver(), { status: "continue" }); return { operation: { status: "succeeded" } }; }
   }));
@@ -150,6 +153,19 @@ test("same-project Restore reaches the executor once only after the exact accept
   assert.equal(typeof calls[0].preRestoreVerifier, "function");
   assert.equal(typeof calls[0].postRestoreVerifier, "function");
   assert.equal(calls[0].deferIdempotencyUntilPostLock, true);
+});
+
+test("Restore requires the accepted Apply after-state to retain the Preview bound form ID", async () => {
+  const value = fixture();
+  const applyPath = path.join(value.state.runtimePath, "runs", "operations", value.applyOperationId + ".json");
+  const apply = JSON.parse(fs.readFileSync(applyPath, "utf8"));
+  apply.result_summary.after_state.form_id = 17;
+  fs.writeFileSync(applyPath, JSON.stringify(apply));
+  let nativeRestoreCalls = 0;
+  await assert.rejects(() => restoreViewingDate(options(value, { value: value.after }, {
+    executeRestore: async () => { nativeRestoreCalls += 1; return { operation: { status: "succeeded" } }; }
+  })), { code: "viewing_date_restore_apply_missing" });
+  assert.equal(nativeRestoreCalls, 0);
 });
 
 test("same-project Restore blocks wrong recovery, current drift, missing date, and record drift before the executor", async () => {

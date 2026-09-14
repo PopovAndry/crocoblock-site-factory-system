@@ -47,6 +47,8 @@ test("viewing-date routes accept only server-owned profile facts and keep recove
 
     const rejected = await request(baseUrl, "/api/projects/csf-st-viewing-before-v1/viewing-date/preview", { form_id: 13 });
     assert.equal(rejected.response.status, 400);
+    const camelRejected = await request(baseUrl, "/api/projects/csf-st-viewing-before-v1/viewing-date/preview", { formId: 13 });
+    assert.equal(camelRejected.response.status, 400);
     assert.equal(calls.length, 1);
 
     const recovery = await request(baseUrl, "/api/projects/csf-st-viewing-before-v1/viewing-date/recovery-point", { plan_id: preview.body.plan_id, confirm_prepare_recovery_point: true });

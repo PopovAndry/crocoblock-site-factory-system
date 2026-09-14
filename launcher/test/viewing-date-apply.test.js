@@ -10,12 +10,13 @@ const { createProjectScaffold, readProjectBySlug } = require("../src/project-sto
 const { listOperations } = require("../src/project-operation-store");
 const { deriveProjectBinding } = require("../src/structural-snapshot-store");
 const { DATE_BLOCK, buildPatch, nativeFactsFromObservation } = require("../src/viewing-date-preview");
-const { applyViewingDate, assertBaseline, assertAfter, normalizeTarget } = require("../src/viewing-date-apply");
+const { applyViewingDate, assertBaseline, assertAfter, normalizeTarget, nativeScript } = require("../src/viewing-date-apply");
 
 function digest(value) { return crypto.createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex"); }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
-function observation(content) {
+function observation(content, formId) {
+  const id = formId === undefined ? 12 : formId;
   const fields = [
     ["property_id", "jet-forms/hidden-field", "hidden", true, { field_value: "query_var", query_var_key: "factory_property_id", name: "property_id", required: true }],
     ["name", "jet-forms/text-field", "text", true, { label: "Name", name: "name", required: true }],
@@ -26,25 +27,25 @@ function observation(content) {
   ].map(([name, block, type, required, attrs]) => ({ name, block, type, required, label: attrs.label || null, attrs }));
   if (content.includes("preferred_date")) fields.splice(5, 0, { name: "preferred_date", block: "jet-forms/date-field", type: "date", required: false, label: "Preferred date", attrs: { label: "Preferred date", name: "preferred_date", blockID: "factory-request-viewing-preferred-date-v1" } });
   const formSha = digest(content);
-  return { candidate_ids: [13], resolved_form_id: 13, form_id: 13, post_type: "jet-form-builder", post_status: "publish", owner: "request_viewing_before_v1", form_content: content, form_sha256: formSha, fields, actions: [{ type: "save_record" }], binding: { form_id: 13, form_sha256: formSha, email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" }, records: { count: 7, fingerprint: "a".repeat(64) }, plugin_version: "3.6.5.1", policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14" };
+  return { candidate_ids: [id], resolved_form_id: id, form_id: id, post_exists: true, post_type: "jet-form-builder", post_status: "publish", post_parent: 0, owner: "request_viewing_before_v1", form_content: content, form_sha256: formSha, fields, actions: [{ type: "save_record" }], binding: { form_id: id, form_sha256: formSha, email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" }, records: { count: 7, fingerprint: "a".repeat(64) }, plugin_version: "3.6.5.1", policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14" };
 }
 
-function fixture(slug) {
+function fixture(slug, formId) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-viewing-date-apply-"));
   const projectSlug = slug || "csf-st-viewing-before-v1";
   createProjectScaffold({ name: "CSF ST Viewing Before v1", slug: projectSlug, port: 32001, projectsRoot });
   const state = readProjectBySlug(projectSlug, projectsRoot);
   const beforeContent = '<!-- wp:jet-forms/hidden-field {"field_value":"query_var","query_var_key":"factory_property_id","name":"property_id","required":true} /-->\n\n<!-- wp:jet-forms/text-field {"label":"Name","name":"name","required":true} /-->\n\n<!-- wp:jet-forms/text-field {"field_type":"email","label":"Email","name":"email"} /-->\n\n<!-- wp:jet-forms/text-field {"field_type":"tel","label":"Phone","name":"phone"} /-->\n\n<!-- wp:jet-forms/textarea-field {"label":"Message","name":"message"} /-->\n\n<!-- wp:jet-forms/text-field {"field_type":"hidden","default":"request_viewing_before_v1","name":"_factory_policy_guard","required":true,"validation":{"rules":[{"type":"ssr","value":"factory_request_viewing_before_v1_validate_contacts"},{"type":"ssr","value":"factory_request_viewing_before_v1_validate_property"}]}} /-->\n\n<!-- wp:jet-forms/submit-field {"label":"Request viewing"} /-->';
-  const before = observation(beforeContent);
+  const before = observation(beforeContent, formId);
   const patch = buildPatch(beforeContent);
   const planId = "viewing-date-plan-11111111-1111-4111-8111-111111111111";
-  const plan = { schema: "csf_viewing_date_preview", version: 1, plan_id: planId, project_slug: state.project.slug, project_id: state.project.project_id, profile: "add_optional_viewing_date@1", profile_id: "add_optional_viewing_date", profile_version: 1, baseline: { project_binding: deriveProjectBinding(state.project), form_id: 13, form_sha256: before.form_sha256, actions_sha256: digest(before.actions), binding_sha256: digest(before.binding), policy_sha256: before.policy_sha256, facts_sha256: digest(nativeFactsFromObservation(before)), records: before.records }, proposed_delta: { add_optional_date_field: { native_block: patch.native_block } }, expected: { form_sha256: patch.expected_form_sha256 } };
+  const plan = { schema: "csf_viewing_date_preview", version: 1, plan_id: planId, project_slug: state.project.slug, project_id: state.project.project_id, profile: "add_optional_viewing_date@1", profile_id: "add_optional_viewing_date", profile_version: 1, baseline: { project_binding: deriveProjectBinding(state.project), form_id: before.form_id, form_sha256: before.form_sha256, actions_sha256: digest(before.actions), binding_sha256: digest(before.binding), policy_sha256: before.policy_sha256, facts_sha256: digest(nativeFactsFromObservation(before)), records: before.records }, proposed_delta: { add_optional_date_field: { native_block: patch.native_block } }, expected: { form_sha256: patch.expected_form_sha256 } };
   const root = path.join(state.runtimePath, "proofs", "viewing-date-preview-v1");
   fs.mkdirSync(path.join(root, "plans"), { recursive: true });
   fs.mkdirSync(path.join(root, "recovery-results"), { recursive: true });
   fs.writeFileSync(path.join(root, "plans", planId + ".json"), JSON.stringify(plan));
   fs.writeFileSync(path.join(root, "recovery-results", planId + ".json"), JSON.stringify({ schema: "csf_viewing_date_recovery_result", version: 3, status: "prepared", plan_id: planId, project_slug: state.project.slug, project_id: state.project.project_id, profile_id: "add_optional_viewing_date", profile_version: 1, snapshot_id: "snapshot-test" }));
-  return { projectsRoot, state, planId, before, after: observation(patch.next_content), patch, verifyPrepared: async () => ({ status: "prepared", snapshot_id: "snapshot-test" }) };
+  return { projectsRoot, state, planId, before, after: observation(patch.next_content, before.form_id), patch, verifyPrepared: async () => ({ status: "prepared", snapshot_id: "snapshot-test" }) };
 }
 
 test("a new server-created project accepts only its persisted Preview plan for Apply", async () => {
@@ -57,7 +58,7 @@ test("a new server-created project accepts only its persisted Preview plan for A
 
 test("Apply resolver fails closed for duplicate, retargeted, or baseline-drifted form observations", () => {
   const value = fixture();
-  assert.equal(normalizeTarget(value.before).form_id, 13);
+  assert.equal(normalizeTarget(value.before).form_id, 12);
   const duplicate = clone(value.before); duplicate.candidate_ids.push(14);
   assert.throws(() => normalizeTarget(duplicate), { code: "viewing_date_apply_target_ambiguous" });
   const retargeted = clone(value.before); retargeted.owner = "another_form";
@@ -66,6 +67,42 @@ test("Apply resolver fails closed for duplicate, retargeted, or baseline-drifted
   assert.throws(() => assertBaseline(drift, JSON.parse(fs.readFileSync(path.join(value.projectsRoot, "csf-st-viewing-before-v1", "proofs", "viewing-date-preview-v1", "plans", value.planId + ".json"), "utf8"))), { code: "viewing_date_apply_baseline_drift" });
   const unavailableRecords = clone(value.before); unavailableRecords.records = null;
   assert.throws(() => assertBaseline(unavailableRecords, JSON.parse(fs.readFileSync(path.join(value.projectsRoot, "csf-st-viewing-before-v1", "proofs", "viewing-date-preview-v1", "plans", value.planId + ".json"), "utf8"))), { code: "viewing_date_apply_records_unavailable" });
+});
+
+test("Apply production serialization derives post identity and blocks invalid bound posts", () => {
+  const script = nativeScript("read", {});
+  assert.match(script, /'post_exists'=>!!\$p/);
+  assert.match(script, /'post_parent'=>\$p\?\(int\)\$p->post_parent:null/);
+  assert.doesNotMatch(script, /'post_parent'=>0/);
+  const value = fixture();
+  const plan = JSON.parse(fs.readFileSync(path.join(value.projectsRoot, "csf-st-viewing-before-v1", "proofs", "viewing-date-preview-v1", "plans", value.planId + ".json"), "utf8"));
+  assert.doesNotThrow(() => assertBaseline(clone(value.before), plan));
+  const cases = [
+    ["revision", (current) => { current.post_type = "revision"; current.post_parent = current.form_id; }],
+    ["missing post", (current) => { current.post_exists = false; }],
+    ["non-canonical parent", (current) => { current.post_parent = 44; }]
+  ];
+  for (const [label, mutate] of cases) {
+    const current = clone(value.before);
+    mutate(current);
+    assert.throws(() => assertBaseline(current, plan), undefined, label);
+  }
+});
+
+test("Apply requires the exact Preview bound form-ID lineage", async () => {
+  const value = fixture();
+  let writes = 0;
+  const differentBoundForm = observation(value.before.form_content, 17);
+  await assert.rejects(() => applyViewingDate({
+    projectsRoot: value.projectsRoot,
+    slug: value.state.project.slug,
+    planId: value.planId,
+    idempotencyKey: "viewing-date-form-lineage-key",
+    verifyPrepared: value.verifyPrepared,
+    readNative: async () => clone(differentBoundForm),
+    writeNative: async () => { writes += 1; return clone(differentBoundForm); }
+  }), { code: "viewing_date_apply_target_changed" });
+  assert.equal(writes, 0);
 });
 
 test("Apply writes one reviewed date delta once and exact replay is write-free", async () => {

@@ -13,7 +13,6 @@ const { createFullStructuralSnapshot } = require("./structural-snapshot-capture"
 
 const PROFILE_ID = "add_optional_viewing_date";
 const PROFILE_VERSION = 1;
-const FORM_ID = 13;
 const DATE_BLOCK = '<!-- wp:jet-forms/date-field {"label":"Preferred date","name":"preferred_date","blockID":"factory-request-viewing-preferred-date-v1"} /-->';
 const PLAN_ROOT = "viewing-date-preview-v1";
 const TRUSTED_POLICY_SHA256 = "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14";
@@ -63,6 +62,10 @@ function exactRecords(records) {
     && typeof records.fingerprint === "string" && /^[a-f0-9]{64}$/.test(records.fingerprint);
 }
 
+function isCanonicalFormId(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 function exactPlanAuthority(plan, projectState, planId) {
   const project = projectState && projectState.project;
   const baseline = plan && plan.baseline;
@@ -72,7 +75,7 @@ function exactPlanAuthority(plan, projectState, planId) {
     || plan.plan_id !== planId || plan.project_slug !== project.slug || plan.project_id !== project.project_id
     || !profileMatches(plan) || !baseline || typeof baseline !== "object" || Array.isArray(baseline)
     || Object.keys(baseline).sort().join(",") !== baselineKeys.join(",")
-    || !Number.isInteger(baseline.form_id) || baseline.form_id <= 0
+    || !isCanonicalFormId(baseline.form_id)
     || ![baseline.form_sha256, baseline.actions_sha256, baseline.binding_sha256, baseline.policy_sha256, baseline.facts_sha256].every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
     || !exactRecords(baseline.records)
     || JSON.stringify(baseline.project_binding) !== JSON.stringify(deriveProjectBinding(project))
@@ -84,7 +87,7 @@ function exactPlanAuthority(plan, projectState, planId) {
 }
 
 function rejectCallerSuppliedProjectAuthority(options) {
-  for (const key of ["projectId", "project_id"]) {
+  for (const key of ["projectId", "project_id", "formId", "form_id"]) {
     if (options && Object.hasOwn(options, key)) {
       throw error("viewing_date_preview_authority_injected", "Viewing-date Preview derives project authority from the server-owned project record only.", 400);
     }
@@ -543,7 +546,7 @@ async function matchingPreparedRecovery(projectState, plan, projectsRoot, reatte
 }
 
 function nativeFactsFromObservation(observation) {
-  if (!observation || observation.form_id !== FORM_ID || observation.plugin_version !== "3.6.5.1"
+  if (!observation || !isCanonicalFormId(observation.form_id) || observation.plugin_version !== "3.6.5.1"
     || observation.policy_sha256 !== TRUSTED_POLICY_SHA256) {
     throw error("viewing_date_runtime_unsupported", "The managed form is not in the supported before-state.");
   }
@@ -565,7 +568,10 @@ function nativeFactsFromObservation(observation) {
   const bindingKeys = ["form_id", "form_sha256", "email_field", "phone_field", "property_field", "guard_field", "guard_value"];
   if (!required.every((name) => byName.has(name)) || fields.some((field) => !allowed.has(field.name))
     || Object.keys(binding).length !== bindingKeys.length || bindingKeys.some((key) => !Object.hasOwn(binding, key))
-    || binding.form_id !== FORM_ID || binding.form_sha256 !== observation.form_sha256
+    || !isCanonicalFormId(binding.form_id) || binding.form_id !== observation.form_id
+    || observation.post_exists !== true || observation.post_type !== "jet-form-builder" || observation.post_status !== "publish"
+    || observation.post_parent !== 0 || observation.owner !== "request_viewing_before_v1"
+    || binding.form_sha256 !== observation.form_sha256
     || binding.email_field !== "email" || binding.phone_field !== "phone" || binding.property_field !== "property_id"
     || binding.guard_field !== "_factory_policy_guard" || binding.guard_value !== "request_viewing_before_v1") {
     throw error("viewing_date_runtime_binding_conflict", "The managed form could not be read safely.");
@@ -642,12 +648,11 @@ function buildPatch(content) {
 async function observeNativeRuntime(options) {
   const projectState = options.projectState;
   const script = [
-    "$p=get_post(13);", "if(!$p){echo '{}';return;}",
+    "$b=get_option('factory_request_viewing_before_v1_binding',[]);$id=is_array($b)&&isset($b['form_id'])&&is_int($b['form_id'])&&$b['form_id']>0?$b['form_id']:0;$p=$id?get_post($id):null;", "if(!$p){echo '{}';return;}",
     "$blocks=parse_blocks($p->post_content); $fields=[]; foreach($blocks as $b){$a=$b['attrs']??[]; if(isset($a['name'])){$fields[]=['name'=>$a['name'],'block'=>$b['blockName'],'type'=>$a['field_type']??($b['blockName']==='jet-forms/textarea-field'?'textarea':'text'),'required'=>($a['required']??false)===true,'label'=>$a['label']??null,'attrs'=>$a];}}",
-    "$actions=get_post_meta(13,'_jf_actions',true); if(is_string($actions)){$actions=json_decode($actions,true);} $actions=is_array($actions)?$actions:[]; $out=[]; foreach($actions as $a){$out[]=['type'=>$a['type']??null];}",
+    "$actions=get_post_meta($id,'_jf_actions',true); if(is_string($actions)){$actions=json_decode($actions,true);} $actions=is_array($actions)?$actions:[]; $out=[]; foreach($actions as $a){$out[]=['type'=>$a['type']??null];}",
     "global $wpdb;$records=null;$tables=['records'=>$wpdb->prefix.'jet_fb_records','fields'=>$wpdb->prefix.'jet_fb_records_fields'];$available=true;foreach($tables as $table){if($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$table))!==$table){$available=false;break;}}if($available){$r='`'.str_replace('`','',$tables['records']).'`';$f='`'.str_replace('`','',$tables['fields']).'`';$record_rows=$wpdb->get_results($wpdb->prepare('SELECT id,form_id,user_id,from_content_id,from_content_type,status,ip_address,user_agent,referrer,submit_type,is_viewed,created_at,updated_at FROM '.$r.' WHERE form_id=%d ORDER BY id ASC',(int)$p->ID),ARRAY_A);$where=$wpdb->prepare(' WHERE record_id IN (SELECT id FROM '.$r.' WHERE form_id=%d) ORDER BY id ASC',(int)$p->ID);$field_rows=$wpdb->get_results('SELECT id,record_id,field_name,field_value,field_type,field_attrs FROM '.$f.$where,ARRAY_A);$records=['count'=>count($record_rows),'fingerprint'=>hash('sha256',wp_json_encode(['records'=>$record_rows,'fields'=>$field_rows]))];}",
-    "$b=get_option('factory_request_viewing_before_v1_binding',[]);",
-    "echo wp_json_encode(['form_id'=>(int)$p->ID,'owner'=>get_post_meta(13,'_factory_request_viewing_before_v1_owner',true),'form_content'=>$p->post_content,'form_sha256'=>hash('sha256',$p->post_content),'fields'=>$fields,'actions'=>$out,'binding'=>$b,'records'=>$records,'plugin_version'=>defined('JET_FORM_BUILDER_VERSION')?JET_FORM_BUILDER_VERSION:null,'policy_sha256'=>file_exists(WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php')?hash_file('sha256',WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php'):null]);"
+    "echo wp_json_encode(['form_id'=>(int)$p->ID,'post_exists'=>true,'post_type'=>$p->post_type,'post_status'=>$p->post_status,'post_parent'=>(int)$p->post_parent,'owner'=>get_post_meta($id,'_factory_request_viewing_before_v1_owner',true),'form_content'=>$p->post_content,'form_sha256'=>hash('sha256',$p->post_content),'fields'=>$fields,'actions'=>$out,'binding'=>$b,'records'=>$records,'plugin_version'=>defined('JET_FORM_BUILDER_VERSION')?JET_FORM_BUILDER_VERSION:null,'policy_sha256'=>file_exists(WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php')?hash_file('sha256',WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php'):null]);"
   ].join("");
   const result = await runCommand("docker", ["compose", "run", "--rm", "-T", "--entrypoint", "php", "wpcli", "-d", "memory_limit=512M", "/usr/local/bin/wp", "eval", script, "--path=/var/www/html", "--allow-root"], {
     cwd: projectState.runtimePath,
@@ -693,7 +698,7 @@ async function createViewingDatePreview(options) {
   if (!exactRecords(observation.records)) throw error("viewing_date_runtime_records_unavailable", "The managed form records could not be read safely.");
   const baseline = {
     project_binding: binding,
-    form_id: FORM_ID,
+    form_id: observation.form_id,
     form_sha256: observation.form_sha256,
     actions_sha256: hash(observation.actions),
     binding_sha256: hash(observation.binding),
