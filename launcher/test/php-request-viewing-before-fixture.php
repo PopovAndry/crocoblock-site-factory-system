@@ -8,6 +8,38 @@ $fixture_meta = [];
 $fixture_form_id = 13;
 $fixture_mutations = [ 'insert' => 0, 'meta' => 0, 'trash' => 0, 'update' => 0, 'option' => 0 ];
 $fixture_hooks = 0;
+$fixture_form_records_tables = [];
+$fixture_form_records_schema_mutations = 0;
+$fixture_form_records_count = 0;
+$fixture_form_records_verify = true;
+
+final class Fixture_Record_Model {
+	public static function table(): string { return 'wp_jet_fb_records'; }
+	public function create(): self { global $fixture_form_records_tables, $fixture_form_records_schema_mutations; if ( empty( $fixture_form_records_tables[ static::table() ] ) ) { $fixture_form_records_tables[ static::table() ] = true; ++$fixture_form_records_schema_mutations; } return $this; }
+}
+final class Fixture_Record_Field_Model {
+	public static function table(): string { return 'wp_jet_fb_records_fields'; }
+	public function create(): self { global $fixture_form_records_tables, $fixture_form_records_schema_mutations; if ( empty( $fixture_form_records_tables[ static::table() ] ) ) { $fixture_form_records_tables[ static::table() ] = true; ++$fixture_form_records_schema_mutations; } return $this; }
+}
+final class Fixture_Record_View_Count {
+	public static function count(): int { global $fixture_form_records_count; return $fixture_form_records_count; }
+}
+final class Fixture_Execution_Builder {
+	public function is_exist( $model ): bool { global $fixture_form_records_tables, $fixture_form_records_verify; return $fixture_form_records_verify && ! empty( $fixture_form_records_tables[ $model::table() ] ); }
+}
+
+if ( 'missing_class' !== getenv( 'FIXTURE_FORM_RECORDS_TEST_MODE' ) ) {
+	class_alias( Fixture_Record_Model::class, 'JFB_Modules\\Form_Record\\Models\\Record_Model' );
+	class_alias( Fixture_Record_Field_Model::class, 'JFB_Modules\\Form_Record\\Models\\Record_Field_Model' );
+	class_alias( Fixture_Record_View_Count::class, 'JFB_Modules\\Form_Record\\Query_Views\\Record_View_Count' );
+	class_alias( Fixture_Execution_Builder::class, 'Jet_Form_Builder\\Db_Queries\\Execution_Builder' );
+}
+if ( 'table_verification_failed' === getenv( 'FIXTURE_FORM_RECORDS_TEST_MODE' ) ) {
+	$fixture_form_records_verify = false;
+}
+if ( 'records_not_empty' === getenv( 'FIXTURE_FORM_RECORDS_TEST_MODE' ) ) {
+	$fixture_form_records_count = 1;
+}
 
 function absint( $value ): int { return abs( (int) $value ); }
 function get_option( $key, $default = false ) { global $fixture_options; return $fixture_options[ $key ] ?? $default; }
@@ -75,6 +107,16 @@ final class Fixture_Context {
 
 require __DIR__ . '/../../scripts/fixtures/request-viewing-before-v1/factory-request-viewing-before-v1-policy.php';
 require __DIR__ . '/../../scripts/fixtures/request-viewing-before-v1/bootstrap.php';
+
+if ( getenv( 'FIXTURE_FORM_RECORDS_TEST_MODE' ) ) {
+	try {
+		$result = factory_request_viewing_before_v1_require_form_records_ready();
+		echo json_encode( [ 'result' => $result, 'schema_mutations' => $fixture_form_records_schema_mutations ] );
+	} catch ( Throwable $error ) {
+		echo json_encode( [ 'error' => $error->getMessage(), 'schema_mutations' => $fixture_form_records_schema_mutations ] );
+	}
+	exit( 0 );
+}
 
 $content = 'factory form content';
 $sha = hash( 'sha256', $content );
@@ -178,15 +220,36 @@ $fixture_options['factory_request_viewing_before_v1_entities'] = [
 	'draft_property' => 9,
 ];
 $before_redirected_entities = $fixture_mutations;
+$before_redirected_entities_schema = $fixture_form_records_schema_mutations;
 try { factory_request_viewing_before_v1_form(); $redirected_entities_error = ''; } catch ( Throwable $error ) { $redirected_entities_error = $error->getMessage(); }
 $redirected_entities_no_mutation = $before_redirected_entities === $fixture_mutations;
-$fixture_options['factory_request_viewing_before_v1_entities'] = $base_once;
+$redirected_entities_no_schema_mutation = $before_redirected_entities_schema === $fixture_form_records_schema_mutations;
+factory_request_viewing_before_v1_base();
+
+$fixture_posts[100] = (object) [ 'ID' => 100, 'post_type' => 'jet-form-builder', 'post_status' => 'publish', 'post_content' => factory_request_viewing_before_v1_form_content(), 'post_name' => 'factory-request-viewing-before-v1' ];
+$fixture_meta[100] = [ '_factory_request_viewing_before_v1_owner' => 'request_viewing_before_v1' ];
+$fixture_options['factory_request_viewing_before_v1_binding'] = [ 'form_id' => 99, 'form_sha256' => 'stale' ];
+$before_binding_conflict_schema = $fixture_form_records_schema_mutations;
+try { factory_request_viewing_before_v1_form(); $binding_conflict_error = ''; } catch ( Throwable $error ) { $binding_conflict_error = $error->getMessage(); }
+$binding_conflict_no_schema_mutation = $before_binding_conflict_schema === $fixture_form_records_schema_mutations;
+unset( $fixture_posts[100], $fixture_meta[100], $fixture_options['factory_request_viewing_before_v1_binding'] );
+
+$fixture_posts[101] = (object) [ 'ID' => 101, 'post_type' => 'jet-form-builder', 'post_status' => 'publish', 'post_content' => 'conflicting form content', 'post_name' => 'factory-request-viewing-before-v1' ];
+$fixture_meta[101] = [ '_factory_request_viewing_before_v1_owner' => 'request_viewing_before_v1' ];
+$before_form_conflict_schema = $fixture_form_records_schema_mutations;
+try { factory_request_viewing_before_v1_form(); $form_conflict_error = ''; } catch ( Throwable $error ) { $form_conflict_error = $error->getMessage(); }
+$form_conflict_no_schema_mutation = $before_form_conflict_schema === $fixture_form_records_schema_mutations;
+unset( $fixture_posts[101], $fixture_meta[101] );
 
 $before_form = $fixture_mutations;
 $form_once = factory_request_viewing_before_v1_form();
 $after_form = $fixture_mutations;
 $form_twice = factory_request_viewing_before_v1_form();
 $form_no_repeat_mutation = $after_form === $fixture_mutations;
+$form_records_first = factory_request_viewing_before_v1_require_form_records_ready();
+$after_form_records_first = $fixture_form_records_schema_mutations;
+$form_records_second = factory_request_viewing_before_v1_require_form_records_ready();
+$form_records_no_repeat_mutation = $after_form_records_first === $fixture_form_records_schema_mutations;
 
 $fixture_meta[ $base_once['property_a'] ][ FACTORY_REQUEST_VIEWING_BEFORE_V1_ENTITY_OWNER_META ] = 'conflict';
 $before_entity_conflict = $fixture_mutations;
@@ -222,8 +285,17 @@ echo json_encode( [
 		'form_once' => $form_once,
 		'form_twice' => $form_twice,
 		'form_no_repeat_mutation' => $form_no_repeat_mutation,
+		'form_records_first' => $form_records_first,
+		'form_records_second' => $form_records_second,
+		'form_records_schema_mutations' => $fixture_form_records_schema_mutations,
+		'form_records_no_repeat_mutation' => $form_records_no_repeat_mutation,
 		'redirected_entities_error' => $redirected_entities_error,
 		'redirected_entities_no_mutation' => $redirected_entities_no_mutation,
+		'redirected_entities_no_schema_mutation' => $redirected_entities_no_schema_mutation,
+		'binding_conflict_error' => $binding_conflict_error,
+		'binding_conflict_no_schema_mutation' => $binding_conflict_no_schema_mutation,
+		'form_conflict_error' => $form_conflict_error,
+		'form_conflict_no_schema_mutation' => $form_conflict_no_schema_mutation,
 		'entity_conflict_error' => $entity_conflict_error,
 		'entity_conflict_no_mutation' => $entity_conflict_no_mutation,
 		'identity_injection_error' => $identity_injection_error,

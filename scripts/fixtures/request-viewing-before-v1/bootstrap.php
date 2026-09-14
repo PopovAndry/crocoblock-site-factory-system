@@ -277,6 +277,52 @@ function factory_request_viewing_before_v1_store_form_actions( int $form_id ): v
 	}
 }
 
+function factory_request_viewing_before_v1_require_form_records_ready(): array {
+	$model_classes = [
+		'records' => 'JFB_Modules\\Form_Record\\Models\\Record_Model',
+		'fields'  => 'JFB_Modules\\Form_Record\\Models\\Record_Field_Model',
+	];
+	$count_class = 'JFB_Modules\\Form_Record\\Query_Views\\Record_View_Count';
+	$builder_class = 'Jet_Form_Builder\\Db_Queries\\Execution_Builder';
+
+	foreach ( array_merge( array_values( $model_classes ), [ $count_class, $builder_class ] ) as $class ) {
+		if ( ! class_exists( $class ) ) {
+			throw new RuntimeException( 'fixture_form_records_class_missing' );
+		}
+	}
+	if ( ! method_exists( $count_class, 'count' ) ) {
+		throw new RuntimeException( 'fixture_form_records_api_missing' );
+	}
+
+	$verifier = new $builder_class();
+	if ( ! is_object( $verifier ) || ! method_exists( $verifier, 'is_exist' ) ) {
+		throw new RuntimeException( 'fixture_form_records_builder_invalid' );
+	}
+
+	$tables = [];
+	foreach ( $model_classes as $key => $model_class ) {
+		if ( ! method_exists( $model_class, 'table' ) ) {
+			throw new RuntimeException( 'fixture_form_records_model_invalid' );
+		}
+		$model = new $model_class();
+		if ( ! method_exists( $model, 'create' ) ) {
+			throw new RuntimeException( 'fixture_form_records_model_invalid' );
+		}
+		$model->create();
+		if ( ! $verifier->is_exist( $model ) ) {
+			throw new RuntimeException( 'fixture_form_records_table_unavailable' );
+		}
+		$tables[ $key ] = $model_class::table();
+	}
+
+	$record_count = $count_class::count();
+	if ( ! is_int( $record_count ) || 0 !== $record_count ) {
+		throw new RuntimeException( 'fixture_form_records_not_empty' );
+	}
+
+	return [ 'tables' => $tables, 'record_count' => $record_count ];
+}
+
 function factory_request_viewing_before_v1_repair_actions(): array {
 	factory_request_viewing_before_v1_require_runtime();
 	$binding = get_option( 'factory_request_viewing_before_v1_binding', [] );
@@ -375,6 +421,7 @@ function factory_request_viewing_before_v1_form(): array {
 			throw new RuntimeException( 'fixture_form_binding_conflict' );
 		}
 	}
+	$form_records = factory_request_viewing_before_v1_require_form_records_ready();
 	if ( ! $form_id ) {
 		$form_id = factory_request_viewing_before_v1_post( 'Factory Request Viewing Before v1', 'jet-form-builder', 'publish' );
 		wp_update_post( [ 'ID' => $form_id, 'post_content' => $content ] );
@@ -399,7 +446,7 @@ function factory_request_viewing_before_v1_form(): array {
 		wp_update_post( [ 'ID' => $owned_entities['contact_id'], 'post_content' => '<section class="factory-request-viewing-before-v1"><h1>Request a Viewing</h1>[jet_fb_form form_id="' . $form_id . '" submit_type="ajax"]</section>' ] );
 	}
 	$contact_url = get_permalink( $owned_entities['contact_id'] );
-	return [ 'form_id' => $form_id, 'binding' => $binding, 'entities' => $entities, 'contact_url' => $contact_url ];
+	return [ 'form_id' => $form_id, 'binding' => $binding, 'entities' => $entities, 'contact_url' => $contact_url, 'form_records' => $form_records ];
 }
 
 if ( defined( 'FACTORY_REQUEST_VIEWING_BEFORE_V1_TESTING' ) && FACTORY_REQUEST_VIEWING_BEFORE_V1_TESTING ) {

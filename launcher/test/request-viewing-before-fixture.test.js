@@ -27,6 +27,17 @@ function policyBehavior() {
   return JSON.parse(result.stdout);
 }
 
+function formRecordsBehavior(mode) {
+  const php = phpBinary();
+  assert.ok(php, "PHP binary is required for Form Records readiness tests");
+  const result = spawnSync(php, [path.join(__dirname, "php-request-viewing-before-fixture.php")], {
+    encoding: "utf8",
+    env: Object.assign({}, process.env, { FIXTURE_FORM_RECORDS_TEST_MODE: mode })
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout);
+}
+
 function wpUnslash(value) {
   return value.replace(/\\(.)/gs, "$1");
 }
@@ -69,6 +80,37 @@ test("before-state form has only the accepted business fields, native Form Recor
   assert.match(bootstrap, /wp:jet-forms\/text-field .*"field_type":"hidden"/);
   assert.doesNotMatch(bootstrap, /preferred_(?:date|time)|send_email|webhook|redirect/i);
   assert.match(bootstrap, /factory_property_id/);
+  assert.match(bootstrap, /factory_request_viewing_before_v1_require_form_records_ready/);
+  assert.match(bootstrap, /JFB_Modules\\\\Form_Record\\\\Models\\\\Record_Model/);
+  assert.match(bootstrap, /JFB_Modules\\\\Form_Record\\\\Models\\\\Record_Field_Model/);
+  assert.match(bootstrap, /Jet_Form_Builder\\\\Db_Queries\\\\Execution_Builder/);
+  assert.match(bootstrap, /\$verifier = new \$builder_class\(\)/);
+  assert.doesNotMatch(bootstrap, /Execution_Builder::instance\(\)/);
+  assert.doesNotMatch(bootstrap, /CREATE\s+TABLE|INSERT\s+INTO\s+.*jet_fb|wp_insert_post\(.*record/i);
+});
+
+test("Form Records readiness uses native idempotent models, verifies both tables, and leaves zero records", () => {
+  const { baseline } = policyBehavior();
+  assert.deepEqual(baseline.form_records_first, {
+    tables: { records: "wp_jet_fb_records", fields: "wp_jet_fb_records_fields" },
+    record_count: 0
+  });
+  assert.deepEqual(baseline.form_records_second, baseline.form_records_first);
+  assert.equal(baseline.form_records_schema_mutations, 2);
+  assert.equal(baseline.form_records_no_repeat_mutation, true);
+
+  assert.deepEqual(formRecordsBehavior("missing_class"), {
+    error: "fixture_form_records_class_missing",
+    schema_mutations: 0
+  });
+  assert.deepEqual(formRecordsBehavior("table_verification_failed"), {
+    error: "fixture_form_records_table_unavailable",
+    schema_mutations: 1
+  });
+  assert.deepEqual(formRecordsBehavior("records_not_empty"), {
+    error: "fixture_form_records_not_empty",
+    schema_mutations: 2
+  });
 });
 
 test("before-state controls are Factory-owned, idempotent, and fail closed on conflicts", () => {
@@ -133,8 +175,14 @@ test("fixture baseline and form are runtime-bound, idempotent, and preflight con
   assert.equal(baseline.base_no_repeat_mutation, true);
   assert.deepEqual(baseline.form_twice, baseline.form_once);
   assert.equal(baseline.form_no_repeat_mutation, true);
+  assert.deepEqual(baseline.form_once.form_records, baseline.form_records_first);
   assert.equal(baseline.redirected_entities_error, "fixture_entities_invalid");
   assert.equal(baseline.redirected_entities_no_mutation, true);
+	assert.equal(baseline.redirected_entities_no_schema_mutation, true);
+	assert.equal(baseline.binding_conflict_error, "fixture_form_binding_conflict");
+	assert.equal(baseline.binding_conflict_no_schema_mutation, true);
+	assert.equal(baseline.form_conflict_error, "fixture_form_conflict");
+	assert.equal(baseline.form_conflict_no_schema_mutation, true);
   assert.equal(baseline.entity_conflict_error, "fixture_entity_conflict");
   assert.equal(baseline.entity_conflict_no_mutation, true);
   assert.equal(baseline.identity_injection_error, "fixture_runtime_identity_injection");
