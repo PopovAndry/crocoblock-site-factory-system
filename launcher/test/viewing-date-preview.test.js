@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -15,6 +16,7 @@ const {
   createViewingDatePreview,
   matchingPreparedRecovery,
   nativeFactsFromObservation,
+  nativeObservationScript,
   prepareViewingDateRecovery,
   canonicalTarEntryInventory,
   baselineFingerprint,
@@ -58,10 +60,66 @@ function observation(overrides) {
   }, supplied, { binding });
 }
 
+function phpBinary() {
+  const osPanelPhp = "C:\\OSPanel\\modules\\php\\PHP_8.1\\php.exe";
+  if (fs.existsSync(osPanelPhp)) return osPanelPhp;
+  return spawnSync("php", ["-v"], { encoding: "utf8" }).status === 0 ? "php" : null;
+}
+
+function executeNativeObservation(binding, blocks, formContent) {
+  const php = phpBinary();
+  assert.ok(php, "PHP binary is required for native observation serialization tests");
+  const pluginDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "factory-viewing-date-policy-"));
+  const policySource = path.resolve(__dirname, "../../scripts/fixtures/request-viewing-before-v1/factory-request-viewing-before-v1-policy.php");
+  fs.copyFileSync(policySource, path.join(pluginDirectory, "factory-request-viewing-before-v1-policy.php"));
+  const encode = (value) => Buffer.from(typeof value === "string" ? value : JSON.stringify(value), "utf8").toString("base64");
+  const script = [
+    "define('WPMU_PLUGIN_DIR',base64_decode('" + encode(pluginDirectory) + "'));define('JET_FORM_BUILDER_VERSION','3.6.5.1');",
+    "$factory_binding=json_decode(base64_decode('" + encode(binding) + "'),true);",
+    "$factory_blocks=json_decode(base64_decode('" + encode(blocks) + "'),true);",
+    "$factory_content=base64_decode('" + encode(formContent) + "');",
+    "function get_option($key,$default=[]){global $factory_binding;return $key==='factory_request_viewing_before_v1_binding'?$factory_binding:$default;}",
+    "function get_post($id){global $factory_binding,$factory_content;return $id===($factory_binding['form_id']??null)?(object)['ID'=>$id,'post_type'=>'jet-form-builder','post_status'=>'publish','post_parent'=>0,'post_content'=>$factory_content]:null;}",
+    "function parse_blocks($content){global $factory_blocks;return $factory_blocks;}",
+    "function get_post_meta($id,$key,$single=true){if($key==='_factory_request_viewing_before_v1_owner')return 'request_viewing_before_v1';if($key==='_jf_actions')return [['type'=>'save_record']];return $single?'':[];}",
+    "function wp_json_encode($value){return json_encode($value);}",
+    "class FactoryPreviewWpdb{public $prefix='wp_';public function prepare($query,...$values){return $query;}public function get_var($query){return null;}}$wpdb=new FactoryPreviewWpdb();",
+    nativeObservationScript()
+  ].join("");
+  const result = spawnSync(php, ["-r", script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout);
+}
+
 test("actual-observation facts classify the accepted no-date before-state as applicable", () => {
   const facts = nativeFactsFromObservation(observation());
   assert.deepEqual(classifyAddOptionalViewingDateChange(facts), { classification: "applicable" });
   assert.equal(Object.hasOwn(facts, "patch"), false);
+});
+
+test("production native observation preserves the persisted binding after a terminal submit block", () => {
+  const formContent = "fixture-form-content";
+  const expectedBinding = {
+    form_id: 12,
+    form_sha256: crypto.createHash("sha256").update(formContent).digest("hex"),
+    email_field: "email",
+    phone_field: "phone",
+    property_field: "property_id",
+    guard_field: "_factory_policy_guard",
+    guard_value: "request_viewing_before_v1"
+  };
+  const blocks = observation().fields.map((field) => ({ blockName: field.block, attrs: field.attrs })).concat([
+    { blockName: "jet-forms/submit-field", attrs: { label: "Request viewing" } }
+  ]);
+  const emitted = executeNativeObservation(expectedBinding, blocks, formContent);
+  assert.deepEqual(emitted.binding, expectedBinding);
+  assert.notDeepEqual(emitted.binding, blocks.at(-1));
+  assert.doesNotThrow(() => nativeFactsFromObservation(emitted));
+
+  const malformedBinding = Object.assign({}, expectedBinding, { unexpected: "rejected" });
+  const malformed = executeNativeObservation(malformedBinding, blocks, formContent);
+  assert.deepEqual(malformed.binding, malformedBinding);
+  assert.throws(() => nativeFactsFromObservation(malformed), { code: "viewing_date_runtime_binding_conflict" });
 });
 
 test("canonical database capture source declares one full managed database without selective dump flags", () => {
