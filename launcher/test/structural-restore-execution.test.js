@@ -383,6 +383,47 @@ test("verify-existing Restore skips Agent repair and executes B, one health, the
   assert.equal(calls.includes("agent"), false);
 });
 
+test("coordinator carries the exact Restore operation ID from B to post-restore C verification", async () => {
+  const slug = "exec-verify-existing-operation-id";
+  const fixture = await setupReadyRestore(slug);
+  const observed = {};
+  const result = await executeManagedWebsiteRestore(Object.assign({}, executionInjections(fixture.projectsRoot, slug, []), {
+    projectsRoot: fixture.projectsRoot,
+    projectSlug: slug,
+    planId: fixture.plan.plan.plan_id,
+    exactConfirmation: fixture.plan.plan.confirmation.phrase,
+    idempotencyKey: "restore-exec-key-verify-existing-operation-id-0001",
+    agentAuthorityMode: "verify_existing",
+    agentRepairer: async () => { throw new Error("verify-existing must not repair Agent authority"); },
+    healthVerifier: async (input) => {
+      await input.beforeSignedHealthObserver({ operation_id: input.operationId, work_root: input.workRoot });
+      observed.healthOperationId = input.operationId;
+      return { wordpress: "ok", wp_json: "ok", mysql: "running", signed_agent: "ok" };
+    },
+    beforeSignedHealthObserver: async (input) => {
+      observed.bOperationId = input.operation_id;
+      observed.bWorkRoot = input.work_root;
+    },
+    postRestoreVerifier: async (input) => {
+      observed.c = input;
+      return { verified: true };
+    }
+  }));
+
+  assert.equal(result.operation.status, "succeeded");
+  const operationId = result.operation.operation_id;
+  assert.match(operationId, /^op-/);
+  assert.equal(observed.bOperationId, operationId);
+  assert.equal(observed.healthOperationId, operationId);
+  assert.equal(observed.c.operationId, operationId);
+  assert.notEqual(observed.c.operationId, undefined);
+  assert.equal(observed.c.workRoot, observed.bWorkRoot);
+  assert.equal(observed.c.projectState.project.slug, slug);
+  assert.equal(observed.c.runtimePath, fixture.project.scaffold.project.runtime_path);
+  assert.equal(observed.c.restorePlan.plan_id, fixture.plan.plan.plan_id);
+  assert.equal(observed.c.health.signed_agent, "ok");
+});
+
 test("custom post-restore verification is inside the coordinator and cannot be replaced by health-only success", async () => {
   const slug = "exec-custom-verify";
   const fixture = await setupReadyRestore(slug);

@@ -1096,6 +1096,7 @@ async function executeRestoreInCoordinator(context, options) {
         runtimePath,
         liveWordPressRoot,
         workRoot,
+        operationId: context.operationId,
         restorePlan: loaded.plan,
         source: loaded.source,
         health,
