@@ -3,7 +3,11 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { createDockerCompose } = require("./templates");
+const {
+  createDockerCompose,
+  normalizeProjectNetworkAllocation,
+  sameProjectNetworkAllocation
+} = require("./templates");
 
 const RUNTIME_BINDING_SCHEMA_VERSION = 1;
 const RUNTIME_BINDING_KIND = "server_owned_runtime_binding";
@@ -300,8 +304,12 @@ function assertReadyRuntimeBinding(options) {
     }
     const authoritative = inventory.find((record) => record && pathsEqual(record.runtimePath, paths.runtimePath));
     if (!authoritative || authoritative.projectId !== project.project_id || authoritative.slug !== project.slug
-      || !sameRuntimeBindingState(authoritative.project.runtime_binding, state)) {
+      || !sameRuntimeBindingState(authoritative.project.runtime_binding, state)
+      || !sameProjectNetworkAllocation(authoritative.project.network_allocation, project.network_allocation)) {
       throw runtimeBindingError("runtime_binding_authority_mismatch");
+    }
+    if (Object.prototype.hasOwnProperty.call(project, "network_allocation")) {
+      normalizeProjectNetworkAllocation(project.network_allocation);
     }
     const artifact = readRuntimeBindingArtifact(paths.runtimePath);
     const identity = normalizeProjectIdentity(project);

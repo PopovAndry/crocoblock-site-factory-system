@@ -11,14 +11,166 @@ const {
   readStrictProjectInventory,
   resolveProjectsRoot,
   saveProjectRecord,
+  normalizeProjectNetworkAllocation,
   writeJsonFile
 } = require("./project-store");
+const { sameProjectNetworkAllocation } = require("./templates");
 const { assertReadyRuntimeBinding, isRuntimeBindingDeclared } = require("./runtime-binding");
 const { runCommand, tailText } = require("./runtime-tools");
 
 const DOCKER_TIMEOUT_MS = 120000;
 const HTTP_WAIT_TIMEOUT_MS = 120000;
 const HTTP_WAIT_INTERVAL_MS = 3000;
+
+function projectNetworkPreflightError(code) {
+  const error = new Error("Project network allocation could not be verified safely.");
+  error.code = code;
+  error.statusCode = 409;
+  return error;
+}
+
+function parseIpv4Cidr(value) {
+  if (typeof value !== "string" || !/^\d{1,3}(?:\.\d{1,3}){3}\/(?:[0-9]|[12]\d|3[0-2])$/.test(value)) {
+    throw projectNetworkPreflightError("project_network_allocation_invalid");
+  }
+  const [address, prefixText] = value.split("/");
+  const octets = address.split(".").map((part) => Number(part));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    throw projectNetworkPreflightError("project_network_allocation_invalid");
+  }
+  const prefix = Number(prefixText);
+  const numeric = octets.reduce((total, part) => total * 256 + part, 0);
+  const blockSize = 2 ** (32 - prefix);
+  const start = Math.floor(numeric / blockSize) * blockSize;
+  if (numeric !== start) {
+    throw projectNetworkPreflightError("project_network_allocation_invalid");
+  }
+  return { value, start, end: start + blockSize - 1 };
+}
+
+function cidrsOverlap(left, right) {
+  const leftRange = parseIpv4Cidr(left);
+  const rightRange = parseIpv4Cidr(right);
+  return leftRange.start <= rightRange.end && rightRange.start <= leftRange.end;
+}
+
+function parseDockerNetworkSubnets(text) {
+  let value;
+  try {
+    value = JSON.parse(String(text || ""));
+  } catch (_) {
+    throw projectNetworkPreflightError("project_network_observation_invalid");
+  }
+  if (!Array.isArray(value)) {
+    throw projectNetworkPreflightError("project_network_observation_invalid");
+  }
+  const subnets = [];
+  for (const network of value) {
+    if (!network || typeof network !== "object" || Array.isArray(network)
+      || !network.IPAM || typeof network.IPAM !== "object" || Array.isArray(network.IPAM)
+      || !Array.isArray(network.IPAM.Config)) {
+      throw projectNetworkPreflightError("project_network_observation_invalid");
+    }
+    for (const config of network.IPAM.Config) {
+      if (!config || typeof config !== "object" || Array.isArray(config)) {
+        throw projectNetworkPreflightError("project_network_observation_invalid");
+      }
+      if (config.Subnet === undefined || config.Subnet === null || config.Subnet === "") continue;
+      subnets.push(parseIpv4Cidr(config.Subnet).value);
+    }
+  }
+  return subnets;
+}
+
+function parseActiveRouteCidrs(text) {
+  let value;
+  try {
+    value = JSON.parse(String(text || ""));
+  } catch (_) {
+    throw projectNetworkPreflightError("project_network_observation_invalid");
+  }
+  const routes = value === null ? [] : Array.isArray(value) ? value : [value];
+  if (routes.some((route) => typeof route !== "string")) {
+    throw projectNetworkPreflightError("project_network_observation_invalid");
+  }
+  return routes.map((route) => parseIpv4Cidr(route).value);
+}
+
+async function readProvisionNetworkObservation(options) {
+  const runner = options.commandRunner || runCommand;
+  const commandOptions = {
+    cwd: options.runtimePath,
+    logPath: path.join(options.runtimePath, "logs", options.proofStem + "-network-observation.log"),
+    timeoutMs: 30000,
+    env: dockerComposeEnvironment()
+  };
+  let listed;
+  try {
+    listed = await runner("docker", ["network", "ls", "-q"], commandOptions);
+  } catch (_) {
+    throw projectNetworkPreflightError("project_network_observation_unavailable");
+  }
+  const ids = String(listed && listed.stdout || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (ids.length === 0 || ids.some((id) => !/^[a-f0-9]{12,64}$/i.test(id))) {
+    throw projectNetworkPreflightError("project_network_observation_invalid");
+  }
+  let inspected;
+  try {
+    inspected = await runner("docker", ["network", "inspect"].concat(ids), commandOptions);
+  } catch (_) {
+    throw projectNetworkPreflightError("project_network_observation_unavailable");
+  }
+  let routes;
+  try {
+    routes = await runner("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      "Get-NetRoute -AddressFamily IPv4 | Where-Object { $_.DestinationPrefix -ne '0.0.0.0/0' } | Select-Object -ExpandProperty DestinationPrefix | ConvertTo-Json -Compress"
+    ], Object.assign({}, commandOptions, {
+      env: process.env,
+      logPath: path.join(options.runtimePath, "logs", options.proofStem + "-network-routes.log")
+    }));
+  } catch (_) {
+    throw projectNetworkPreflightError("project_network_observation_unavailable");
+  }
+  return {
+    dockerSubnets: parseDockerNetworkSubnets(inspected.stdout),
+    activeRouteCidrs: parseActiveRouteCidrs(routes.stdout)
+  };
+}
+
+async function assertProvisionNetworkPreflight(options) {
+  const projectState = options && options.projectState;
+  const project = projectState && projectState.project;
+  let allocation;
+  try {
+    allocation = normalizeProjectNetworkAllocation(project && project.network_allocation);
+  } catch (_) {
+    throw projectNetworkPreflightError("project_network_allocation_missing");
+  }
+  const inventory = typeof options.readStrictProjectInventory === "function"
+    ? options.readStrictProjectInventory(options.projectsRoot)
+    : options.inventory;
+  const authoritative = Array.isArray(inventory) && inventory.find((record) => record
+    && record.projectId === project.project_id && record.slug === project.slug
+    && path.resolve(record.runtimePath) === path.resolve(projectState.runtimePath));
+  if (!authoritative || !sameProjectNetworkAllocation(authoritative.project.network_allocation, allocation)) {
+    throw projectNetworkPreflightError("project_network_allocation_authority_mismatch");
+  }
+  const observation = options.networkObservation || await readProvisionNetworkObservation({
+    runtimePath: projectState.runtimePath,
+    proofStem: options.proofStem,
+    commandRunner: options.commandRunner
+  });
+  if (!observation || !Array.isArray(observation.dockerSubnets) || !Array.isArray(observation.activeRouteCidrs)) {
+    throw projectNetworkPreflightError("project_network_observation_invalid");
+  }
+  const collisions = observation.dockerSubnets.concat(observation.activeRouteCidrs)
+    .some((candidate) => cidrsOverlap(allocation.subnet, candidate));
+  if (collisions) {
+    throw projectNetworkPreflightError("project_network_allocation_collision");
+  }
+  return allocation;
+}
 
 function timestampCompact() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -344,6 +496,14 @@ async function provisionProject(options) {
   }
 
   assertRuntimeBindingBeforeProvision(projectState, projectsRoot);
+  if (Object.prototype.hasOwnProperty.call(projectState.project, "network_allocation")) {
+    await assertProvisionNetworkPreflight({
+      projectState,
+      projectsRoot,
+      proofStem,
+      readStrictProjectInventory
+    });
+  }
 
   await ensureDockerAvailable(safeRuntimePath, proofStem);
   await ensureWordPressFiles(projectState, proofStem);
@@ -407,5 +567,10 @@ async function provisionProject(options) {
 module.exports = {
   provisionProject,
   assertRuntimeBindingBeforeProvision,
-  buildDockerComposeInvocation
+  assertProvisionNetworkPreflight,
+  buildDockerComposeInvocation,
+  cidrsOverlap,
+  parseActiveRouteCidrs,
+  parseDockerNetworkSubnets,
+  readProvisionNetworkObservation
 };

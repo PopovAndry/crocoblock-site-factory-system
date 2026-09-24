@@ -52,6 +52,13 @@ function temporaryProjectsRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "factory-create-website-"));
 }
 
+function markProjectLegacyNetworkUnassigned(projectsRoot, slug) {
+  const manifestPath = path.join(projectsRoot, slug, "factory-project.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  delete manifest.network_allocation;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+}
+
 function dockerInspectRecord(id, configured, current) {
   return {
     Id: id.padEnd(64, id[0]),
@@ -603,8 +610,11 @@ test("persisted project ports accept canonical decimals and ignore noncanonical 
   const projectsRoot = temporaryProjectsRoot();
   t.after(() => fs.rmSync(projectsRoot, { recursive: true, force: true }));
   createProjectScaffold({ name: "Reserved one", slug: "reserved-one", port: 8120, projectsRoot });
+  markProjectLegacyNetworkUnassigned(projectsRoot, "reserved-one");
   createProjectScaffold({ name: "Reserved two", slug: "reserved-two", port: 8121, projectsRoot });
+  markProjectLegacyNetworkUnassigned(projectsRoot, "reserved-two");
   createProjectScaffold({ name: "Stopped", slug: "reserved-stopped", port: 8122, projectsRoot });
+  markProjectLegacyNetworkUnassigned(projectsRoot, "reserved-stopped");
   const stopped = readProjectBySlug("reserved-stopped", projectsRoot);
   stopped.project.runtime.status = "stopped";
   saveProjectRecord(stopped, stopped.project);
@@ -612,6 +622,7 @@ test("persisted project ports accept canonical decimals and ignore noncanonical 
   invalidStrings.forEach((value, index) => {
     const slug = "invalid-port-" + String(index);
     createProjectScaffold({ name: slug, slug, port: 8200 + index, projectsRoot });
+    markProjectLegacyNetworkUnassigned(projectsRoot, slug);
   });
   invalidStrings.forEach((value, index) => {
     const manifestPath = path.join(projectsRoot, "invalid-port-" + String(index), "factory-project.json");

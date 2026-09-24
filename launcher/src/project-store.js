@@ -3,7 +3,15 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { createDockerCompose, createEnvFile } = require("./templates");
+const {
+  createDockerCompose,
+  createEnvFile,
+  PROJECT_NETWORK_ALLOCATION_SCHEMA,
+  PROJECT_NETWORK_ALLOCATION_VERSION,
+  PROJECT_NETWORK_POOL,
+  normalizeProjectNetworkAllocation,
+  sameProjectNetworkAllocation
+} = require("./templates");
 const {
   RUNTIME_BINDING_FILENAME,
   createPendingRuntimeBinding,
@@ -27,8 +35,12 @@ const BLOCKED_ROOTS = [
 ].map((directoryName) => path.join(getSystemRoot(), directoryName));
 const PROJECT_SUBDIRECTORIES = ["runs", "proofs", "snapshots", "logs", "exports", "secrets", "wordpress", "mysql"];
 const PROJECT_STORE_LOCK_DIRECTORY = ".factory-project-store.lock";
+const PROJECT_SCAFFOLD_STAGING_DIRECTORY = ".factory-project-scaffold-staging";
+const PROJECT_SCAFFOLD_STAGING_LEAF_PATTERN = /^[a-f0-9]{32}$/;
+const PROJECT_SCAFFOLD_STAGING_MAX_FILE_BYTES = 1024 * 1024;
 const PROJECT_STORE_INTERNAL_DIRECTORIES = new Set([
   PROJECT_STORE_LOCK_DIRECTORY,
+  PROJECT_SCAFFOLD_STAGING_DIRECTORY,
   ".factory-cache",
   ".factory-recovery"
 ]);
@@ -40,6 +52,12 @@ const PROJECT_STATE_BINDING = Symbol("factory_project_state_binding");
 const PROJECT_MANIFEST_FILENAME = "factory-project.json";
 const PROJECT_MANIFEST_TEMP_PREFIX = ".factory-project.json.";
 const PROJECT_MANIFEST_TEMP_SUFFIX = ".tmp";
+const PROJECT_SCAFFOLD_STAGING_FILE_NAMES = new Set([
+  ".env",
+  RUNTIME_BINDING_FILENAME,
+  "docker-compose.yml",
+  PROJECT_MANIFEST_FILENAME
+]);
 const PROJECT_RUNTIME_MARKERS = new Set([
   PROJECT_MANIFEST_FILENAME,
   ".env",
@@ -88,6 +106,168 @@ function projectManifestWriteError() {
     "Project storage could not be updated. Try again.",
     "project_store_write_failed"
   );
+}
+
+function scaffoldCauseCode(error, fallback) {
+  if (error && typeof error.code === "string" && /^[a-z0-9_]{1,96}$/i.test(error.code)) {
+    return error.code.toLowerCase().startsWith("project_")
+      ? error.code
+      : "filesystem_" + error.code.toLowerCase();
+  }
+  return fallback;
+}
+
+function projectScaffoldCleanupError(primaryError, cleanupError) {
+  const error = createProjectStoreError(
+    "Project setup could not be completed or cleaned up safely.",
+    "project_scaffold_cleanup_failed"
+  );
+  error.primary_cause = scaffoldCauseCode(primaryError, "project_scaffold_step_failed");
+  error.cleanup_cause = scaffoldCauseCode(cleanupError, "project_scaffold_cleanup_failed");
+  return error;
+}
+
+function isDirectRealChild(parentPath, childPath) {
+  return pathsEqual(path.dirname(childPath), parentPath) && !pathsEqual(parentPath, childPath);
+}
+
+function readOrdinaryDirectory(directoryPath, parentRealPath, expectedDevice) {
+  const stat = fs.lstatSync(directoryPath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw projectStoreInventoryInvalidError();
+  }
+  const realPath = fs.realpathSync.native(directoryPath);
+  if ((parentRealPath && !isDirectRealChild(parentRealPath, realPath))
+    || (expectedDevice !== undefined && stat.dev !== expectedDevice)) {
+    throw projectStoreInventoryInvalidError();
+  }
+  return { realPath, device: stat.dev };
+}
+
+function assertOrdinaryStagingFile(filePath) {
+  const stat = fs.lstatSync(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1
+    || stat.size > PROJECT_SCAFFOLD_STAGING_MAX_FILE_BYTES) {
+    throw projectStoreInventoryInvalidError();
+  }
+  return stat;
+}
+
+function validateStagedManifest(stagedRuntimePath, projectsRoot, manifestPath) {
+  let project;
+  try {
+    project = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const canonicalRuntimePath = path.join(projectsRoot, project.slug);
+    validateStrictProjectRecord(project, canonicalRuntimePath, projectsRoot);
+    const binding = normalizeRuntimeBindingState(project.runtime_binding);
+    if (binding.status !== "ready") {
+      throw projectStoreInventoryInvalidError();
+    }
+    const pendingProject = Object.assign({}, project, {
+      runtime_binding: createPendingRuntimeBinding()
+    });
+    verifyScaffoldRuntimeBinding(stagedRuntimePath, pendingProject, binding.sha256);
+  } catch (_) {
+    throw projectStoreInventoryInvalidError();
+  }
+}
+
+function validateStagingLeaf(stagedRuntimePath, stagingRootRealPath, expectedDevice, projectsRoot) {
+  const leaf = readOrdinaryDirectory(stagedRuntimePath, stagingRootRealPath, expectedDevice);
+  const name = path.basename(stagedRuntimePath);
+  if (!PROJECT_SCAFFOLD_STAGING_LEAF_PATTERN.test(name)) {
+    throw projectStoreInventoryInvalidError();
+  }
+  const entries = fs.readdirSync(stagedRuntimePath, { withFileTypes: true });
+  const names = new Set();
+  for (const entry of entries) {
+    if (names.has(entry.name) || entry.isSymbolicLink()) {
+      throw projectStoreInventoryInvalidError();
+    }
+    names.add(entry.name);
+    const entryPath = path.join(stagedRuntimePath, entry.name);
+    if (PROJECT_SUBDIRECTORIES.includes(entry.name)) {
+      readOrdinaryDirectory(entryPath, leaf.realPath, leaf.device);
+      if (fs.readdirSync(entryPath, { withFileTypes: true }).length !== 0) {
+        throw projectStoreInventoryInvalidError();
+      }
+      continue;
+    }
+    if (!PROJECT_SCAFFOLD_STAGING_FILE_NAMES.has(entry.name)) {
+      throw projectStoreInventoryInvalidError();
+    }
+    assertOrdinaryStagingFile(entryPath);
+  }
+  const has = (name) => names.has(name);
+  if ((has(RUNTIME_BINDING_FILENAME) && !has(".env"))
+    || (has("docker-compose.yml") && !has(RUNTIME_BINDING_FILENAME))
+    || (has(PROJECT_MANIFEST_FILENAME) && !has("docker-compose.yml"))) {
+    throw projectStoreInventoryInvalidError();
+  }
+  if (has(PROJECT_MANIFEST_FILENAME)) {
+    validateStagedManifest(stagedRuntimePath, projectsRoot, path.join(stagedRuntimePath, PROJECT_MANIFEST_FILENAME));
+  }
+  return leaf;
+}
+
+function validateStagingRoot(stagingRoot, projectsRoot, rootRealPath) {
+  const staging = readOrdinaryDirectory(stagingRoot, rootRealPath, fs.lstatSync(projectsRoot).dev);
+  const entries = fs.readdirSync(stagingRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw projectStoreInventoryInvalidError();
+    }
+    validateStagingLeaf(path.join(stagingRoot, entry.name), staging.realPath, staging.device, projectsRoot);
+  }
+  return staging;
+}
+
+function validateStagingWriteBoundary(stagingRoot, projectsRoot, rootRealPath, stagedRuntimePath) {
+  const staging = validateStagingRoot(stagingRoot, projectsRoot, rootRealPath);
+  return validateStagingLeaf(stagedRuntimePath, staging.realPath, staging.device, projectsRoot);
+}
+
+function projectNetworkAllocationError(code) {
+  return createProjectStoreError(
+    "A safe project network allocation is unavailable.",
+    code
+  );
+}
+
+function assertNoProjectNetworkAllocationInjection(options) {
+  for (const key of ["network", "network_allocation", "network_subnet", "subnet"]) {
+    if (Object.prototype.hasOwnProperty.call(options || {}, key)) {
+      throw projectNetworkAllocationError("project_network_allocation_injected");
+    }
+  }
+}
+
+function allocateProjectNetwork(existingProjects) {
+  const allocated = new Set();
+  for (const record of existingProjects) {
+    if (!Object.prototype.hasOwnProperty.call(record.project, "network_allocation")) {
+      continue;
+    }
+    let allocation;
+    try {
+      allocation = normalizeProjectNetworkAllocation(record.project.network_allocation);
+    } catch (_) {
+      throw projectStoreInventoryInvalidError();
+    }
+    if (allocated.has(allocation.subnet)) {
+      throw projectStoreInventoryInvalidError();
+    }
+    allocated.add(allocation.subnet);
+  }
+  const subnet = PROJECT_NETWORK_POOL.find((candidate) => !allocated.has(candidate));
+  if (!subnet) {
+    throw projectNetworkAllocationError("project_network_allocation_exhausted");
+  }
+  return {
+    schema: PROJECT_NETWORK_ALLOCATION_SCHEMA,
+    version: PROJECT_NETWORK_ALLOCATION_VERSION,
+    subnet
+  };
 }
 
 function normalizeCanonicalProjectPort(value) {
@@ -455,7 +635,7 @@ function writeEnvFile(filePath, env) {
   fs.writeFileSync(filePath, serializeEnvFile(env), "utf8");
 }
 
-function createProjectRecord(siteName, slug, runtimePath, wpPort) {
+function createProjectRecord(siteName, slug, runtimePath, wpPort, networkAllocation) {
   const now = timestampIso();
 
   return {
@@ -471,6 +651,7 @@ function createProjectRecord(siteName, slug, runtimePath, wpPort) {
     db_root_password: randomPassword("root_"),
     admin_user: "factory_admin",
     admin_password: randomPassword("wp_"),
+    network_allocation: normalizeProjectNetworkAllocation(networkAllocation),
     runtime_binding: createPendingRuntimeBinding(),
     runtime: {
       status: "not_provisioned",
@@ -531,6 +712,9 @@ function toStoredProject(project) {
   };
   if (Object.prototype.hasOwnProperty.call(project, "runtime_binding")) {
     stored.runtime_binding = normalizeRuntimeBindingState(project.runtime_binding);
+  }
+  if (Object.prototype.hasOwnProperty.call(project, "network_allocation")) {
+    stored.network_allocation = normalizeProjectNetworkAllocation(project.network_allocation);
   }
   return stored;
 }
@@ -614,6 +798,13 @@ function validateStrictProjectRecord(data, runtimePath, projectsRoot) {
       throw projectStoreInventoryInvalidError();
     }
   }
+  if (Object.prototype.hasOwnProperty.call(data, "network_allocation")) {
+    try {
+      normalizeProjectNetworkAllocation(data.network_allocation);
+    } catch (_) {
+      throw projectStoreInventoryInvalidError();
+    }
+  }
   return {
     project: data,
     projectId: data.project_id,
@@ -634,6 +825,10 @@ function readStrictProjectInventory(projectsRoot) {
       if (PROJECT_STORE_INTERNAL_DIRECTORIES.has(entry.name)) {
         if (!entry.isDirectory() || entry.isSymbolicLink()) {
           throw projectStoreInventoryInvalidError();
+        }
+        if (entry.name === PROJECT_SCAFFOLD_STAGING_DIRECTORY) {
+          validateStagingRoot(path.join(resolvedProjectsRoot, entry.name), resolvedProjectsRoot, rootRealPath);
+          continue;
         }
         if (entry.name !== PROJECT_STORE_LOCK_DIRECTORY) {
           const internalEntries = fs.readdirSync(path.join(resolvedProjectsRoot, entry.name), { withFileTypes: true });
@@ -669,12 +864,25 @@ function readStrictProjectInventory(projectsRoot) {
     const identities = new Set();
     const ports = new Set();
     const manifests = new Set();
+    const networks = new Set();
     for (const record of inventory) {
       const slugKey = record.slug.toLowerCase();
       const identityKey = record.projectId.toLowerCase();
       const manifestKey = pathComparisonKey(record.manifestPath);
       if (slugs.has(slugKey) || identities.has(identityKey) || ports.has(record.port) || manifests.has(manifestKey)) {
         throw projectStoreInventoryInvalidError();
+      }
+      if (Object.prototype.hasOwnProperty.call(record.project, "network_allocation")) {
+        let allocation;
+        try {
+          allocation = normalizeProjectNetworkAllocation(record.project.network_allocation);
+        } catch (_) {
+          throw projectStoreInventoryInvalidError();
+        }
+        if (networks.has(allocation.subnet)) {
+          throw projectStoreInventoryInvalidError();
+        }
+        networks.add(allocation.subnet);
       }
       slugs.add(slugKey);
       identities.add(identityKey);
@@ -701,6 +909,7 @@ function bindProjectState(projectState, projectsRoot, runtimePath, manifestPath)
 }
 
 function createProjectScaffold(options) {
+  assertNoProjectNetworkAllocationInjection(options);
   const siteName = String(options.name || "").trim();
   const requestedPort = Number(options.port || 8099);
   const projectsRoot = ensureSafeProjectsRoot(options.projectsRoot);
@@ -737,43 +946,63 @@ function createProjectScaffold(options) {
       throw createProjectStoreError("The project already exists.", "project_exists");
     }
 
-    const project = createProjectRecord(siteName, slug, runtimePath, requestedPort);
+    const project = createProjectRecord(
+      siteName,
+      slug,
+      runtimePath,
+      requestedPort,
+      allocateProjectNetwork(existingProjects)
+    );
+    const stagingRoot = path.join(lockedProjectsRoot, PROJECT_SCAFFOLD_STAGING_DIRECTORY);
+    const stagedRuntimePath = path.join(stagingRoot, crypto.randomBytes(16).toString("hex"));
     const filesWritten = [
       path.join(runtimePath, PROJECT_MANIFEST_FILENAME),
       path.join(runtimePath, ".env"),
       path.join(runtimePath, RUNTIME_BINDING_FILENAME),
       path.join(runtimePath, "docker-compose.yml")
     ];
-    let runtimeCreated = false;
+    let stagedRuntimeCreated = false;
     try {
-      fs.mkdirSync(runtimePath);
-      runtimeCreated = true;
-      for (const subdirectory of PROJECT_SUBDIRECTORIES) {
-        ensureDirectory(path.join(runtimePath, subdirectory));
+      if (!fs.existsSync(stagingRoot)) {
+        fs.mkdirSync(stagingRoot);
       }
-      writeProjectManifestAtomic(filesWritten[0], project);
-      writeEnvFile(filesWritten[1], parseEnvContent(createEnvFile(project)));
-      const bindingArtifact = writeRuntimeBindingArtifact(runtimePath, project);
-      fs.writeFileSync(filesWritten[3], createDockerCompose(project), "utf8");
-      verifyScaffoldRuntimeBinding(runtimePath, project, bindingArtifact.sha256);
+      const projectsRootRealPath = fs.realpathSync.native(lockedProjectsRoot);
+      validateStagingRoot(stagingRoot, lockedProjectsRoot, projectsRootRealPath);
+      fs.mkdirSync(stagedRuntimePath);
+      stagedRuntimeCreated = true;
+      validateStagingWriteBoundary(stagingRoot, lockedProjectsRoot, projectsRootRealPath, stagedRuntimePath);
+      for (const subdirectory of PROJECT_SUBDIRECTORIES) {
+        ensureDirectory(path.join(stagedRuntimePath, subdirectory));
+      }
+      validateStagingWriteBoundary(stagingRoot, lockedProjectsRoot, projectsRootRealPath, stagedRuntimePath);
+      writeEnvFile(path.join(stagedRuntimePath, ".env"), parseEnvContent(createEnvFile(project)));
+      validateStagingWriteBoundary(stagingRoot, lockedProjectsRoot, projectsRootRealPath, stagedRuntimePath);
+      const bindingArtifact = writeRuntimeBindingArtifact(stagedRuntimePath, project);
+      validateStagingWriteBoundary(stagingRoot, lockedProjectsRoot, projectsRootRealPath, stagedRuntimePath);
+      fs.writeFileSync(path.join(stagedRuntimePath, "docker-compose.yml"), createDockerCompose(project), "utf8");
+      verifyScaffoldRuntimeBinding(stagedRuntimePath, project, bindingArtifact.sha256);
       project.runtime_binding = createReadyRuntimeBinding(bindingArtifact.sha256);
-      writeProjectManifestAtomic(filesWritten[0], project);
+      validateStagingWriteBoundary(stagingRoot, lockedProjectsRoot, projectsRootRealPath, stagedRuntimePath);
+      writeProjectManifestAtomic(path.join(stagedRuntimePath, PROJECT_MANIFEST_FILENAME), project);
+      validateStagingWriteBoundary(stagingRoot, lockedProjectsRoot, projectsRootRealPath, stagedRuntimePath);
+      const result = {
+        project: sanitizeProject(project),
+        files_written: filesWritten,
+        directories_written: PROJECT_SUBDIRECTORIES.map((name) => path.join(runtimePath, name))
+      };
+      fs.renameSync(stagedRuntimePath, runtimePath);
+      stagedRuntimeCreated = false;
+      return result;
     } catch (error) {
-      if (runtimeCreated) {
+      if (stagedRuntimeCreated) {
         try {
-          fs.rmSync(runtimePath, { recursive: true, force: true });
+          fs.rmSync(stagedRuntimePath, { recursive: true, force: true });
         } catch (cleanupError) {
-          // Preserve the primary scaffold failure; the transaction lock still serializes writers.
+          throw projectScaffoldCleanupError(error, cleanupError);
         }
       }
       throw error;
     }
-
-    return {
-      project: sanitizeProject(project),
-      files_written: filesWritten,
-      directories_written: PROJECT_SUBDIRECTORIES.map((name) => path.join(runtimePath, name))
-    };
   });
 }
 
@@ -883,6 +1112,9 @@ function saveProjectRecord(projectState, project) {
     if (!sameRuntimeBindingState(current.project.runtime_binding, project.runtime_binding)) {
       throw projectIdentityMismatchError();
     }
+    if (!sameProjectNetworkAllocation(current.project.network_allocation, project.network_allocation)) {
+      throw projectIdentityMismatchError();
+    }
     const requestedPort = normalizeCanonicalProjectPort(project && project.wp_port);
     if (typeof project.wp_port !== "number" || requestedPort === null) {
       throw projectStoreInventoryInvalidError();
@@ -923,6 +1155,7 @@ module.exports = {
   BLOCKED_ROOTS,
   DEFAULT_PROJECTS_ROOT,
   PROJECT_SUBDIRECTORIES,
+  PROJECT_SCAFFOLD_STAGING_DIRECTORY,
   PROJECT_STORE_LOCK_DIRECTORY,
   assertSafeRuntimePath,
   createProjectScaffold,
@@ -930,6 +1163,11 @@ module.exports = {
   ensureSafeProjectsRoot,
   listProjects,
   normalizeCanonicalProjectPort,
+  PROJECT_NETWORK_ALLOCATION_SCHEMA,
+  PROJECT_NETWORK_ALLOCATION_VERSION,
+  PROJECT_NETWORK_POOL,
+  normalizeProjectNetworkAllocation,
+  allocateProjectNetwork,
   parseEnvFile,
   writeEnvFile,
   readProjectBySlug,

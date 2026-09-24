@@ -1,5 +1,41 @@
 "use strict";
 
+const PROJECT_NETWORK_ALLOCATION_SCHEMA = "factory_project_network_allocation";
+const PROJECT_NETWORK_ALLOCATION_VERSION = 1;
+const PROJECT_NETWORK_POOL = Object.freeze([
+  "10.252.254.0/24",
+  "10.252.255.0/24"
+]);
+
+function normalizeProjectNetworkAllocation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length !== 3
+    || value.schema !== PROJECT_NETWORK_ALLOCATION_SCHEMA
+    || value.version !== PROJECT_NETWORK_ALLOCATION_VERSION
+    || typeof value.subnet !== "string"
+    || !PROJECT_NETWORK_POOL.includes(value.subnet)) {
+    throw new Error("Project network allocation is invalid.");
+  }
+  return {
+    schema: PROJECT_NETWORK_ALLOCATION_SCHEMA,
+    version: PROJECT_NETWORK_ALLOCATION_VERSION,
+    subnet: value.subnet
+  };
+}
+
+function sameProjectNetworkAllocation(left, right) {
+  const leftDeclared = left !== undefined;
+  const rightDeclared = right !== undefined;
+  if (leftDeclared !== rightDeclared) return false;
+  if (!leftDeclared) return true;
+  try {
+    return JSON.stringify(normalizeProjectNetworkAllocation(left))
+      === JSON.stringify(normalizeProjectNetworkAllocation(right));
+  } catch (_) {
+    return false;
+  }
+}
+
 function createEnvFile(project) {
   return [
     "# Alpha local runtime credentials. Do not use for production.",
@@ -15,8 +51,11 @@ function createEnvFile(project) {
   ].join("\n");
 }
 
-function createDockerCompose() {
-  return [
+function createDockerCompose(project) {
+  const allocation = project && Object.prototype.hasOwnProperty.call(project, "network_allocation")
+    ? normalizeProjectNetworkAllocation(project.network_allocation)
+    : null;
+  const lines = [
     "services:",
     "  mysql:",
     "    image: mysql:8.0",
@@ -58,12 +97,29 @@ function createDockerCompose() {
     "      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}",
     "    volumes:",
     "      - ./wordpress:/var/www/html",
-    "      - ./runtime-binding-v1.json:/run/csf/project-binding.json:ro",
-    ""
-  ].join("\n");
+    "      - ./runtime-binding-v1.json:/run/csf/project-binding.json:ro"
+  ];
+
+  if (allocation) {
+    lines.push(
+      "networks:",
+      "  default:",
+      "    ipam:",
+      "      config:",
+      "        - subnet: " + allocation.subnet
+    );
+  }
+
+  lines.push("");
+  return lines.join("\n");
 }
 
 module.exports = {
   createDockerCompose,
-  createEnvFile
+  createEnvFile,
+  PROJECT_NETWORK_ALLOCATION_SCHEMA,
+  PROJECT_NETWORK_ALLOCATION_VERSION,
+  PROJECT_NETWORK_POOL,
+  normalizeProjectNetworkAllocation,
+  sameProjectNetworkAllocation
 };
