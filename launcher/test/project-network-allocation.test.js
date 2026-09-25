@@ -292,11 +292,27 @@ test("Provision network preflight fails closed before Docker mutation on missing
   );
 });
 
-test("network observation parsers reject malformed data and use CIDR overlap rather than string equality", () => {
+test("network observation parsers accept only exact subnetless Docker built-ins and reject spoofed or malformed networks", () => {
   assert.equal(cidrsOverlap("10.252.254.0/24", "10.252.254.0/23"), true);
   assert.equal(cidrsOverlap("10.252.254.0/24", "10.252.255.0/24"), false);
-  assert.deepEqual(parseDockerNetworkSubnets(JSON.stringify([{ IPAM: { Config: [{ Subnet: "10.252.254.0/24" }] } }])), ["10.252.254.0/24"]);
+  assert.deepEqual(parseDockerNetworkSubnets(JSON.stringify([
+    { Name: "host", Driver: "host", IPAM: { Driver: "default", Options: null, Config: null } },
+    { Name: "none", Driver: "null", IPAM: { Driver: "default", Options: null } },
+    { Name: "bridge", Driver: "bridge", IPAM: { Config: [{ Subnet: "10.252.254.0/24" }] } }
+  ])), ["10.252.254.0/24"]);
   assert.deepEqual(parseActiveRouteCidrs(JSON.stringify(["192.168.0.0/24"])), ["192.168.0.0/24"]);
   assert.throws(() => parseDockerNetworkSubnets("not-json"), (error) => error.code === "project_network_observation_invalid");
+  for (const network of [
+    { Name: "host", Driver: "bridge", IPAM: { Config: null } },
+    { Name: "none", Driver: "bridge", IPAM: { Config: null } },
+    { Name: "renamed-host", Driver: "host", IPAM: { Config: null } },
+    { Name: "custom", Driver: "bridge", IPAM: { Config: null } },
+    { Name: "bridge", Driver: "bridge", IPAM: { Config: [] } },
+    { Name: "bridge", Driver: "bridge", IPAM: { Config: [{}] } },
+    { Name: "host", Driver: "host" }
+  ]) {
+    assert.throws(() => parseDockerNetworkSubnets(JSON.stringify([network])),
+      (error) => error.code === "project_network_observation_invalid");
+  }
   assert.throws(() => parseActiveRouteCidrs(JSON.stringify([{ prefix: "10.0.0.0/8" }])), (error) => error.code === "project_network_observation_invalid");
 });

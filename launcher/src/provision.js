@@ -54,6 +54,19 @@ function cidrsOverlap(left, right) {
   return leftRange.start <= rightRange.end && rightRange.start <= leftRange.end;
 }
 
+function isExactSubnetlessDockerBuiltin(network) {
+  if (!network || typeof network !== "object" || Array.isArray(network)
+    || !network.IPAM || typeof network.IPAM !== "object" || Array.isArray(network.IPAM)) {
+    return false;
+  }
+  const expectedDriver = network.Name === "host" ? "host" : network.Name === "none" ? "null" : null;
+  if (!expectedDriver || network.Driver !== expectedDriver) {
+    return false;
+  }
+  const config = network.IPAM.Config;
+  return config === undefined || config === null || (Array.isArray(config) && config.length === 0);
+}
+
 function parseDockerNetworkSubnets(text) {
   let value;
   try {
@@ -67,15 +80,20 @@ function parseDockerNetworkSubnets(text) {
   const subnets = [];
   for (const network of value) {
     if (!network || typeof network !== "object" || Array.isArray(network)
-      || !network.IPAM || typeof network.IPAM !== "object" || Array.isArray(network.IPAM)
-      || !Array.isArray(network.IPAM.Config)) {
+      || !network.IPAM || typeof network.IPAM !== "object" || Array.isArray(network.IPAM)) {
+      throw projectNetworkPreflightError("project_network_observation_invalid");
+    }
+    if (isExactSubnetlessDockerBuiltin(network)) continue;
+    if (!Array.isArray(network.IPAM.Config) || network.IPAM.Config.length === 0) {
       throw projectNetworkPreflightError("project_network_observation_invalid");
     }
     for (const config of network.IPAM.Config) {
       if (!config || typeof config !== "object" || Array.isArray(config)) {
         throw projectNetworkPreflightError("project_network_observation_invalid");
       }
-      if (config.Subnet === undefined || config.Subnet === null || config.Subnet === "") continue;
+      if (typeof config.Subnet !== "string" || !config.Subnet) {
+        throw projectNetworkPreflightError("project_network_observation_invalid");
+      }
       subnets.push(parseIpv4Cidr(config.Subnet).value);
     }
   }
