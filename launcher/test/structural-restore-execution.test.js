@@ -34,6 +34,7 @@ const {
   executeManagedWebsiteRestore,
   extractTarArchive,
   importDatabaseArtifact,
+  isRestoreWorkRootClean,
   validateExecutionInput
 } = require("../src/structural-restore-execution");
 const {
@@ -259,6 +260,76 @@ function executionInjections(projectsRoot, slug, calls) {
   };
 }
 
+function viewingDateRestoreMetadata(fixture) {
+  return {
+    plan_id: fixture.plan.plan.plan_id,
+    restore_scope: "managed_website_same_project",
+    viewing_date_apply_operation_id: "op-2026-07-16T12-02-00-000Z-abcdef",
+    viewing_date_plan_id: "viewing-date-plan-12345678-1234-1234-1234-123456789abc",
+    viewing_date_project_binding_fingerprint: fixture.plan.plan.project_identity_fingerprint,
+    viewing_date_project_id: fixture.project.scaffold.project.project_id,
+    viewing_date_snapshot_id: fixture.source.snapshotId
+  };
+}
+
+function verifyExistingJournal(context, metadata) {
+  return {
+    schema: "csf_viewing_date_restore_verify_existing_journal",
+    version: 1,
+    operation_id: context.operationId,
+    project_slug: context.projectState.project.slug,
+    project_id: context.projectState.project.project_id,
+    project_binding_fingerprint: metadata.viewing_date_project_binding_fingerprint,
+    plan_id: metadata.viewing_date_plan_id,
+    snapshot_id: metadata.viewing_date_snapshot_id,
+    apply_operation_id: metadata.viewing_date_apply_operation_id,
+    phase: "health_recorded",
+    observation_nonce: "a".repeat(64),
+    b: {
+      credential_metadata_sha256: "b".repeat(64),
+      credential_hmac_sha256: "c".repeat(64),
+      application_password_identity_sha256: "d".repeat(64),
+      env_identity: { dev: 1, ino: 2, size: 3, sha256: "e".repeat(64) },
+      wp_config_sha256: "f".repeat(64),
+      surface: { replays: [], rates: [], other_factory_options: [] }
+    },
+    health: {
+      method: "GET",
+      route: "/factory/v1/agent/health",
+      project_slug: context.projectState.project.slug,
+      key_id: "factory-key",
+      request_id: "request-123",
+      expires_at: 1784203500
+    }
+  };
+}
+
+function writeVerifyExistingJournal(context, metadata, mutate) {
+  const journal = verifyExistingJournal(context, metadata);
+  if (typeof mutate === "function") {
+    mutate(journal);
+  }
+  writeFile(path.join(context.workRoot, "viewing-date-verify-existing.json"), JSON.stringify(journal) + "\n");
+}
+
+function writeCompletedRestoreJournal(workRoot, context) {
+  const project = context.projectState.project;
+  const restorePlan = context.restorePlan;
+  writeFile(path.join(workRoot, JOURNAL_FILENAME), JSON.stringify({
+    journal_schema_version: 1,
+    operation_id: context.operation.operation_id,
+    project_slug: project.slug,
+    restore_plan_id: restorePlan.plan_id,
+    source_snapshot_id: restorePlan.snapshot_id,
+    verification_completed: true,
+    project_binding: {
+      slug: project.slug,
+      binding_key: project.slug + "-" + restorePlan.project_identity_fingerprint.slice(0, 16),
+      fingerprint: restorePlan.project_identity_fingerprint
+    }
+  }) + "\n");
+}
+
 async function setupReadyRestore(slug) {
   const projectsRoot = tempRoot();
   const project = createProject(projectsRoot, slug);
@@ -381,6 +452,132 @@ test("verify-existing Restore skips Agent repair and executes B, one health, the
   assert.equal(result.operation.status, "succeeded");
   assert.deepEqual(calls.filter((value) => ["B", "health", "C"].includes(value)), ["health", "B", "C"]);
   assert.equal(calls.includes("agent"), false);
+});
+
+test("verify-existing cleanup retains only the exact operation-bound C journal after completed verification", async () => {
+  const slug = "exec-verify-existing-cleanup";
+  const fixture = await setupReadyRestore(slug);
+  const calls = [];
+  const metadata = viewingDateRestoreMetadata(fixture);
+  const result = await executeManagedWebsiteRestore(Object.assign({}, executionInjections(fixture.projectsRoot, slug, calls), {
+    projectsRoot: fixture.projectsRoot,
+    projectSlug: slug,
+    planId: fixture.plan.plan.plan_id,
+    exactConfirmation: fixture.plan.plan.confirmation.phrase,
+    idempotencyKey: "restore-exec-key-verify-existing-cleanup-0001",
+    operationType: "viewing_date_restore",
+    operationMetadata: metadata,
+    agentAuthorityMode: "verify_existing",
+    agentRepairer: async () => { throw new Error("verify-existing must not repair Agent authority"); },
+    healthVerifier: async (input) => {
+      calls.push("health");
+      await input.beforeSignedHealthObserver();
+      await input.signedHealthObserver({ method: "GET", route: "/factory/v1/agent/health", project_slug: slug, key_id: "factory-key", request_id: "request-123", expires_at: 1784203500 });
+      return { wordpress: "ok", wp_json: "ok", mysql: "running", signed_agent: "ok" };
+    },
+    beforeSignedHealthObserver: async () => { calls.push("B"); },
+    signedHealthObserver: async () => { calls.push("C"); },
+    postRestoreVerifier: async (context) => {
+      writeVerifyExistingJournal(context, metadata);
+      return { verified: true };
+    }
+  }));
+
+  const workRoot = path.join(fixture.project.scaffold.project.runtime_path, RESTORE_WORK_DIRECTORY, result.operation.operation_id);
+  const journal = JSON.parse(fs.readFileSync(path.join(workRoot, JOURNAL_FILENAME), "utf8"));
+  assert.equal(result.operation.status, "succeeded");
+  assert.deepEqual(calls.filter((value) => ["B", "health", "C"].includes(value)), ["health", "B", "C"]);
+  assert.equal(calls.includes("agent"), false);
+  assert.equal(journal.verification_completed, true);
+  assert.equal(fs.existsSync(path.join(workRoot, "viewing-date-verify-existing.json")), true);
+});
+
+test("verify-existing cleanup journal is exact, lineage-bound, and fail-closed", () => {
+  const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-restore-verify-existing-cleanup-"));
+  const metadata = {
+    plan_id: "restore-plan-2026-07-16t12-00-00-000z-abcdef",
+    restore_scope: "managed_website_same_project",
+    viewing_date_apply_operation_id: "op-2026-07-16T12-02-00-000Z-abcdef",
+    viewing_date_plan_id: "viewing-date-plan-12345678-1234-1234-1234-123456789abc",
+    viewing_date_project_binding_fingerprint: "a".repeat(64),
+    viewing_date_project_id: "project-123",
+    viewing_date_snapshot_id: "snapshot-2026-07-16t12-00-00-000z-abcdef"
+  };
+  const context = {
+    agentAuthorityMode: "verify_existing",
+    operation: { operation_id: "op-2026-07-16T12-03-00-000Z-abcdef", operation_type: "viewing_date_restore", metadata },
+    projectState: { project: { slug: "verify-existing-cleanup", project_id: "project-123" } },
+    restorePlan: { plan_id: metadata.plan_id, snapshot_id: metadata.viewing_date_snapshot_id, project_identity_fingerprint: metadata.viewing_date_project_binding_fingerprint },
+    workRoot
+  };
+  writeCompletedRestoreJournal(workRoot, context);
+  writeVerifyExistingJournal(Object.assign({ operationId: context.operation.operation_id, projectState: context.projectState }, context), metadata);
+  assert.equal(isRestoreWorkRootClean(workRoot, context), true);
+
+  writeFile(path.join(workRoot, JOURNAL_FILENAME), "{}\n");
+  assert.equal(isRestoreWorkRootClean(workRoot, context), false, "malformed durable restore journal");
+  writeCompletedRestoreJournal(workRoot, context);
+  const incompleteRestoreJournal = JSON.parse(fs.readFileSync(path.join(workRoot, JOURNAL_FILENAME), "utf8"));
+  incompleteRestoreJournal.verification_completed = false;
+  writeFile(path.join(workRoot, JOURNAL_FILENAME), JSON.stringify(incompleteRestoreJournal) + "\n");
+  assert.equal(isRestoreWorkRootClean(workRoot, context), false, "durable restore verification incomplete");
+  writeCompletedRestoreJournal(workRoot, context);
+
+  const cases = [
+    ["cross operation", (value) => { value.operation_id = "op-2026-07-16T12-04-00-000Z-abcdef"; }],
+    ["cross project", (value) => { value.project_slug = "other-project"; }],
+    ["cross plan", (value) => { value.plan_id = "viewing-date-plan-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"; }],
+    ["cross snapshot", (value) => { value.snapshot_id = "snapshot-2026-07-16t12-05-00-000z-abcdef"; }],
+    ["cross Apply", (value) => { value.apply_operation_id = "op-2026-07-16T12-06-00-000Z-abcdef"; }],
+    ["malformed", (value) => { delete value.health; }],
+    ["malformed rate inventory", (value) => { value.b.surface.rates = [{ name: "factory_agent_rate_" + "a".repeat(64), autoload: "no" }]; }],
+    ["caller-shaped extra key", (value) => { value.caller_supplied = true; }]
+  ];
+  for (const [label, mutate] of cases) {
+    const candidate = verifyExistingJournal({ operationId: context.operation.operation_id, projectState: context.projectState }, metadata);
+    mutate(candidate);
+    fs.writeFileSync(path.join(workRoot, "viewing-date-verify-existing.json"), JSON.stringify(candidate) + "\n", "utf8");
+    assert.equal(isRestoreWorkRootClean(workRoot, context), false, label);
+  }
+
+  writeVerifyExistingJournal({ operationId: context.operation.operation_id, workRoot, projectState: context.projectState }, metadata);
+  writeFile(path.join(workRoot, "unexpected.json"), "{}\n");
+  assert.equal(isRestoreWorkRootClean(workRoot, context), false, "additional file");
+  fs.rmSync(path.join(workRoot, "unexpected.json"));
+  context.agentAuthorityMode = "generic_repair";
+  assert.equal(isRestoreWorkRootClean(workRoot, context), false, "generic Restore remains unchanged");
+});
+
+test("verify-existing malformed C journal leaves Restore terminal failed with manual recovery required", async () => {
+  const slug = "exec-verify-existing-cleanup-malformed";
+  const fixture = await setupReadyRestore(slug);
+  const metadata = viewingDateRestoreMetadata(fixture);
+  await assert.rejects(
+    () => executeManagedWebsiteRestore(Object.assign({}, executionInjections(fixture.projectsRoot, slug, []), {
+      projectsRoot: fixture.projectsRoot,
+      projectSlug: slug,
+      planId: fixture.plan.plan.plan_id,
+      exactConfirmation: fixture.plan.plan.confirmation.phrase,
+      idempotencyKey: "restore-exec-key-verify-existing-cleanup-malformed-0001",
+      operationType: "viewing_date_restore",
+      operationMetadata: metadata,
+      agentAuthorityMode: "verify_existing",
+      beforeSignedHealthObserver: async () => {},
+      signedHealthObserver: async () => {},
+      healthVerifier: async (input) => {
+        await input.beforeSignedHealthObserver();
+        await input.signedHealthObserver({ method: "GET", route: "/factory/v1/agent/health", project_slug: slug, key_id: "factory-key", request_id: "request-123", expires_at: 1784203500 });
+        return { wordpress: "ok", wp_json: "ok", mysql: "running", signed_agent: "ok" };
+      },
+      postRestoreVerifier: async (context) => {
+        writeVerifyExistingJournal(context, metadata, (journal) => { journal.operation_id = "op-2026-07-16T12-07-00-000Z-abcdef"; });
+        return { verified: true };
+      }
+    })), { code: "restore_cleanup_failed" }
+  );
+  const failed = listOperations({ projectsRoot: fixture.projectsRoot, slug }).find((entry) => entry.operation_type === "viewing_date_restore");
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.result_summary.manual_recovery_required, true);
 });
 
 test("coordinator carries the exact Restore operation ID from B to post-restore C verification", async () => {

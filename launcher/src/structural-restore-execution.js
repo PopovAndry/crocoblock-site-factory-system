@@ -58,6 +58,38 @@ const SERVICE_TIMEOUT_MS = 90000;
 const HEALTH_TIMEOUT_MS = 120000;
 const RESTORE_WORK_DIRECTORY = path.join("runs", "restore-work");
 const LIGHTWEIGHT_DB_RESCUE_FILENAME = "lightweight-database-rescue.sql";
+const VERIFY_EXISTING_JOURNAL_FILENAME = "viewing-date-verify-existing.json";
+const VERIFY_EXISTING_JOURNAL_SCHEMA = "csf_viewing_date_restore_verify_existing_journal";
+const VERIFY_EXISTING_JOURNAL_VERSION = 1;
+const RESTORE_JOURNAL_SCHEMA_VERSION = 1;
+const VIEWING_DATE_RESTORE_OPERATION_TYPE = "viewing_date_restore";
+const AGENT_CREDENTIAL_OPTION = "factory_agent_signed_auth_credentials";
+const AGENT_REPLAY_PREFIX = "factory_agent_replay_";
+const AGENT_RATE_PREFIX = "factory_agent_rate_";
+const VIEWING_DATE_RESTORE_METADATA_KEYS = [
+  "plan_id",
+  "restore_scope",
+  "viewing_date_apply_operation_id",
+  "viewing_date_plan_id",
+  "viewing_date_project_binding_fingerprint",
+  "viewing_date_project_id",
+  "viewing_date_snapshot_id"
+];
+const VERIFY_EXISTING_JOURNAL_KEYS = [
+  "apply_operation_id",
+  "b",
+  "health",
+  "observation_nonce",
+  "operation_id",
+  "phase",
+  "plan_id",
+  "project_binding_fingerprint",
+  "project_id",
+  "project_slug",
+  "schema",
+  "snapshot_id",
+  "version"
+];
 const FORBIDDEN_EXECUTION_KEYS = new Set([
   "plan",
   "snapshotPath",
@@ -170,11 +202,149 @@ function cleanupTree(targetPath) {
   }
 }
 
-function isRestoreWorkRootClean(workRoot) {
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value, keys) {
+  return isPlainObject(value) && Object.keys(value).sort().join(",") === keys.slice().sort().join(",");
+}
+
+function isHexDigest(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isSafeJournalFile(filePath) {
+  try {
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= 131072;
+  } catch (_) {
+    return false;
+  }
+}
+
+function areSortedUnique(entries) {
+  let previous = null;
+  for (const entry of entries) {
+    if (!isPlainObject(entry) || typeof entry.name !== "string" || !entry.name || previous !== null && previous >= entry.name) {
+      return false;
+    }
+    previous = entry.name;
+  }
+  return true;
+}
+
+function isCanonicalVerifyExistingSurface(surface) {
+  if (!hasExactKeys(surface, ["other_factory_options", "rates", "replays"])
+    || ![surface.other_factory_options, surface.rates, surface.replays].every(Array.isArray)
+    || ![surface.other_factory_options, surface.rates, surface.replays].every(areSortedUnique)) {
+    return false;
+  }
+  const replays = surface.replays.every((entry) => hasExactKeys(entry, ["autoload", "name", "value"])
+    && new RegExp("^" + AGENT_REPLAY_PREFIX + "[a-f0-9]{64}$").test(entry.name)
+    && /^[0-9]+$/.test(String(entry.value))
+    && typeof entry.autoload === "string");
+  const rates = surface.rates.every((entry) => hasExactKeys(entry, ["autoload", "name", "value"])
+    && new RegExp("^" + AGENT_RATE_PREFIX + "[a-f0-9]{64}$").test(entry.name)
+    && /^[1-9][0-9]{0,2}$/.test(String(entry.value)) && Number(entry.value) <= 600
+    && ["no", "off"].includes(entry.autoload));
+  const others = surface.other_factory_options.every((entry) => hasExactKeys(entry, ["autoload", "name", "value_sha256"])
+    && entry.name !== AGENT_CREDENTIAL_OPTION && !entry.name.startsWith(AGENT_REPLAY_PREFIX)
+    && isHexDigest(entry.value_sha256) && typeof entry.autoload === "string");
+  return replays && rates && others;
+}
+
+function isExactCompletedRestoreJournal(workRoot, context) {
+  const operation = context && context.operation;
+  const project = context && context.projectState && context.projectState.project;
+  const restorePlan = context && context.restorePlan;
+  const journalPath = path.join(workRoot, JOURNAL_FILENAME);
+  if (!operation || !project || !restorePlan || !isSafeJournalFile(journalPath)) {
+    return false;
+  }
+  try {
+    const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+    return isPlainObject(journal)
+      && journal.journal_schema_version === RESTORE_JOURNAL_SCHEMA_VERSION
+      && journal.operation_id === operation.operation_id
+      && journal.project_slug === project.slug
+      && journal.restore_plan_id === restorePlan.plan_id
+      && journal.source_snapshot_id === restorePlan.snapshot_id
+      && journal.verification_completed === true
+      && hasExactKeys(journal.project_binding, ["binding_key", "fingerprint", "slug"])
+      && journal.project_binding.slug === project.slug
+      && journal.project_binding.fingerprint === restorePlan.project_identity_fingerprint
+      && journal.project_binding.binding_key === project.slug + "-" + restorePlan.project_identity_fingerprint.slice(0, 16);
+  } catch (_) {
+    return false;
+  }
+}
+
+function isExactVerifyExistingJournal(value, context) {
+  const operation = context && context.operation;
+  const metadata = operation && operation.metadata;
+  const project = context && context.projectState && context.projectState.project;
+  const restorePlan = context && context.restorePlan;
+  if (!context || context.agentAuthorityMode !== "verify_existing"
+    || !operation || operation.operation_type !== VIEWING_DATE_RESTORE_OPERATION_TYPE
+    || !/^op-[a-z0-9-]+$/i.test(operation.operation_id)
+    || !hasExactKeys(metadata, VIEWING_DATE_RESTORE_METADATA_KEYS)
+    || metadata.restore_scope !== "managed_website_same_project"
+    || !project || !restorePlan
+    || metadata.plan_id !== restorePlan.plan_id
+    || metadata.viewing_date_snapshot_id !== restorePlan.snapshot_id
+    || metadata.viewing_date_project_id !== project.project_id
+    || metadata.viewing_date_project_binding_fingerprint !== restorePlan.project_identity_fingerprint
+    || !isHexDigest(restorePlan.project_identity_fingerprint)
+    || !isExactCompletedRestoreJournal(context.workRoot, context)
+    || !/^viewing-date-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(metadata.viewing_date_plan_id)
+    || !/^op-[a-z0-9-]+$/i.test(metadata.viewing_date_apply_operation_id)
+    || !isHexDigest(metadata.viewing_date_project_binding_fingerprint)
+    || !hasExactKeys(value, VERIFY_EXISTING_JOURNAL_KEYS)
+    || value.schema !== VERIFY_EXISTING_JOURNAL_SCHEMA
+    || value.version !== VERIFY_EXISTING_JOURNAL_VERSION
+    || value.operation_id !== operation.operation_id
+    || value.project_slug !== project.slug
+    || value.project_id !== project.project_id
+    || value.project_binding_fingerprint !== metadata.viewing_date_project_binding_fingerprint
+    || value.plan_id !== metadata.viewing_date_plan_id
+    || value.snapshot_id !== metadata.viewing_date_snapshot_id
+    || value.apply_operation_id !== metadata.viewing_date_apply_operation_id
+    || value.phase !== "health_recorded"
+    || !isHexDigest(value.observation_nonce)
+    || !hasExactKeys(value.b, ["application_password_identity_sha256", "credential_hmac_sha256", "credential_metadata_sha256", "env_identity", "surface", "wp_config_sha256"])
+    || ![value.b.application_password_identity_sha256, value.b.credential_hmac_sha256, value.b.credential_metadata_sha256, value.b.wp_config_sha256].every(isHexDigest)
+    || !hasExactKeys(value.b.env_identity, ["dev", "ino", "sha256", "size"])
+    || !Number.isInteger(value.b.env_identity.dev) || !Number.isInteger(value.b.env_identity.ino) || !Number.isInteger(value.b.env_identity.size) || value.b.env_identity.size < 0 || !isHexDigest(value.b.env_identity.sha256)
+    || !isCanonicalVerifyExistingSurface(value.b.surface)
+    || !hasExactKeys(value.health, ["expires_at", "key_id", "method", "project_slug", "request_id", "route"])
+    || value.health.method !== "GET" || value.health.route !== "/factory/v1/agent/health" || value.health.project_slug !== project.slug
+    || typeof value.health.key_id !== "string" || !value.health.key_id || typeof value.health.request_id !== "string" || !value.health.request_id || !Number.isInteger(value.health.expires_at)) {
+    return false;
+  }
+  return true;
+}
+
+function isRestoreWorkRootClean(workRoot, verifyExistingContext) {
   if (!fs.existsSync(workRoot)) {
     return true;
   }
-  return fs.readdirSync(workRoot).every((entry) => entry === JOURNAL_FILENAME);
+  const entries = fs.readdirSync(workRoot);
+  if (entries.every((entry) => entry === JOURNAL_FILENAME)) {
+    return true;
+  }
+  if (entries.length !== 2 || !entries.includes(JOURNAL_FILENAME) || !entries.includes(VERIFY_EXISTING_JOURNAL_FILENAME)) {
+    return false;
+  }
+  const verifyExistingPath = path.join(workRoot, VERIFY_EXISTING_JOURNAL_FILENAME);
+  if (!isSafeJournalFile(verifyExistingPath)) {
+    return false;
+  }
+  try {
+    return isExactVerifyExistingJournal(JSON.parse(fs.readFileSync(verifyExistingPath, "utf8")), verifyExistingContext);
+  } catch (_) {
+    return false;
+  }
 }
 
 function safeMkdir(dirPath) {
@@ -1132,7 +1302,13 @@ async function executeRestoreInCoordinator(context, options) {
     } catch (cleanupError) {
       throw createRestoreExecutionError("restore_cleanup_failed", "Restore cleanup failed.", 500);
     }
-    const cleanupOk = !fs.existsSync(rollbackRoot) && !fs.existsSync(stagingRoot) && isRestoreWorkRootClean(workRoot);
+    const cleanupOk = !fs.existsSync(rollbackRoot) && !fs.existsSync(stagingRoot) && isRestoreWorkRootClean(workRoot, {
+      agentAuthorityMode: options.agentAuthorityMode,
+      operation: context.operation,
+      projectState,
+      restorePlan: loaded.plan,
+      workRoot
+    });
     if (!cleanupOk) {
       throw createRestoreExecutionError("restore_cleanup_failed", "Restore cleanup failed.", 500);
     }
@@ -1353,6 +1529,7 @@ module.exports = {
   executeRestoreInCoordinator,
   extractTarArchive,
   importDatabaseArtifact,
+  isRestoreWorkRootClean,
   promoteFilesystem,
   resultFromSummary,
   validateExecutionInput,
