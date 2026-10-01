@@ -171,6 +171,14 @@ test("controls search trash explicitly and block duplicate or ownership conflict
 
 test("fixture baseline and form are runtime-bound, idempotent, and preflight conflicts before writes", () => {
   const { baseline } = policyBehavior();
+	assert.deepEqual(baseline.route_rule_parser, {
+		native_short: true,
+		native_matches: true,
+		short_suffix: false,
+		matches_suffix: false,
+		wrong_capture: false,
+		wrong_query_var: false
+	});
   assert.deepEqual(baseline.base_twice, baseline.base_once);
   assert.equal(baseline.base_no_repeat_mutation, true);
 	assert.equal(baseline.route_flushes_after_base_once, 1, "a fresh fixture performs one native soft rewrite flush");

@@ -14,10 +14,12 @@ $fixture_form_records_count = 0;
 $fixture_form_records_verify = true;
 $fixture_route_flushes = 0;
 $fixture_route_flush_updates = true;
+$fixture_rewrite_query = 'index.php?property=$1';
 
 final class Fixture_Rewrite {
 	public function rewrite_rules(): array {
-		return [ 'property/([^/]+)/?$' => 'index.php?property=$matches[1]' ];
+		global $fixture_rewrite_query;
+		return [ 'property/([^/]+)/?$' => $fixture_rewrite_query ];
 	}
 }
 
@@ -162,6 +164,21 @@ if ( getenv( 'FIXTURE_FORM_RECORDS_TEST_MODE' ) ) {
 
 $content = 'factory form content';
 $sha = hash( 'sha256', $content );
+$route_rule_parser = [];
+foreach ( [
+	'native_short' => 'index.php?property=$1',
+	'native_matches' => 'index.php?property=$matches[1]',
+	'short_suffix' => 'index.php?property=$1suffix',
+	'matches_suffix' => 'index.php?property=$matches[1]suffix',
+	'wrong_capture' => 'index.php?property=$2',
+	'wrong_query_var' => 'index.php?other=$1',
+] as $key => $query ) {
+	$route_rule_parser[ $key ] = factory_request_viewing_before_v1_property_route_rule_exists(
+		[ 'property/([^/]+)/?$' => $query ],
+		'property',
+		'property'
+	);
+}
 $fixture_posts = [
 	13 => (object) [ 'ID' => 13, 'post_type' => 'jet-form-builder', 'post_status' => 'publish', 'post_content' => $content, 'post_name' => 'factory-request-viewing-before-v1' ],
 	6 => (object) [ 'ID' => 6, 'post_type' => 'property', 'post_status' => 'publish', 'post_content' => '', 'post_name' => 'property-a' ],
@@ -333,6 +350,7 @@ echo json_encode( [
 		'malformed_entities_no_mutation' => $malformed_entities_no_mutation,
 	],
 	'baseline' => [
+		'route_rule_parser' => $route_rule_parser,
 		'base_once' => $base_once,
 		'base_twice' => $base_twice,
 		'base_no_repeat_mutation' => $base_no_repeat_mutation,

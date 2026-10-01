@@ -343,7 +343,7 @@ function factory_request_viewing_before_v1_property_route_rule_exists( array $ru
 	foreach ( $rules as $pattern => $query ) {
 		if ( ! is_string( $pattern ) || ! is_string( $query )
 			|| false === strpos( $pattern, $route_slug )
-			|| ! preg_match( '/(?:^|[?&])' . preg_quote( $query_var, '/' ) . '=\\$matches\\[\\d+\\]/', $query ) ) {
+			|| ! preg_match( '/(?:^|[?&])' . preg_quote( $query_var, '/' ) . '=(?:\\$matches\\[1\\]|\\$1)(?:&|$)/', $query ) ) {
 			continue;
 		}
 		return true;
