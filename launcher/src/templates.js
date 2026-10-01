@@ -4,7 +4,8 @@ const PROJECT_NETWORK_ALLOCATION_SCHEMA = "factory_project_network_allocation";
 const PROJECT_NETWORK_ALLOCATION_VERSION = 1;
 const PROJECT_NETWORK_POOL = Object.freeze([
   "10.252.254.0/24",
-  "10.252.255.0/24"
+  "10.252.255.0/24",
+  "10.252.253.0/24"
 ]);
 
 function normalizeProjectNetworkAllocation(value) {
