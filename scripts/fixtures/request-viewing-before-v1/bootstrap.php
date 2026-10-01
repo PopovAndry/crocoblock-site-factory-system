@@ -339,6 +339,66 @@ function factory_request_viewing_before_v1_repair_actions(): array {
 	return [ 'form_id' => $form_id, 'actions' => get_post_meta( $form_id, '_jf_actions', true ) ];
 }
 
+function factory_request_viewing_before_v1_property_route_rule_exists( array $rules, string $route_slug, string $query_var ): bool {
+	foreach ( $rules as $pattern => $query ) {
+		if ( ! is_string( $pattern ) || ! is_string( $query )
+			|| false === strpos( $pattern, $route_slug )
+			|| ! preg_match( '/(?:^|[?&])' . preg_quote( $query_var, '/' ) . '=\\$matches\\[\\d+\\]/', $query ) ) {
+			continue;
+		}
+		return true;
+	}
+	return false;
+}
+
+function factory_request_viewing_before_v1_property_routes_ready( array $entities ): bool {
+	global $wp_rewrite;
+	$post_type = get_post_type_object( 'property' );
+	$rewrite = is_object( $post_type ) ? ( $post_type->rewrite ?? null ) : null;
+	$route_slug = is_array( $rewrite ) ? ( $rewrite['slug'] ?? null ) : null;
+	$query_var = is_object( $post_type ) ? ( $post_type->query_var ?? null ) : null;
+	if ( ! is_object( $wp_rewrite ) || ! $post_type || empty( $post_type->public ) || empty( $post_type->publicly_queryable )
+		|| ! is_string( $route_slug ) || '' === trim( $route_slug, '/' )
+		|| ! is_string( $query_var ) || '' === $query_var
+		|| ! method_exists( $wp_rewrite, 'rewrite_rules' ) || ! function_exists( 'url_to_postid' ) ) {
+		throw new RuntimeException( 'fixture_property_route_registration_invalid' );
+	}
+	$route_slug = trim( $route_slug, '/' );
+	$generated_rules = $wp_rewrite->rewrite_rules();
+	if ( ! is_array( $generated_rules ) || ! factory_request_viewing_before_v1_property_route_rule_exists( $generated_rules, $route_slug, $query_var ) ) {
+		throw new RuntimeException( 'fixture_property_route_generation_invalid' );
+	}
+	$persisted_rules = get_option( 'rewrite_rules', [] );
+	if ( ! is_array( $persisted_rules ) || ! factory_request_viewing_before_v1_property_route_rule_exists( $persisted_rules, $route_slug, $query_var ) ) {
+		return false;
+	}
+	foreach ( [ 'property_a', 'property_b' ] as $key ) {
+		$id = $entities[ $key ] ?? null;
+		$post = is_int( $id ) && $id > 0 ? get_post( $id ) : null;
+		$url = $post ? get_permalink( $id ) : '';
+		$path = is_string( $url ) ? wp_parse_url( $url, PHP_URL_PATH ) : null;
+		if ( ! $post || 'property' !== $post->post_type || 'publish' !== $post->post_status
+			|| ! is_string( $path ) || 0 !== strpos( trim( $path, '/' ) . '/', $route_slug . '/' )
+			|| $id !== (int) url_to_postid( $url ) ) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function factory_request_viewing_before_v1_require_property_routes( array $entities ): void {
+	if ( factory_request_viewing_before_v1_property_routes_ready( $entities ) ) {
+		return;
+	}
+	if ( ! function_exists( 'flush_rewrite_rules' ) ) {
+		throw new RuntimeException( 'fixture_property_route_flush_unavailable' );
+	}
+	flush_rewrite_rules( false );
+	if ( ! factory_request_viewing_before_v1_property_routes_ready( $entities ) ) {
+		throw new RuntimeException( 'fixture_property_routes_unavailable' );
+	}
+}
+
 function factory_request_viewing_before_v1_base(): array {
 	factory_request_viewing_before_v1_require_runtime();
 	$stored = get_option( 'factory_request_viewing_before_v1_entities', [] );
@@ -356,6 +416,7 @@ function factory_request_viewing_before_v1_base(): array {
 		$entities[ $key ] = factory_request_viewing_before_v1_entity_post( $definition[0], $definition[1], $definition[2], $definition[3], $preflight[ $key ] );
 	}
 	$entities = array_merge( $entities, factory_request_viewing_before_v1_controls( $control_preflight ) );
+	factory_request_viewing_before_v1_require_property_routes( $entities );
 	if ( $stored !== $entities ) {
 		update_option( 'factory_request_viewing_before_v1_entities', $entities, false );
 	}

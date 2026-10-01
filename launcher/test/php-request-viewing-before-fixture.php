@@ -12,6 +12,16 @@ $fixture_form_records_tables = [];
 $fixture_form_records_schema_mutations = 0;
 $fixture_form_records_count = 0;
 $fixture_form_records_verify = true;
+$fixture_route_flushes = 0;
+$fixture_route_flush_updates = true;
+
+final class Fixture_Rewrite {
+	public function rewrite_rules(): array {
+		return [ 'property/([^/]+)/?$' => 'index.php?property=$matches[1]' ];
+	}
+}
+
+$wp_rewrite = new Fixture_Rewrite();
 
 final class Fixture_Record_Model {
 	public static function table(): string { return 'wp_jet_fb_records'; }
@@ -49,13 +59,45 @@ function get_post_meta( $id, $key, $single = false ) { global $fixture_meta; ret
 function get_post_type( $id ) { $post = get_post( $id ); return $post ? $post->post_type : ''; }
 function get_post_status( $id ) { $post = get_post( $id ); return $post ? $post->post_status : ''; }
 function get_post_stati( $args = [], $output = 'names' ) { return [ 'publish', 'private', 'draft' ]; }
-function sanitize_title( $value ) { return strtolower( preg_replace( '/[^a-z0-9]+/', '-', $value ) ); }
+function sanitize_title( $value ) { return preg_replace( '/[^a-z0-9]+/', '-', strtolower( $value ) ); }
 function is_wp_error( $value ) { return false; }
-function post_type_exists( $type ) { return 'jet-form-builder' === $type; }
+function post_type_exists( $type ) { return in_array( $type, [ 'jet-form-builder', 'property' ], true ); }
+function get_post_type_object( $type ) {
+	if ( 'property' !== $type ) {
+		return null;
+	}
+	return (object) [ 'public' => true, 'publicly_queryable' => true, 'rewrite' => [ 'slug' => 'property', 'with_front' => false ], 'query_var' => 'property' ];
+}
 function get_post_field( $field, $id ) { $post = get_post( $id ); return $post && isset( $post->{ $field } ) ? $post->{ $field } : ''; }
 function wp_json_encode( $value, $flags = 0 ) { return json_encode( $value, $flags ); }
 function wp_slash( $value ) { return $value; }
-function get_permalink( $id ) { return 'https://fixture.test/?p=' . (int) $id; }
+function get_permalink( $id ) { $post = get_post( $id ); return $post && 'property' === $post->post_type ? 'https://fixture.test/property/' . $post->post_name . '/' : 'https://fixture.test/?p=' . (int) $id; }
+function wp_parse_url( $url, $component = -1 ) { return parse_url( $url, $component ); }
+function url_to_postid( $url ) {
+	global $fixture_posts, $fixture_options;
+	$rules = $fixture_options['rewrite_rules'] ?? [];
+	if ( ! is_array( $rules ) || ! isset( $rules['property/([^/]+)/?$'] ) ) {
+		return 0;
+	}
+	$path = trim( (string) parse_url( $url, PHP_URL_PATH ), '/' );
+	if ( ! preg_match( '#^property/([^/]+)$#', $path, $matches ) ) {
+		return 0;
+	}
+	foreach ( $fixture_posts as $post ) {
+		if ( 'property' === $post->post_type && 'publish' === $post->post_status && $matches[1] === $post->post_name ) {
+			return $post->ID;
+		}
+	}
+	return 0;
+}
+function flush_rewrite_rules( $hard = true ) {
+	global $fixture_mutations, $fixture_options, $fixture_route_flushes, $fixture_route_flush_updates, $wp_rewrite;
+	++$fixture_route_flushes;
+	if ( ! $hard && $fixture_route_flush_updates ) {
+		++$fixture_mutations['option'];
+		$fixture_options['rewrite_rules'] = $wp_rewrite->rewrite_rules();
+	}
+}
 function esc_url( $value ) { return $value; }
 function add_query_arg( $key, $value, $url ) { return $url . '&' . rawurlencode( $key ) . '=' . rawurlencode( (string) $value ); }
 function add_filter() { global $fixture_hooks; ++$fixture_hooks; }
@@ -209,8 +251,20 @@ unset( $fixture_posts[13], $fixture_meta[13], $fixture_options['factory_request_
 $before_base = $fixture_mutations;
 $base_once = factory_request_viewing_before_v1_base();
 $after_base = $fixture_mutations;
+$route_flushes_after_base_once = $fixture_route_flushes;
 $base_twice = factory_request_viewing_before_v1_base();
 $base_no_repeat_mutation = $after_base === $fixture_mutations;
+$base_no_repeat_route_flush = $route_flushes_after_base_once === $fixture_route_flushes;
+$property_routes_ready = [
+	'property_a' => (int) $base_once['property_a'] === url_to_postid( get_permalink( $base_once['property_a'] ) ),
+	'property_b' => (int) $base_once['property_b'] === url_to_postid( get_permalink( $base_once['property_b'] ) ),
+];
+$saved_rewrite_rules = $fixture_options['rewrite_rules'];
+$fixture_options['rewrite_rules'] = [];
+$fixture_route_flush_updates = false;
+try { factory_request_viewing_before_v1_require_property_routes( $base_once ); $property_routes_unavailable_error = ''; } catch ( Throwable $error ) { $property_routes_unavailable_error = $error->getMessage(); }
+$fixture_route_flush_updates = true;
+$fixture_options['rewrite_rules'] = $saved_rewrite_rules;
 
 $fixture_options['factory_request_viewing_before_v1_entities'] = [
 	'contact_id' => 8,
@@ -282,6 +336,10 @@ echo json_encode( [
 		'base_once' => $base_once,
 		'base_twice' => $base_twice,
 		'base_no_repeat_mutation' => $base_no_repeat_mutation,
+		'route_flushes_after_base_once' => $route_flushes_after_base_once,
+		'base_no_repeat_route_flush' => $base_no_repeat_route_flush,
+		'property_routes_ready' => $property_routes_ready,
+		'property_routes_unavailable_error' => $property_routes_unavailable_error,
 		'form_once' => $form_once,
 		'form_twice' => $form_twice,
 		'form_no_repeat_mutation' => $form_no_repeat_mutation,

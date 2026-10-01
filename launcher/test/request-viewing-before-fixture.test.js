@@ -173,6 +173,10 @@ test("fixture baseline and form are runtime-bound, idempotent, and preflight con
   const { baseline } = policyBehavior();
   assert.deepEqual(baseline.base_twice, baseline.base_once);
   assert.equal(baseline.base_no_repeat_mutation, true);
+	assert.equal(baseline.route_flushes_after_base_once, 1, "a fresh fixture performs one native soft rewrite flush");
+	assert.equal(baseline.base_no_repeat_route_flush, true, "existing persisted rules do not trigger another flush");
+	assert.deepEqual(baseline.property_routes_ready, { property_a: true, property_b: true });
+	assert.equal(baseline.property_routes_unavailable_error, "fixture_property_routes_unavailable");
   assert.deepEqual(baseline.form_twice, baseline.form_once);
   assert.equal(baseline.form_no_repeat_mutation, true);
   assert.deepEqual(baseline.form_once.form_records, baseline.form_records_first);
