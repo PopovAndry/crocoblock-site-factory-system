@@ -8,7 +8,7 @@ const { listOperations } = require("./project-operation-store");
 const { deriveProjectBinding } = require("./structural-snapshot-store");
 const { createRestorePlan } = require("./structural-restore-plan");
 const { executeManagedWebsiteRestore, extractTarArchive } = require("./structural-restore-execution");
-const { prepareViewingDateAuthority, assertAfter, assertBaseline, nativeRead } = require("./viewing-date-apply");
+const { prepareViewingDateAuthority, assertAfter, assertBaseline, assertRecordsObservation, nativeRead } = require("./viewing-date-apply");
 const { exactProjectMetadata } = require("./viewing-date-preview");
 const { runCommand } = require("./runtime-tools");
 const { requireAgentSigningCredential } = require("./agent-credential-store");
@@ -23,6 +23,8 @@ const AGENT_RATE_PREFIX = "factory_agent_rate_";
 const VERIFY_EXISTING_JOURNAL_SCHEMA = "csf_viewing_date_restore_verify_existing_journal";
 const VERIFY_EXISTING_JOURNAL_VERSION = 1;
 const VERIFY_EXISTING_JOURNAL_FILENAME = "viewing-date-verify-existing.json";
+const SUBMISSION_RECEIPTS_SCHEMA = "csf_viewing_date_submission_receipts";
+const SUBMISSION_RECEIPTS_VERSION = 1;
 
 function fail(code, message, statusCode) {
   const error = new Error(message || "Viewing-date Restore cannot proceed safely.");
@@ -67,14 +69,134 @@ function writeJsonAtomic(filePath, value) {
   }
 }
 
+function writeJsonNewAtomic(filePath, value) {
+  const temporary = filePath + ".tmp-" + process.pid + "-" + crypto.randomBytes(3).toString("hex");
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value) + "\n", { encoding: "utf8", flag: "wx" });
+    fs.linkSync(temporary, filePath);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
+function submissionReceiptDirectory(projectState) {
+  const directory = path.join(projectState.runtimePath, "proofs", "viewing-date-preview-v1", "submission-receipts");
+  fs.mkdirSync(directory, { recursive: true });
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail("viewing_date_restore_submission_receipts_unsafe", "Submission evidence could not be stored safely.");
+  return directory;
+}
+
+function canonicalSubmissionReceipts(receipts, formId) {
+  if (!Array.isArray(receipts) || receipts.length !== 2) throw fail("viewing_date_restore_submission_receipts_invalid", "Submission evidence could not be verified safely.");
+  const result = [];
+  let previousRecordId = 0;
+  const properties = new Set();
+  let present = 0;
+  let absent = 0;
+  for (const receipt of receipts) {
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
+      || Object.keys(receipt).sort().join(",") !== "form_id,preferred_date_state,property_id,record_id,status,submit_type"
+      || !Number.isSafeInteger(receipt.record_id) || receipt.record_id <= previousRecordId
+      || receipt.form_id !== formId || !Number.isSafeInteger(receipt.property_id) || receipt.property_id <= 0 || properties.has(receipt.property_id)
+      || receipt.status !== "success" || receipt.submit_type !== "ajax" || !["present", "absent"].includes(receipt.preferred_date_state)) {
+      throw fail("viewing_date_restore_submission_receipts_invalid", "Submission evidence could not be verified safely.");
+    }
+    previousRecordId = receipt.record_id;
+    properties.add(receipt.property_id);
+    if (receipt.preferred_date_state === "present") present += 1;
+    else absent += 1;
+    result.push({ record_id: receipt.record_id, form_id: receipt.form_id, property_id: receipt.property_id, status: "success", submit_type: "ajax", preferred_date_state: receipt.preferred_date_state });
+  }
+  if (present !== 1 || absent !== 1) throw fail("viewing_date_restore_submission_receipts_invalid", "Submission evidence could not be verified safely.");
+  return result;
+}
+
+function submissionReceiptArtifact(prepared, receipts, records) {
+  const plan = prepared.authority.plan;
+  return {
+    schema: SUBMISSION_RECEIPTS_SCHEMA,
+    version: SUBMISSION_RECEIPTS_VERSION,
+    project_slug: prepared.projectState.project.slug,
+    project_id: prepared.projectState.project.project_id,
+    project_binding_fingerprint: plan.baseline.project_binding.fingerprint,
+    plan_id: plan.plan_id,
+    snapshot_id: prepared.authority.recovery.snapshot_id,
+    apply_operation_id: prepared.apply.operation_id,
+    records: { count: records.count, fingerprint: records.fingerprint },
+    receipts
+  };
+}
+
+function assertSubmissionReceiptArtifact(value, prepared) {
+  const plan = prepared.authority.plan;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== "apply_operation_id,plan_id,project_binding_fingerprint,project_id,project_slug,receipts,records,schema,snapshot_id,version"
+    || value.schema !== SUBMISSION_RECEIPTS_SCHEMA || value.version !== SUBMISSION_RECEIPTS_VERSION
+    || value.project_slug !== prepared.projectState.project.slug || value.project_id !== prepared.projectState.project.project_id
+    || value.project_binding_fingerprint !== plan.baseline.project_binding.fingerprint || value.plan_id !== plan.plan_id
+    || value.snapshot_id !== prepared.authority.recovery.snapshot_id || value.apply_operation_id !== prepared.apply.operation_id) {
+    throw fail("viewing_date_restore_submission_receipts_invalid", "Submission evidence could not be verified safely.");
+  }
+  if (!value.records || typeof value.records !== "object" || Array.isArray(value.records)
+    || Object.keys(value.records).sort().join(",") !== "count,fingerprint"
+    || value.records.count !== plan.baseline.records.count + 2 || typeof value.records.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.records.fingerprint)) {
+    throw fail("viewing_date_restore_submission_receipts_invalid", "Submission evidence could not be verified safely.");
+  }
+  return canonicalSubmissionReceipts(value.receipts, plan.baseline.form_id);
+}
+
+function captureSubmissionReceipts(prepared, observation) {
+  const currentRecords = assertRecordsObservation(observation && observation.records);
+  if (currentRecords.count !== prepared.authority.plan.baseline.records.count + 2) throw fail("viewing_date_restore_submission_receipts_invalid", "Submission evidence could not be verified safely.");
+  const receipts = canonicalSubmissionReceipts(currentRecords.submission_receipts, prepared.authority.plan.baseline.form_id);
+  const artifact = submissionReceiptArtifact(prepared, receipts, currentRecords);
+  const directory = submissionReceiptDirectory(prepared.projectState);
+  const filePath = path.join(directory, prepared.authority.plan.plan_id + ".json");
+  if (fs.existsSync(filePath)) {
+    let existing;
+    try { existing = JSON.parse(fs.readFileSync(filePath, "utf8")); } catch (_) { throw fail("viewing_date_restore_submission_receipts_invalid", "Submission evidence could not be verified safely."); }
+    if (!equal(assertSubmissionReceiptArtifact(existing, prepared), receipts)
+      || existing.records.count !== currentRecords.count || existing.records.fingerprint !== currentRecords.fingerprint) throw fail("viewing_date_restore_submission_receipts_drift", "Submission evidence changed before Restore.");
+    return artifact;
+  }
+  try {
+    writeJsonNewAtomic(filePath, artifact);
+  } catch (_) {
+    throw fail("viewing_date_restore_submission_receipts_write_failed", "Submission evidence could not be stored safely.");
+  }
+  return artifact;
+}
+
 function exactJournalSurface(surface) {
   assertAgentRepairSurface(surface, surface && surface.credential && surface.credential.credentials && surface.credential.credentials[0] && surface.credential.credentials[0].project_slug);
   return { replays: surface.replays, rates: surface.rates, other_factory_options: surface.other_factory_options };
 }
 
-function makeVerifyExistingJournal(context, checkpoint, nonce, preserved) {
+function healthAttempt(observation) {
+  if (!observation || typeof observation !== "object"
+    || Object.keys(observation).sort().join(",") !== "key_id,method,operation_id,project_slug,request_id,route,work_root"
+    || observation.method !== "GET" || observation.route !== "/factory/v1/agent/health"
+    || typeof observation.project_slug !== "string" || !observation.project_slug
+    || typeof observation.key_id !== "string" || !observation.key_id
+    || typeof observation.request_id !== "string" || !observation.request_id) {
+    throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
+  }
+  return {
+    method: observation.method,
+    route: observation.route,
+    project_slug: observation.project_slug,
+    key_id: observation.key_id,
+    request_id: observation.request_id,
+    state: "reserved"
+  };
+}
+
+function makeVerifyExistingJournal(context, checkpoint, nonce, preserved, attempt) {
   assertVerifyExistingObservation(checkpoint, context.projectSlug);
   if (!Buffer.isBuffer(nonce) || nonce.length !== 32) throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
+  const reservedAttempt = healthAttempt(attempt);
+  if (reservedAttempt.project_slug !== context.projectSlug) throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
   return {
     schema: VERIFY_EXISTING_JOURNAL_SCHEMA,
     version: VERIFY_EXISTING_JOURNAL_VERSION,
@@ -85,8 +207,9 @@ function makeVerifyExistingJournal(context, checkpoint, nonce, preserved) {
     plan_id: context.planId,
     snapshot_id: context.snapshotId,
     apply_operation_id: context.applyOperationId,
-    phase: "b_recorded",
+    phase: "health_reserved",
     observation_nonce: nonce.toString("hex"),
+    health_attempt: reservedAttempt,
     b: {
       credential_metadata_sha256: digest(checkpoint.surface.credential),
       credential_hmac_sha256: digest(checkpoint.credential_hmac[0]),
@@ -99,7 +222,7 @@ function makeVerifyExistingJournal(context, checkpoint, nonce, preserved) {
 }
 
 function assertVerifyExistingJournal(value, context, phase) {
-  const expectedKeys = ["apply_operation_id", "b", "health", "observation_nonce", "operation_id", "phase", "plan_id", "project_binding_fingerprint", "project_id", "project_slug", "schema", "snapshot_id", "version"];
+  const expectedKeys = ["apply_operation_id", "b", "health_attempt", "health", "observation_nonce", "operation_id", "phase", "plan_id", "project_binding_fingerprint", "project_id", "project_slug", "schema", "snapshot_id", "version"];
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value).sort().join(",") !== expectedKeys.filter((key) => key === "health" ? phase === "health_recorded" : true).sort().join(",")
     || value.schema !== VERIFY_EXISTING_JOURNAL_SCHEMA || value.version !== VERIFY_EXISTING_JOURNAL_VERSION
@@ -116,10 +239,21 @@ function assertVerifyExistingJournal(value, context, phase) {
     || typeof value.b.wp_config_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.b.wp_config_sha256)) {
     throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be verified safely.");
   }
+  if (!value.health_attempt || typeof value.health_attempt !== "object" || Array.isArray(value.health_attempt)
+    || Object.keys(value.health_attempt).sort().join(",") !== (phase === "health_recorded" ? "key_id,method,project_slug,request_id,response,route,state" : "key_id,method,project_slug,request_id,route,state")
+    || value.health_attempt.method !== "GET" || value.health_attempt.route !== "/factory/v1/agent/health"
+    || value.health_attempt.project_slug !== context.projectSlug || typeof value.health_attempt.key_id !== "string" || !value.health_attempt.key_id
+    || typeof value.health_attempt.request_id !== "string" || !value.health_attempt.request_id
+    || value.health_attempt.state !== (phase === "health_recorded" ? "response_recorded" : "reserved")
+    || phase === "health_recorded" && (!value.health_attempt.response || typeof value.health_attempt.response !== "object" || Array.isArray(value.health_attempt.response)
+      || Object.keys(value.health_attempt.response).sort().join(",") !== "signed_agent" || value.health_attempt.response.signed_agent !== "ok")) {
+    throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be verified safely.");
+  }
   assertAgentRepairSurface(Object.assign({ credential: { option_name: AGENT_CREDENTIAL_OPTION, credentials: [{ schema: "factory_agent_signing_credential", version: 1, contract_version: "journal", key_id: "journal", status: "active", created_at: "1970-01-01T00:00:00.000Z", revoked_at: null, capabilities: [], project_slug: context.projectSlug }] } }, value.b.surface), context.projectSlug);
   if (phase === "health_recorded" && (!value.health || typeof value.health !== "object" || Object.keys(value.health).sort().join(",") !== "expires_at,key_id,method,project_slug,request_id,route"
     || value.health.method !== "GET" || value.health.route !== "/factory/v1/agent/health" || value.health.project_slug !== context.projectSlug
-    || typeof value.health.key_id !== "string" || typeof value.health.request_id !== "string" || !Number.isInteger(value.health.expires_at))) {
+    || typeof value.health.key_id !== "string" || typeof value.health.request_id !== "string" || !Number.isInteger(value.health.expires_at)
+    || value.health.key_id !== value.health_attempt.key_id || value.health.request_id !== value.health_attempt.request_id)) {
     throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be verified safely.");
   }
   return value;
@@ -616,8 +750,9 @@ async function prepareViewingDateRestore(options) {
   const slug = validateExplicitSlug(options && options.slug);
   rejectCallerSuppliedRestoreAuthority(options);
   const prepared = await prepareViewingDateRestoreAuthority(Object.assign({}, options, { projectsRoot, slug }));
-  const observation = await (options.readNative || nativeRead)(prepared.projectState, { mode: "read" });
+  const observation = await (options.readNative || nativeRead)(prepared.projectState, { mode: "read", submission_receipt_baseline_count: prepared.authority.plan.baseline.records.count });
   assertPostApply(observation, prepared);
+  captureSubmissionReceipts(prepared, observation);
   return Object.assign({ observation }, prepared);
 }
 
@@ -684,13 +819,21 @@ async function restoreViewingDate(options) {
       assertApplicationPasswordIdentity(checkpoint.application_passwords);
       if (!Array.isArray(checkpoint.credential_hmac) || checkpoint.credential_hmac.length !== 1) throw fail("viewing_date_restore_agent_secret_mismatch", "Factory Agent credential could not be verified safely.");
       verifyCredentialChallenge(expectedAgentSecret, observationNonce, checkpoint.credential_hmac[0]);
-      writeVerifyExistingJournal(journalContext, makeVerifyExistingJournal(journalContext, checkpoint, observationNonce, { envIdentity: envBeforeRestore, wpConfigSha256: wpConfigBeforeRestore }));
+      const persist = options.writeVerifyExistingJournal || writeVerifyExistingJournal;
+      try {
+        persist(journalContext, makeVerifyExistingJournal(journalContext, checkpoint, observationNonce, { envIdentity: envBeforeRestore, wpConfigSha256: wpConfigBeforeRestore }, healthContext));
+      } catch (_) {
+        const failure = fail("viewing_date_restore_verification_journal_write_failed", "Restore verification evidence could not be stored safely.");
+        failure.manualRecoveryRequired = true;
+        throw failure;
+      }
     },
     signedHealthObserver: async (observation) => {
       const journalContext = restoreJournalContext(observation, prepared);
-      const journal = assertVerifyExistingJournal(readVerifyExistingJournal(journalContext), journalContext, "b_recorded");
+      const journal = assertVerifyExistingJournal(readVerifyExistingJournal(journalContext), journalContext, "health_reserved");
       journal.phase = "health_recorded";
       journal.health = { method: observation.method, route: observation.route, project_slug: observation.project_slug, key_id: observation.key_id, request_id: observation.request_id, expires_at: observation.expires_at };
+      journal.health_attempt = Object.assign({}, journal.health_attempt, { state: "response_recorded", response: { signed_agent: "ok" } });
       assertVerifyExistingJournal(journal, journalContext, "health_recorded");
       try {
         const persist = options.replaceVerifyExistingJournal || replaceVerifyExistingJournal;

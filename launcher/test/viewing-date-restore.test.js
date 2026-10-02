@@ -55,7 +55,7 @@ function observation(after, formId) {
     candidate_ids: [id], resolved_form_id: id, form_id: id, post_exists: true, post_type: "jet-form-builder", post_status: "publish", post_parent: 0, owner: "request_viewing_before_v1",
     form_content: content, form_sha256: sha, fields, actions: [{ type: "save_record" }],
     binding: { form_id: id, form_sha256: sha, email_field: "email", phone_field: "phone", property_field: "property_id", guard_field: "_factory_policy_guard", guard_value: "request_viewing_before_v1" },
-    records: after ? { count: 97, fingerprint: "3".repeat(64) } : { count: 95, fingerprint: "e".repeat(64) }, plugin_version: "3.6.5.1", policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14"
+    records: after ? { count: 2, fingerprint: "3".repeat(64) } : { count: 0, fingerprint: "e".repeat(64) }, plugin_version: "3.6.5.1", policy_sha256: "541167d3a80c45095ef9396741fb99dca90752e7f5d7edecadb991d01d188e14"
   };
 }
 
@@ -78,6 +78,11 @@ function fixture(slug, formId) {
   fs.writeFileSync(path.join(state.runtimePath, "wordpress", "wp-config.php"), "fixture-wp-config");
   const before = observation(false, formId);
   const after = observation(true, before.form_id);
+  const afterWithReceipts = clone(after);
+  afterWithReceipts.records.submission_receipts = [
+    { record_id: 1, form_id: after.form_id, property_id: 6, status: "success", submit_type: "ajax", preferred_date_state: "present" },
+    { record_id: 2, form_id: after.form_id, property_id: 7, status: "success", submit_type: "ajax", preferred_date_state: "absent" }
+  ];
   const planId = "viewing-date-plan-a3b7868a-4c58-4ec1-93ea-28dd8c9003ba";
   const snapshotId = "snapshot-2026-09-04t07-33-05-548z-cc33fa13cbce";
   const applyOperationId = "op-2026-09-06T13-49-59-817Z-1a5aa2";
@@ -97,7 +102,7 @@ function fixture(slug, formId) {
   const apply = { schema: "factory_project_operation", version: 1, operation_id: applyOperationId, project_slug: state.project.slug, operation_type: "viewing_date_apply", status: "succeeded", metadata: { plan_id: planId, project_id: state.project.project_id, project_binding_fingerprint: deriveProjectBinding(state.project).fingerprint, recovery_snapshot_id: snapshotId }, result_summary: { status: "applied", mutation_performed: true, plan_id: planId, records_before: clone(before.records), after_state: afterState(after) } };
   writeOperation(state, apply);
   const prepared = { projectsRoot, projectState: state, authority: { plan, recovery }, apply: Object.assign({ raw: apply }, apply) };
-  return { projectsRoot, state, plan, before, after, planId, snapshotId, applyOperationId, recovery, apply, prepared };
+  return { projectsRoot, state, plan, before, after, afterWithReceipts, planId, snapshotId, applyOperationId, recovery, apply, prepared };
 }
 
 function restoreMetadata(value) {
@@ -366,7 +371,7 @@ test("verify-existing reader accepts only canonical sanitized Agent observations
 
 test("same-project Restore invokes the verify-existing reader at B and C around one health observation", async () => {
   const value = fixture();
-  const current = { value: value.after };
+  const current = { value: value.afterWithReceipts };
   const credential = { schema: "factory_agent_signing_credential", version: 1, contract_version: "factory-agent-hmac-v1", key_id: "factory_agent_test", status: "active", created_at: "2026-09-01T00:00:00.000Z", revoked_at: null, capabilities: ["health.read"], project_slug: value.state.project.slug };
   const signed = { method: "GET", route: "/factory/v1/agent/health", project_slug: value.state.project.slug, key_id: credential.key_id, request_id: "restore-health-request-1", expires_at: 1780000000 };
   const beforeSurface = { credential: { option_name: "factory_agent_signed_auth_credentials", credentials: [credential] }, replays: [], rates: [], other_factory_options: [] };
@@ -392,15 +397,21 @@ test("same-project Restore invokes the verify-existing reader at B and C around 
     verifySurfaces: async () => {},
     executeRestore: async (request) => {
       await request.preRestoreVerifier();
+      const receipts = JSON.parse(fs.readFileSync(path.join(value.state.runtimePath, "proofs", "viewing-date-preview-v1", "submission-receipts", value.planId + ".json"), "utf8"));
+      assert.deepEqual(receipts.receipts, value.afterWithReceipts.records.submission_receipts);
+      assert.equal(JSON.stringify(receipts).includes("email"), false);
+      assert.equal(JSON.stringify(receipts).includes("message"), false);
       current.value = value.before;
-      await request.beforeSignedHealthObserver(Object.assign({}, signed, { operation_id: operationId, work_root: workRoot }));
+      await request.beforeSignedHealthObserver({ method: signed.method, route: signed.route, project_slug: signed.project_slug, key_id: signed.key_id, request_id: signed.request_id, operation_id: operationId, work_root: workRoot });
       const beforeHealthJournal = JSON.parse(fs.readFileSync(path.join(workRoot, "viewing-date-verify-existing.json"), "utf8"));
-      assert.equal(beforeHealthJournal.phase, "b_recorded");
+      assert.equal(beforeHealthJournal.phase, "health_reserved");
       assert.equal(Object.hasOwn(beforeHealthJournal, "health"), false);
+      assert.deepEqual(beforeHealthJournal.health_attempt, { method: "GET", route: "/factory/v1/agent/health", project_slug: value.state.project.slug, key_id: credential.key_id, request_id: signed.request_id, state: "reserved" });
       await request.signedHealthObserver(Object.assign({}, signed, { operation_id: operationId, work_root: workRoot }));
       const afterHealthJournal = JSON.parse(fs.readFileSync(path.join(workRoot, "viewing-date-verify-existing.json"), "utf8"));
       assert.equal(afterHealthJournal.phase, "health_recorded");
       assert.deepEqual(afterHealthJournal.health, signed);
+      assert.deepEqual(afterHealthJournal.health_attempt.response, { signed_agent: "ok" });
       const rawHmac = crypto.createHmac("sha256", "fixture-server-owned-secret").update(readerNonces[0], "utf8").digest("hex");
       assert.equal(JSON.stringify(afterHealthJournal).includes(rawHmac), false);
       assert.equal(JSON.stringify(afterHealthJournal).includes(JSON.stringify(passwords.entries)), false);
@@ -415,7 +426,7 @@ test("same-project Restore invokes the verify-existing reader at B and C around 
 
 test("health correlation I/O failure is terminal after one health and cannot create retry authority", async () => {
   const value = fixture();
-  const current = { value: value.after };
+  const current = { value: value.afterWithReceipts };
   const credential = { schema: "factory_agent_signing_credential", version: 1, contract_version: "factory-agent-hmac-v1", key_id: "factory_agent_test", status: "active", created_at: "2026-09-01T00:00:00.000Z", revoked_at: null, capabilities: ["health.read"], project_slug: value.state.project.slug };
   const beforeSurface = { credential: { option_name: "factory_agent_signed_auth_credentials", credentials: [credential] }, replays: [], rates: [], other_factory_options: [] };
   const passwords = { user_id: 1, count: 1, entries: [{ uuid: "app-1", app_id: "", name: "Factory Launcher", created: 1, last_used: null, last_ip: null }], structure_hmac: "e".repeat(64) };
@@ -435,9 +446,9 @@ test("health correlation I/O failure is terminal after one health and cannot cre
     executeRestore: async (request) => {
       await request.preRestoreVerifier();
       current.value = value.before;
-      await request.beforeSignedHealthObserver({ operation_id: "op-correlation-write-failure", work_root: workRoot });
+      await request.beforeSignedHealthObserver({ method: "GET", route: "/factory/v1/agent/health", project_slug: value.state.project.slug, key_id: credential.key_id, request_id: "health-correlation-write-failure", operation_id: "op-correlation-write-failure", work_root: workRoot });
       const bJournal = fs.readFileSync(path.join(workRoot, "viewing-date-verify-existing.json"), "utf8");
-      assert.match(bJournal, /"phase":"b_recorded"/);
+      assert.match(bJournal, /"phase":"health_reserved"/);
       assert.doesNotMatch(bJournal, /fixture-server-owned-secret|app-1/i);
       healthCalls += 1;
       await request.signedHealthObserver({ method: "GET", route: "/factory/v1/agent/health", project_slug: value.state.project.slug, key_id: credential.key_id, request_id: "health-correlation-write-failure", expires_at: 1780000000, operation_id: "op-correlation-write-failure", work_root: workRoot });
@@ -455,9 +466,81 @@ test("health correlation I/O failure is terminal after one health and cannot cre
   assert.equal(retryNativeCalls, 0);
 });
 
+test("a failed durable health-attempt reservation prevents signed health dispatch", async () => {
+  const value = fixture();
+  const current = { value: value.afterWithReceipts };
+  const credential = { schema: "factory_agent_signing_credential", version: 1, contract_version: "factory-agent-hmac-v1", key_id: "factory_agent_test", status: "active", created_at: "2026-09-01T00:00:00.000Z", revoked_at: null, capabilities: ["health.read"], project_slug: value.state.project.slug };
+  const surface = { credential: { option_name: "factory_agent_signed_auth_credentials", credentials: [credential] }, replays: [], rates: [], other_factory_options: [] };
+  const passwords = { user_id: 1, count: 1, entries: [{ uuid: "app-1", app_id: "", name: "Factory Launcher", created: 1, last_used: null, last_ip: null }], structure_hmac: "e".repeat(64) };
+  const failedOperationId = "op-2026-10-02T00-00-00-000Z-aabbcc";
+  const workRoot = path.join(value.state.runtimePath, "runs", "restore-work", failedOperationId);
+  fs.mkdirSync(workRoot, { recursive: true });
+  let healthCalls = 0;
+  await assert.rejects(() => restoreViewingDate(options(value, current, {
+    readVerifyExistingSurface: async (_state, nonce) => ({ surface: clone(surface), credential_hmac: [crypto.createHmac("sha256", "fixture-server-owned-secret").update(nonce.toString("hex"), "utf8").digest("hex")], application_passwords: clone(passwords) }),
+    writeVerifyExistingJournal: () => { throw new Error("disk full"); },
+    executeRestore: async (request) => {
+      await request.preRestoreVerifier();
+      current.value = value.before;
+      await request.beforeSignedHealthObserver({ method: "GET", route: "/factory/v1/agent/health", project_slug: value.state.project.slug, key_id: credential.key_id, request_id: "health-reservation-write-failure", operation_id: failedOperationId, work_root: workRoot });
+      healthCalls += 1;
+      return { operation: { status: "succeeded" } };
+    }
+  })), { code: "viewing_date_restore_verification_journal_write_failed" });
+  assert.equal(healthCalls, 0);
+  assert.equal(fs.existsSync(path.join(workRoot, "viewing-date-verify-existing.json")), false);
+  writeOperation(value.state, { schema: "factory_project_operation", version: 1, operation_id: failedOperationId, project_slug: value.state.project.slug, operation_type: "viewing_date_restore", status: "failed", metadata: restoreMetadata(value), result_summary: { manual_recovery_required: true } });
+  let retryEntered = false;
+  await assert.rejects(() => restoreViewingDate(options(value, { value: value.afterWithReceipts }, {
+    executeRestore: async (request) => { await request.postLockTerminalResolver(); retryEntered = true; return { operation: { status: "succeeded" } }; }
+  })), { code: "viewing_date_restore_prior_attempt_terminal" });
+  assert.equal(retryEntered, false);
+});
+
+test("malformed or duplicate native submission receipts block before Restore mutation", async () => {
+  for (const mutate of [
+    (receipts) => { receipts[1].record_id = receipts[0].record_id; },
+    (receipts) => { receipts[1].property_id = receipts[0].property_id; },
+    (receipts) => { receipts[0].preferred_date_state = "unknown"; }
+  ]) {
+    const value = fixture();
+    const current = { value: clone(value.afterWithReceipts) };
+    mutate(current.value.records.submission_receipts);
+    let mutationEntered = false;
+    const readInputs = [];
+    await assert.rejects(() => restoreViewingDate(options(value, current, {
+      readNative: async (_state, input) => { readInputs.push(input); return clone(current.value); },
+      executeRestore: async (request) => {
+        await request.preRestoreVerifier();
+        mutationEntered = true;
+        return { operation: { status: "succeeded" } };
+      }
+    })), { code: "viewing_date_restore_submission_receipts_invalid" });
+    assert.equal(mutationEntered, false);
+    assert.deepEqual(readInputs, [{ mode: "read", submission_receipt_baseline_count: value.plan.baseline.records.count }]);
+  }
+});
+
+test("an unrepresentable third native record makes the complete receipt graph unavailable", async () => {
+  const value = fixture();
+  const current = { value: clone(value.afterWithReceipts) };
+  current.value.records.count = 98;
+  current.value.records.fingerprint = "4".repeat(64);
+  current.value.records.submission_receipts = null;
+  let mutationEntered = false;
+  await assert.rejects(() => restoreViewingDate(options(value, current, {
+    executeRestore: async (request) => {
+      await request.preRestoreVerifier();
+      mutationEntered = true;
+      return { operation: { status: "succeeded" } };
+    }
+  })), { code: "viewing_date_restore_submission_receipts_invalid" });
+  assert.equal(mutationEntered, false);
+});
+
 test("checkpoint B failure prevents health and restored success", async () => {
   const value = fixture();
-  const current = { value: value.after };
+  const current = { value: value.afterWithReceipts };
   const wpRoot = path.join(value.state.runtimePath, "wordpress");
   fs.mkdirSync(wpRoot, { recursive: true });
   fs.writeFileSync(path.join(wpRoot, "wp-config.php"), "fixture-wp-config");
