@@ -67,18 +67,22 @@ test("project store atomically assigns every server-owned /24 allocation under c
     "10.252.254.0/24",
     "10.252.255.0/24",
     "10.252.253.0/24",
-    "10.252.252.0/24"
+    "10.252.252.0/24",
+    "10.251.254.0/24",
+    "10.251.255.0/24"
   ]);
   const results = await Promise.all([
     runScaffoldProcess(projectsRoot, "concurrent-network-a", 49201),
     runScaffoldProcess(projectsRoot, "concurrent-network-b", 49202),
     runScaffoldProcess(projectsRoot, "concurrent-network-c", 49203),
-    runScaffoldProcess(projectsRoot, "concurrent-network-d", 49204)
+    runScaffoldProcess(projectsRoot, "concurrent-network-d", 49204),
+    runScaffoldProcess(projectsRoot, "concurrent-network-e", 49205),
+    runScaffoldProcess(projectsRoot, "concurrent-network-f", 49206)
   ]);
   assert.equal(results.every((result) => result.ok), true);
 
   const inventory = readStrictProjectInventory(projectsRoot);
-  assert.equal(inventory.length, 4);
+  assert.equal(inventory.length, PROJECT_NETWORK_POOL.length);
   const allocations = inventory.map((record) => record.project.network_allocation.subnet).sort();
   assert.deepEqual(allocations, PROJECT_NETWORK_POOL.slice().sort());
 });
@@ -102,7 +106,9 @@ test("allocation rejects caller injection, fails closed on exhaustion, and is im
   create(projectsRoot, "network-second", 49205);
   create(projectsRoot, "network-third", 49206);
   create(projectsRoot, "network-fourth", 49212);
-  assert.throws(() => create(projectsRoot, "network-fifth", 49213), (error) => error.code === "project_network_allocation_exhausted");
+  create(projectsRoot, "network-fifth", 49213);
+  create(projectsRoot, "network-sixth", 49214);
+  assert.throws(() => create(projectsRoot, "network-seventh", 49215), (error) => error.code === "project_network_allocation_exhausted");
 
   const state = readProjectBySlug("network-first", projectsRoot);
   state.project.network_allocation = {
