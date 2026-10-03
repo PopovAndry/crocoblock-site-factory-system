@@ -22,15 +22,38 @@ function runCommand(command, args, options) {
   const sensitiveOutput = options.sensitiveOutput === true;
   const sensitiveCategory = String(options.sensitiveCategory || "sensitive-command");
   const outputLimitBytes = sensitiveOutput ? (options.outputLimitBytes || 131072) : Infinity;
+  const childProcessObserver = options.childProcessObserver && typeof options.childProcessObserver === "object"
+    ? options.childProcessObserver
+    : null;
+  const spawnProcess = typeof options.spawnProcess === "function" ? options.spawnProcess : spawn;
+
+  const notifyObserver = (method, value) => {
+    if (!childProcessObserver || typeof childProcessObserver[method] !== "function") {
+      return;
+    }
+    childProcessObserver[method](value);
+  };
 
   ensureDirectory(path.dirname(logPath));
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
+    let child;
+    try {
+      child = spawnProcess(command, args, {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+    } catch (error) {
+      try {
+        notifyObserver("onStartNotEstablished", error);
+      } catch (observerError) {
+        reject(observerError);
+        return;
+      }
+      reject(error);
+      return;
+    }
 
     let stdout = "";
     let stderr = "";
@@ -41,6 +64,8 @@ function runCommand(command, args, options) {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let outputExceeded = false;
+    let startAcknowledged = false;
+    let observerFailure = null;
 
     let sensitiveSummaryWritten = false;
     const writeSensitiveSummary = (status, code) => {
@@ -65,8 +90,30 @@ function runCommand(command, args, options) {
       resolve(result);
     };
 
+    child.on("spawn", () => {
+      startAcknowledged = true;
+      try {
+        notifyObserver("onStartAcknowledged");
+      } catch (error) {
+        observerFailure = error;
+        child.kill("SIGTERM");
+      }
+    });
+
     child.on("error", (error) => {
       writeSensitiveSummary("spawn_error", error && error.code || "unknown");
+      if (!startAcknowledged) {
+        try {
+          notifyObserver("onStartNotEstablished", error);
+        } catch (observerError) {
+          finish(observerError);
+          return;
+        }
+      }
+      if (observerFailure) {
+        finish(observerFailure);
+        return;
+      }
       if (error.code === "ENOENT") {
         finish(new Error(sensitiveOutput ? "Sensitive command unavailable." : "Command not found: " + command));
         return;
@@ -90,7 +137,19 @@ function runCommand(command, args, options) {
       if (stdoutBytes + stderrBytes > outputLimitBytes) { outputExceeded = true; child.kill("SIGTERM"); }
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
+      if (observerFailure) {
+        finish(observerFailure);
+        return;
+      }
+      if (startAcknowledged) {
+        try {
+          notifyObserver("onExit", { code, signal: signal || null });
+        } catch (error) {
+          finish(error);
+          return;
+        }
+      }
       const result = {
         code,
         stdout,

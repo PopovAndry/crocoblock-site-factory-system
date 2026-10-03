@@ -10,7 +10,7 @@ const { createProjectScaffold, readProjectBySlug } = require("../src/project-sto
 const { listOperations } = require("../src/project-operation-store");
 const { deriveProjectBinding } = require("../src/structural-snapshot-store");
 const { DATE_BLOCK, buildPatch, nativeFactsFromObservation } = require("../src/viewing-date-preview");
-const { applyViewingDate, assertBaseline, assertAfter, normalizeTarget, nativeScript } = require("../src/viewing-date-apply");
+const { applyViewingDate, assertBaseline, assertAfter, normalizeTarget, nativeScript, nativeRead, nativeCommand, createNativeWriteSpawnJournal, nativeWriteJournalPath } = require("../src/viewing-date-apply");
 
 function digest(value) { return crypto.createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex"); }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -250,4 +250,181 @@ test("Apply blocks this Preview after a failed attempt instead of retrying it", 
   };
   await assert.rejects(() => applyViewingDate(options), { code: "native_write_failed" });
   await assert.rejects(() => applyViewingDate(Object.assign({}, options, { idempotencyKey: "viewing-date-new-key-after-failure" })), { code: "viewing_date_apply_prior_attempt_terminal" });
+});
+
+function nativeWriteJournal(value) {
+  const root = path.join(value.state.runtimePath, "runs", "operations");
+  const files = fs.existsSync(root) ? fs.readdirSync(root).filter((name) => name.endsWith(".viewing-date-apply-native-write.jsonl")) : [];
+  assert.equal(files.length, 1);
+  return {
+    path: path.join(root, files[0]),
+    value: fs.readFileSync(path.join(root, files[0]), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+  };
+}
+
+function testJournalWriter(filePath, event, create) {
+  fs.writeFileSync(filePath, JSON.stringify(event) + "\n", { encoding: "utf8", flag: create ? "wx" : "a" });
+}
+
+test("production Apply persists a sanitized native-write lifecycle journal without sharing the read log", async () => {
+  const value = fixture("csf-st-viewing-spawn-journal-v1");
+  let current = clone(value.before);
+  let writes = 0;
+  const result = await applyViewingDate({
+    projectsRoot: value.projectsRoot,
+    slug: value.state.project.slug,
+    planId: value.planId,
+    idempotencyKey: "viewing-date-spawn-journal-key",
+    verifyPrepared: value.verifyPrepared,
+    readNative: async () => clone(current),
+    commandRunner: async (_command, _args, options) => {
+      writes += 1;
+      const writeLogPath = options.logPath;
+      options.childProcessObserver.onStartAcknowledged();
+      current = clone(value.after);
+      options.childProcessObserver.onExit({ code: 0, signal: null });
+      assert.match(writeLogPath, /viewing-date-apply-native-write-op-/);
+      return { stdout: JSON.stringify(current) };
+    }
+  });
+  assert.equal(result.status, "applied");
+  assert.equal(writes, 1);
+  const journal = nativeWriteJournal(value);
+  assert.deepEqual(journal.value.map((event) => event.event), ["intent", "started", "exit"]);
+  assert.equal(journal.value.every((event) => event.schema === "csf_viewing_date_apply_native_write_spawn"), true);
+  assert.equal(journal.value.every((event) => event.operation_id === result.operation.operation_id), true);
+  assert.equal(journal.value.every((event) => event.project_id === value.state.project.project_id), true);
+  assert.equal(journal.value.every((event) => event.stage === "native_write"), true);
+  assert.equal(journal.value[2].exit.code, 0);
+  const raw = fs.readFileSync(journal.path, "utf8");
+  assert.equal(raw.includes(value.patch.next_content), false);
+  assert.equal(raw.includes("/usr/local/bin/wp"), false);
+
+  const retained = raw;
+  let readLogPath = null;
+  await nativeRead(value.state, { mode: "read" }, {
+    commandRunner: async (_command, _args, options) => {
+      readLogPath = options.logPath;
+      return { stdout: JSON.stringify(current) };
+    }
+  });
+  assert.equal(fs.readFileSync(journal.path, "utf8"), retained);
+  assert.match(readLogPath, /viewing-date-apply-native-read\.log$/);
+});
+
+test("spawn refusal records sanitized start-not-established evidence and leaves Apply terminal", async () => {
+  const value = fixture("csf-st-viewing-spawn-refusal-v1");
+  const refusal = Object.assign(new Error("spawn refused"), { code: "EPERM", errno: -4048, syscall: "spawn" });
+  const options = {
+    projectsRoot: value.projectsRoot,
+    slug: value.state.project.slug,
+    planId: value.planId,
+    idempotencyKey: "viewing-date-spawn-refusal-key",
+    verifyPrepared: value.verifyPrepared,
+    readNative: async () => clone(value.before),
+    commandRunner: async (_command, _args, commandOptions) => {
+      commandOptions.childProcessObserver.onStartNotEstablished(refusal);
+      throw refusal;
+    }
+  };
+  await assert.rejects(() => applyViewingDate(options), { code: "EPERM" });
+  const journal = nativeWriteJournal(value).value;
+  assert.deepEqual(journal.map((event) => event.event), ["intent", "start_not_established"]);
+  assert.deepEqual(journal[1].error, { code: "EPERM", errno: "-4048", syscall: "spawn" });
+  const failed = listOperations({ slug: value.state.project.slug, projectsRoot: value.projectsRoot, includeRaw: true })
+    .find((operation) => operation.operation_type === "viewing_date_apply");
+  assert.equal(failed.status, "failed");
+  await assert.rejects(() => applyViewingDate(Object.assign({}, options, { idempotencyKey: "viewing-date-spawn-refusal-retry" })), { code: "viewing_date_apply_prior_attempt_terminal" });
+});
+
+test("native-write intent journal failure prevents dispatch and post-dispatch journal failure blocks success", async () => {
+  const beforeDispatch = fixture("csf-st-viewing-spawn-before-failure-v1");
+  let beforeDispatchCalls = 0;
+  await assert.rejects(() => applyViewingDate({
+    projectsRoot: beforeDispatch.projectsRoot,
+    slug: beforeDispatch.state.project.slug,
+    planId: beforeDispatch.planId,
+    idempotencyKey: "viewing-date-spawn-before-failure-key",
+    verifyPrepared: beforeDispatch.verifyPrepared,
+    readNative: async () => clone(beforeDispatch.before),
+    commandRunner: async () => { beforeDispatchCalls += 1; throw new Error("must not dispatch"); },
+    writeJournal: () => { throw new Error("intent journal unavailable"); }
+  }), { code: "viewing_date_apply_spawn_journal_unavailable" });
+  assert.equal(beforeDispatchCalls, 0);
+
+  const afterDispatch = fixture("csf-st-viewing-spawn-after-failure-v1");
+  let journalWrites = 0;
+  let dispatched = 0;
+  const options = {
+    projectsRoot: afterDispatch.projectsRoot,
+    slug: afterDispatch.state.project.slug,
+    planId: afterDispatch.planId,
+    idempotencyKey: "viewing-date-spawn-after-failure-key",
+    verifyPrepared: afterDispatch.verifyPrepared,
+    readNative: async () => clone(afterDispatch.before),
+    commandRunner: async (_command, _args, commandOptions) => {
+      dispatched += 1;
+      commandOptions.childProcessObserver.onStartAcknowledged();
+      return { stdout: JSON.stringify(afterDispatch.after) };
+    },
+    writeJournal: (filePath, journal, create) => {
+      journalWrites += 1;
+      if (journalWrites > 1) throw new Error("post-dispatch journal unavailable");
+      testJournalWriter(filePath, journal, create);
+    }
+  };
+  await assert.rejects(() => applyViewingDate(options), { code: "viewing_date_apply_spawn_journal_unavailable" });
+  assert.equal(dispatched, 1);
+  const failed = listOperations({ slug: afterDispatch.state.project.slug, projectsRoot: afterDispatch.projectsRoot, includeRaw: true })
+    .find((operation) => operation.operation_type === "viewing_date_apply");
+  assert.equal(failed.status, "failed");
+  await assert.rejects(() => applyViewingDate(Object.assign({}, options, { idempotencyKey: "viewing-date-spawn-after-failure-retry" })), { code: "viewing_date_apply_prior_attempt_terminal" });
+});
+
+test("native-write exit journal failure after an acknowledged start remains terminal", async () => {
+  const value = fixture("csf-st-viewing-spawn-exit-failure-v1");
+  let journalWrites = 0;
+  let dispatched = 0;
+  const options = {
+    projectsRoot: value.projectsRoot,
+    slug: value.state.project.slug,
+    planId: value.planId,
+    idempotencyKey: "viewing-date-spawn-exit-failure-key",
+    verifyPrepared: value.verifyPrepared,
+    readNative: async () => clone(value.before),
+    commandRunner: async (_command, _args, commandOptions) => {
+      dispatched += 1;
+      commandOptions.childProcessObserver.onStartAcknowledged();
+      commandOptions.childProcessObserver.onExit({ code: 0, signal: null });
+      return { stdout: JSON.stringify(value.after) };
+    },
+    writeJournal: (filePath, journal, create) => {
+      journalWrites += 1;
+      if (journalWrites > 2) throw new Error("exit journal unavailable");
+      testJournalWriter(filePath, journal, create);
+    }
+  };
+  await assert.rejects(() => applyViewingDate(options), { code: "viewing_date_apply_spawn_journal_unavailable" });
+  assert.equal(dispatched, 1);
+  const journal = nativeWriteJournal(value).value;
+  assert.deepEqual(journal.map((event) => event.event), ["intent", "started"]);
+  const failed = listOperations({ slug: value.state.project.slug, projectsRoot: value.projectsRoot, includeRaw: true })
+    .find((operation) => operation.operation_type === "viewing_date_apply");
+  assert.equal(failed.status, "failed");
+  await assert.rejects(() => applyViewingDate(Object.assign({}, options, { idempotencyKey: "viewing-date-spawn-exit-failure-retry" })), { code: "viewing_date_apply_prior_attempt_terminal" });
+});
+
+test("native-write telemetry cannot replace pre-existing operation evidence", () => {
+  const value = fixture("csf-st-viewing-spawn-no-clobber-v1");
+  const operationId = "op-2026-10-03T10-00-00-000Z-a1b2c3";
+  const journalPath = nativeWriteJournalPath(value.state, operationId);
+  const prior = "{\"preserved\":true}\n";
+  fs.mkdirSync(path.dirname(journalPath), { recursive: true });
+  fs.writeFileSync(journalPath, prior, { encoding: "utf8", flag: "wx" });
+  assert.throws(() => createNativeWriteSpawnJournal({
+    projectState: value.state,
+    operationId,
+    command: nativeCommand({ mode: "write", before: value.before.form_sha256, after: value.patch.next_content })
+  }), { code: "viewing_date_apply_spawn_journal_unavailable" });
+  assert.equal(fs.readFileSync(journalPath, "utf8"), prior);
 });

@@ -19,6 +19,8 @@ const BINDING_OPTION = "factory_request_viewing_before_v1_binding";
 const PLAN_ROOT = "viewing-date-preview-v1";
 const RECOVERY_SCHEMA = "csf_viewing_date_recovery_result";
 const RECOVERY_VERSION = 3;
+const NATIVE_WRITE_JOURNAL_SCHEMA = "csf_viewing_date_apply_native_write_spawn";
+const NATIVE_WRITE_JOURNAL_VERSION = 1;
 
 function fail(code, message, statusCode) {
   const value = new Error(message || "Preferred date Apply cannot proceed safely.");
@@ -29,6 +31,128 @@ function fail(code, message, statusCode) {
 
 function hash(value) {
   return crypto.createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function safeErrorPart(value) {
+  if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
+  if (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,96}$/.test(value)) return null;
+  return value;
+}
+
+function sanitizeSpawnError(error) {
+  return {
+    code: safeErrorPart(error && error.code),
+    errno: safeErrorPart(error && error.errno),
+    syscall: safeErrorPart(error && error.syscall)
+  };
+}
+
+function nativeCommand(input) {
+  return {
+    command: "docker",
+    args: ["compose", "run", "--rm", "-T", "--entrypoint", "php", "wpcli", "-d", "memory_limit=512M", "/usr/local/bin/wp", "eval", nativeScript("read", input || {}), "--path=/var/www/html", "--allow-root"]
+  };
+}
+
+function nativeWriteJournalPath(projectState, operationId) {
+  if (typeof operationId !== "string" || !/^op-[0-9TZa-z-]+$/.test(operationId)) {
+    throw fail("viewing_date_apply_spawn_journal_invalid", "Preferred date Apply telemetry could not be bound safely.");
+  }
+  return path.join(projectState.runtimePath, "runs", "operations", operationId + ".viewing-date-apply-native-write.jsonl");
+}
+
+function appendDurableJournalEvent(filePath, value, create) {
+  const descriptor = fs.openSync(filePath, create ? "wx" : "r+");
+  const payload = JSON.stringify(value) + "\n";
+  try {
+    const position = create ? 0 : fs.fstatSync(descriptor).size;
+    fs.writeSync(descriptor, payload, position, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  // Windows does not permit opening a directory for fsync; FlushFileBuffers on
+  // the journal handle is its durable file boundary. POSIX additionally needs
+  // the parent directory entry persisted after create or append.
+  if (process.platform !== "win32") {
+    const directory = fs.openSync(path.dirname(filePath), "r");
+    try {
+      fs.fsyncSync(directory);
+    } finally {
+      fs.closeSync(directory);
+    }
+  }
+}
+
+function createNativeWriteSpawnJournal(options) {
+  const projectState = options && options.projectState;
+  const operationId = options && options.operationId;
+  const command = options && options.command;
+  if (!projectState || !projectState.project || !command || command.command !== "docker" || !Array.isArray(command.args)) {
+    throw fail("viewing_date_apply_spawn_journal_invalid", "Preferred date Apply telemetry could not be bound safely.");
+  }
+  const journalPath = nativeWriteJournalPath(projectState, operationId);
+  const writer = typeof options.writeJournal === "function" ? options.writeJournal : appendDurableJournalEvent;
+  let state = "intent_persisted";
+  const persist = (event, details, create) => {
+    const journalEvent = {
+      schema: NATIVE_WRITE_JOURNAL_SCHEMA,
+      version: NATIVE_WRITE_JOURNAL_VERSION,
+      event,
+      occurred_at: nowIso(),
+      operation_id: operationId,
+      project_id: projectState.project.project_id,
+      project_slug: projectState.project.slug,
+      stage: "native_write"
+    };
+    if (event === "intent") {
+      journalEvent.intent = {
+      executable: "docker",
+      executable_identity_sha256: hash(command.command),
+      cwd_identity_sha256: hash(path.resolve(projectState.runtimePath)),
+      command_sha256: hash(JSON.stringify([command.command].concat(command.args)))
+      };
+    } else if (event === "start_not_established") {
+      journalEvent.error = sanitizeSpawnError(details);
+    } else if (event === "exit") {
+      journalEvent.exit = {
+        code: Number.isInteger(details && details.code) ? details.code : null,
+        signal: safeErrorPart(details && details.signal)
+      };
+    }
+    try {
+      writer(journalPath, journalEvent, create === true);
+    } catch (_) {
+      throw fail("viewing_date_apply_spawn_journal_unavailable", "Preferred date Apply telemetry could not be recorded safely.");
+    }
+  };
+  persist("intent", null, true);
+  return {
+    path: journalPath,
+    observer: {
+      onStartAcknowledged: () => {
+        if (state !== "intent_persisted") throw fail("viewing_date_apply_spawn_journal_invalid", "Preferred date Apply telemetry could not be finalized safely.");
+        persist("started");
+        state = "started";
+      },
+      onStartNotEstablished: (error) => {
+        if (state !== "intent_persisted") throw fail("viewing_date_apply_spawn_journal_invalid", "Preferred date Apply telemetry could not be finalized safely.");
+        persist("start_not_established", error);
+        state = "start_not_established";
+      },
+      onExit: (result) => {
+        if (state !== "started") {
+          throw fail("viewing_date_apply_spawn_journal_invalid", "Preferred date Apply telemetry could not be finalized safely.");
+        }
+        persist("exit", result);
+        state = "exited";
+      }
+    }
+  };
 }
 
 function readJson(filePath, code) {
@@ -167,13 +291,27 @@ function nativeScript(mode, input) {
     + "echo wp_json_encode(['candidate_ids'=>array_map('intval',$ids),'resolved_form_id'=>$id,'form_id'=>$id,'post_exists'=>!!$p,'post_type'=>$p?$p->post_type:null,'post_status'=>$p?$p->post_status:null,'post_parent'=>$p?(int)$p->post_parent:null,'owner'=>$id?get_post_meta($id,'" + FORM_OWNER_META + "',true):null,'form_content'=>$p?(string)$p->post_content:null,'form_sha256'=>$p?hash('sha256',$p->post_content):null,'fields'=>$fields,'actions'=>$out,'binding'=>$b,'records'=>$records,'plugin_version'=>defined('JET_FORM_BUILDER_VERSION')?JET_FORM_BUILDER_VERSION:null,'policy_sha256'=>file_exists(WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php')?hash_file('sha256',WPMU_PLUGIN_DIR.'/factory-request-viewing-before-v1-policy.php'):null]);";
 }
 
-async function nativeRead(projectState, input) {
-  const result = await runCommand("docker", ["compose", "run", "--rm", "-T", "--entrypoint", "php", "wpcli", "-d", "memory_limit=512M", "/usr/local/bin/wp", "eval", nativeScript("read", input || {}), "--path=/var/www/html", "--allow-root"], { cwd: projectState.runtimePath, logPath: path.join(projectState.runtimePath, "logs", "viewing-date-apply-native.log"), timeoutMs: 120000 });
+async function nativeRead(projectState, input, options) {
+  const command = nativeCommand(input);
+  const runner = options && typeof options.commandRunner === "function" ? options.commandRunner : runCommand;
+  const isWrite = input && input.mode === "write";
+  const operationId = options && options.operationId;
+  if (isWrite && (typeof operationId !== "string" || !/^op-[0-9TZa-z-]+$/.test(operationId))) {
+    throw fail("viewing_date_apply_spawn_journal_invalid", "Preferred date Apply telemetry could not be bound safely.");
+  }
+  const result = await runner(command.command, command.args, {
+    cwd: projectState.runtimePath,
+    logPath: path.join(projectState.runtimePath, "logs", isWrite ? "viewing-date-apply-native-write-" + operationId + ".log" : "viewing-date-apply-native-read.log"),
+    timeoutMs: 120000,
+    childProcessObserver: options && options.childProcessObserver || null,
+    sensitiveOutput: isWrite,
+    sensitiveCategory: isWrite ? "viewing-date-apply-native-write" : undefined
+  });
   try { return JSON.parse(String(result.stdout || "").trim()); } catch (_) { throw fail("viewing_date_apply_runtime_malformed", "The Request Viewing form could not be read safely."); }
 }
 
-async function nativeWrite(projectState, input) {
-  return nativeRead(projectState, Object.assign({}, input, { mode: "write" }));
+async function nativeWrite(projectState, input, options) {
+  return nativeRead(projectState, Object.assign({}, input, { mode: "write" }), options);
 }
 
 async function prepareViewingDateApply(options) {
@@ -220,11 +358,17 @@ async function applyViewingDate(options) {
       assertAfter(current, authority.authority.plan, null, expectedRecords);
       return { status: "already_applied", mutation_performed: false };
     },
-    execute: async ({ setStage }) => {
+    execute: async ({ operationId, setStage }) => {
       await setStage("validating");
       const fresh = await prepareViewingDateApply(options);
       await setStage("applying");
-      const after = await (options.writeNative || nativeWrite)(fresh.projectState, { mode: "write", before: fresh.observation.form_sha256, after: fresh.patch.next_content });
+      const writeInput = { mode: "write", before: fresh.observation.form_sha256, after: fresh.patch.next_content };
+      const spawnJournal = options.writeNative
+        ? null
+        : createNativeWriteSpawnJournal({ projectState: fresh.projectState, operationId, command: nativeCommand(writeInput), writeJournal: options.writeJournal });
+      const after = await (options.writeNative || nativeWrite)(fresh.projectState, writeInput, spawnJournal
+        ? { operationId, childProcessObserver: spawnJournal.observer, commandRunner: options.commandRunner }
+        : undefined);
       await setStage("verifying");
       const recordsBefore = assertRecordsObservation(fresh.observation.records);
       const afterState = assertAfter(after, fresh.authority.plan, fresh.patch, recordsBefore);
@@ -236,4 +380,4 @@ async function applyViewingDate(options) {
     : Object.assign({ operation: operationResult.operation }, operationResult.result);
 }
 
-module.exports = { applyViewingDate, prepareViewingDateApply, prepareViewingDateAuthority, assertBaseline, assertAfter, assertRecordsObservation, normalizeTarget, nativeRead, nativeWrite, nativeScript };
+module.exports = { applyViewingDate, prepareViewingDateApply, prepareViewingDateAuthority, assertBaseline, assertAfter, assertRecordsObservation, normalizeTarget, nativeRead, nativeWrite, nativeScript, nativeCommand, createNativeWriteSpawnJournal, nativeWriteJournalPath };
