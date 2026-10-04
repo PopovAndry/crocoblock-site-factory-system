@@ -79,6 +79,7 @@ const VERIFY_EXISTING_JOURNAL_KEYS = [
   "apply_operation_id",
   "b",
   "health",
+  "health_attempt",
   "observation_nonce",
   "operation_id",
   "phase",
@@ -319,7 +320,13 @@ function isExactVerifyExistingJournal(value, context) {
     || !isCanonicalVerifyExistingSurface(value.b.surface)
     || !hasExactKeys(value.health, ["expires_at", "key_id", "method", "project_slug", "request_id", "route"])
     || value.health.method !== "GET" || value.health.route !== "/factory/v1/agent/health" || value.health.project_slug !== project.slug
-    || typeof value.health.key_id !== "string" || !value.health.key_id || typeof value.health.request_id !== "string" || !value.health.request_id || !Number.isInteger(value.health.expires_at)) {
+    || typeof value.health.key_id !== "string" || !value.health.key_id || typeof value.health.request_id !== "string" || !value.health.request_id || !Number.isInteger(value.health.expires_at)
+    || !hasExactKeys(value.health_attempt, ["key_id", "method", "project_slug", "request_id", "response", "route", "state"])
+    || value.health_attempt.method !== "GET" || value.health_attempt.route !== "/factory/v1/agent/health" || value.health_attempt.project_slug !== project.slug
+    || typeof value.health_attempt.key_id !== "string" || !value.health_attempt.key_id || typeof value.health_attempt.request_id !== "string" || !value.health_attempt.request_id
+    || value.health_attempt.state !== "response_recorded"
+    || !hasExactKeys(value.health_attempt.response, ["signed_agent"]) || value.health_attempt.response.signed_agent !== "ok"
+    || value.health_attempt.key_id !== value.health.key_id || value.health_attempt.request_id !== value.health.request_id) {
     return false;
   }
   return true;

@@ -300,6 +300,15 @@ function verifyExistingJournal(context, metadata) {
       key_id: "factory-key",
       request_id: "request-123",
       expires_at: 1784203500
+    },
+    health_attempt: {
+      method: "GET",
+      route: "/factory/v1/agent/health",
+      project_slug: context.projectState.project.slug,
+      key_id: "factory-key",
+      request_id: "request-123",
+      state: "response_recorded",
+      response: { signed_agent: "ok" }
     }
   };
 }
@@ -530,6 +539,11 @@ test("verify-existing cleanup journal is exact, lineage-bound, and fail-closed",
     ["cross snapshot", (value) => { value.snapshot_id = "snapshot-2026-07-16t12-05-00-000z-abcdef"; }],
     ["cross Apply", (value) => { value.apply_operation_id = "op-2026-07-16T12-06-00-000Z-abcdef"; }],
     ["malformed", (value) => { delete value.health; }],
+    ["missing health reservation", (value) => { delete value.health_attempt; }],
+    ["uncompleted health reservation", (value) => { value.health_attempt = Object.assign({}, value.health_attempt, { state: "reserved" }); delete value.health_attempt.response; }],
+    ["health reservation response mismatch", (value) => { value.health_attempt.response = { signed_agent: "failed" }; }],
+    ["cross health reservation", (value) => { value.health_attempt.request_id = "request-other"; }],
+    ["extra health reservation field", (value) => { value.health_attempt.caller_supplied = true; }],
     ["malformed rate inventory", (value) => { value.b.surface.rates = [{ name: "factory_agent_rate_" + "a".repeat(64), autoload: "no" }]; }],
     ["caller-shaped extra key", (value) => { value.caller_supplied = true; }]
   ];
