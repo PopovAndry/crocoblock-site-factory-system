@@ -38,7 +38,9 @@ const ALLOWED_OPERATION_TYPES = new Set([
   "agent_auth_revoke",
   "create_website",
   "viewing_date_apply",
-  "viewing_date_restore"
+  "viewing_date_restore",
+  "property_area_range_apply",
+  "property_area_range_restore"
 ]);
 
 function stableStringify(value) {

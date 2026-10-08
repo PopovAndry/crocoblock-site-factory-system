@@ -8,7 +8,7 @@ const CONTRACT_PATH = path.join(__dirname, "..", "contracts", "real-estate-contr
 const OWNERSHIP_CLASSES = new Set(["factory_managed", "owner_editable", "protected", "derived_runtime_only"]);
 const CHECK_KINDS = new Set(["runtime_status", "validation_message", "generated_url", "minimum_count", "ownership"]);
 const HOMEPAGE_COMPONENT_IDS = new Set(["site-header", "hero", "property-listing", "property-card", "site-footer"]);
-const BUSINESS_SEMANTIC_SECTIONS = ["queries", "filters", "listings", "property_contexts", "forms", "form_fields", "change_profiles", "user_journeys"];
+const BUSINESS_SEMANTIC_SECTIONS = ["queries", "filters", "property_area_ranges", "listings", "property_contexts", "forms", "form_fields", "change_profiles", "user_journeys"];
 const PROVIDER_OR_EXECUTION_PATTERN = /(?:\b(?:jet(?:engine|smartfilters|formbuilder)?|crocoblock|wordpress|elementor|bricks|kava|shortcode)\b|<\?(?:php|=)|\$\w+|\b(?:select|insert|update|delete|drop|alter|create|from|where|join)\b|\b(?:powershell|cmd|bash|shell|docker|wp-cli|rm|del|remove-item|copy-item|move-item|mkdir|rmdir|touch|chmod|chown|curl|wget|npm|apply|execute|mutate|install|uninstall|restore|format)\b)/i;
 const BUSINESS_FORBIDDEN_KEYS = new Set(["implementation_ref", "path", "file", "file_path", "command", "script", "provider", "plugin", "theme", "sql", "php"]);
 const FORM_FIELD_TYPES = new Set(["text", "email", "phone", "date", "textarea"]);
@@ -152,6 +152,7 @@ function validateBusinessSemantics(contract) {
   const surfaceIds = new Set(contract.surfaces.map((entry) => entry.id));
   const queryIds = new Set(contract.queries.map((entry) => entry.id));
   const filterIds = new Set(contract.filters.map((entry) => entry.id));
+  const propertyAreaRangeIds = new Set(contract.property_area_ranges.map((entry) => entry.id));
   const listingIds = new Set(contract.listings.map((entry) => entry.id));
   const contextIds = new Set(contract.property_contexts.map((entry) => entry.id));
   const formIds = new Set(contract.forms.map((entry) => entry.id));
@@ -187,6 +188,18 @@ function validateBusinessSemantics(contract) {
     if (filter.query_id !== "property_catalog" || filter.taxonomy_id !== DISCOVERY_FILTER_TAXONOMIES[filter.id] || filter.optional !== true || filter.selection_mode !== "single_term" || filter.term_identity !== "taxonomy_term") {
       throw contractError("Property discovery filters must be optional.", "real_estate_contract_invalid_business_semantics");
     }
+  }
+  if (contract.property_area_ranges.length !== 1 || !propertyAreaRangeIds.has("property_area_range")) {
+    throw contractError("Real Estate contract requires exactly one Property Area range.", "real_estate_contract_invalid_business_semantics");
+  }
+  const propertyAreaRange = contract.property_area_ranges[0];
+  requireRequiredExactKeys(propertyAreaRange, ["id", "query_id", "field_id", "label", "unit", "selection_mode", "comparison", "decimal_type", "accepted_value_grammar", "activation", "unactivated_behavior", "invalid_input_behavior", "missing_value_behavior", "reset_behavior"], "property_area_ranges");
+  requireStableId(propertyAreaRange.id, "property_area_ranges");
+  requireReference(propertyAreaRange.query_id, queryIds, "Property Area range references an unknown query.");
+  requireReference(propertyAreaRange.field_id, fieldIds, "Property Area range references an unknown field.");
+  requireBusinessLabel(propertyAreaRange.label, "property_area_ranges");
+  if (propertyAreaRange.id !== "property_area_range" || propertyAreaRange.query_id !== "property_catalog" || propertyAreaRange.field_id !== "property_size" || propertyAreaRange.unit !== "sq_m" || propertyAreaRange.selection_mode !== "optional_range" || propertyAreaRange.comparison !== "inclusive" || propertyAreaRange.decimal_type !== "decimal_12_2" || propertyAreaRange.accepted_value_grammar !== "nonnegative_decimal_12_2" || propertyAreaRange.activation !== "server_owned_transaction_only" || propertyAreaRange.unactivated_behavior !== "base_catalog" || propertyAreaRange.invalid_input_behavior !== "empty_state" || propertyAreaRange.missing_value_behavior !== "exclude_when_active" || propertyAreaRange.reset_behavior !== "clear_area_bounds_only") {
+    throw contractError("Property Area range semantics are invalid.", "real_estate_contract_invalid_business_semantics");
   }
   for (const listing of contract.listings) {
     requireExactKeys(listing, ["id", "query_id", "component_id", "field_ids", "surface_id", "detail_surface_id", "empty_state", "active_filter_empty_action", "automatic_relaxation"], "listings");
@@ -370,6 +383,7 @@ function collectStableIds(contract) {
     requireArray(contract, "component_slots"),
     requireArray(contract, "queries"),
     requireArray(contract, "filters"),
+    requireArray(contract, "property_area_ranges"),
     requireArray(contract, "listings"),
     requireArray(contract, "property_contexts"),
     requireArray(contract, "forms"),
@@ -465,6 +479,7 @@ function normalizeContract(contract) {
   sortById(clone.component_slots);
   sortById(clone.queries);
   sortById(clone.filters);
+  sortById(clone.property_area_ranges);
   sortById(clone.listings);
   sortById(clone.property_contexts);
   sortById(clone.forms);

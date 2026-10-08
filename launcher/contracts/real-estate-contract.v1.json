@@ -57,6 +57,24 @@
     { "id": "filter_property_type", "query_id": "property_catalog", "taxonomy_id": "property_type", "label": "Property Type", "optional": true, "selection_mode": "single_term", "term_identity": "taxonomy_term" },
     { "id": "filter_district", "query_id": "property_catalog", "taxonomy_id": "property_district", "label": "District", "optional": true, "selection_mode": "single_term", "term_identity": "taxonomy_term" }
   ],
+  "property_area_ranges": [
+    {
+      "id": "property_area_range",
+      "query_id": "property_catalog",
+      "field_id": "property_size",
+      "label": "Area",
+      "unit": "sq_m",
+      "selection_mode": "optional_range",
+      "comparison": "inclusive",
+      "decimal_type": "decimal_12_2",
+      "accepted_value_grammar": "nonnegative_decimal_12_2",
+      "activation": "server_owned_transaction_only",
+      "unactivated_behavior": "base_catalog",
+      "invalid_input_behavior": "empty_state",
+      "missing_value_behavior": "exclude_when_active",
+      "reset_behavior": "clear_area_bounds_only"
+    }
+  ],
   "listings": [
     {
       "id": "property_card_listing",

@@ -321,6 +321,41 @@ function writeVerifyExistingJournal(context, metadata, mutate) {
   writeFile(path.join(context.workRoot, "viewing-date-verify-existing.json"), JSON.stringify(journal) + "\n");
 }
 
+function propertyAreaRangeRestoreMetadata() {
+  return {
+    plan_id: "restore-plan-2026-07-16t12-00-00-000z-abcdef",
+    restore_scope: "managed_website_same_project",
+    property_area_range_apply_operation_id: "op-2026-07-16T12-02-00-000Z-abcdef",
+    property_area_range_plan_id: "property-area-range-plan-12345678-1234-1234-1234-123456789abc",
+    property_area_range_project_binding_fingerprint: "a".repeat(64),
+    property_area_range_project_id: "project-123",
+    property_area_range_snapshot_id: "snapshot-2026-07-16t12-00-00-000z-abcdef"
+  };
+}
+
+function propertyAreaRangeVerifyExistingJournal(context, metadata) {
+  const journal = verifyExistingJournal(context, {
+    viewing_date_apply_operation_id: metadata.property_area_range_apply_operation_id,
+    viewing_date_plan_id: metadata.property_area_range_plan_id,
+    viewing_date_project_binding_fingerprint: metadata.property_area_range_project_binding_fingerprint,
+    viewing_date_snapshot_id: metadata.property_area_range_snapshot_id
+  });
+  journal.schema = "csf_property_area_range_restore_verify_existing_journal";
+  journal.project_binding_fingerprint = metadata.property_area_range_project_binding_fingerprint;
+  journal.plan_id = metadata.property_area_range_plan_id;
+  journal.snapshot_id = metadata.property_area_range_snapshot_id;
+  journal.apply_operation_id = metadata.property_area_range_apply_operation_id;
+  return journal;
+}
+
+function writePropertyAreaRangeVerifyExistingJournal(context, metadata, mutate) {
+  const journal = propertyAreaRangeVerifyExistingJournal(context, metadata);
+  if (typeof mutate === "function") {
+    mutate(journal);
+  }
+  writeFile(path.join(context.workRoot, "property-area-range-verify-existing.json"), JSON.stringify(journal) + "\n");
+}
+
 function writeCompletedRestoreJournal(workRoot, context) {
   const project = context.projectState.project;
   const restorePlan = context.restorePlan;
@@ -560,6 +595,53 @@ test("verify-existing cleanup journal is exact, lineage-bound, and fail-closed",
   fs.rmSync(path.join(workRoot, "unexpected.json"));
   context.agentAuthorityMode = "generic_repair";
   assert.equal(isRestoreWorkRootClean(workRoot, context), false, "generic Restore remains unchanged");
+});
+
+test("property-area-range verify-existing cleanup journal is exact, profile-bound, and fail-closed", () => {
+  const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-restore-property-area-range-cleanup-"));
+  const metadata = propertyAreaRangeRestoreMetadata();
+  const context = {
+    agentAuthorityMode: "verify_existing",
+    operation: { operation_id: "op-2026-07-16T12-03-00-000Z-abcdef", operation_type: "property_area_range_restore", metadata },
+    projectState: { project: { slug: "property-area-range-cleanup", project_id: "project-123" } },
+    restorePlan: { plan_id: metadata.plan_id, snapshot_id: metadata.property_area_range_snapshot_id, project_identity_fingerprint: metadata.property_area_range_project_binding_fingerprint },
+    workRoot
+  };
+  const writeCandidate = (mutate) => {
+    writePropertyAreaRangeVerifyExistingJournal(Object.assign({ operationId: context.operation.operation_id, projectState: context.projectState }, context), metadata, mutate);
+  };
+
+  writeCompletedRestoreJournal(workRoot, context);
+  writeCandidate();
+  assert.equal(isRestoreWorkRootClean(workRoot, context), true);
+
+  const cases = [
+    ["mixed Viewing Date journal", () => {
+      fs.renameSync(path.join(workRoot, "property-area-range-verify-existing.json"), path.join(workRoot, "viewing-date-verify-existing.json"));
+    }],
+    ["cross operation", (value) => { value.operation_id = "op-2026-07-16T12-04-00-000Z-abcdef"; }],
+    ["cross Apply", (value) => { value.apply_operation_id = "op-2026-07-16T12-05-00-000Z-abcdef"; }],
+    ["wrong profile schema", (value) => { value.schema = "csf_viewing_date_restore_verify_existing_journal"; }],
+    ["extra journal field", (value) => { value.caller_supplied = true; }]
+  ];
+  for (const [label, mutate] of cases) {
+    fs.rmSync(path.join(workRoot, "viewing-date-verify-existing.json"), { force: true });
+    fs.rmSync(path.join(workRoot, "property-area-range-verify-existing.json"), { force: true });
+    if (label === "mixed Viewing Date journal") {
+      writeCandidate();
+      mutate();
+    } else {
+      writeCandidate(mutate);
+    }
+    assert.equal(isRestoreWorkRootClean(workRoot, context), false, label);
+  }
+
+  writeCandidate();
+  writeFile(path.join(workRoot, "unexpected.json"), "{}\n");
+  assert.equal(isRestoreWorkRootClean(workRoot, context), false, "additional file");
+  fs.rmSync(path.join(workRoot, "unexpected.json"));
+  context.operation.operation_type = "unknown_restore_profile";
+  assert.equal(isRestoreWorkRootClean(workRoot, context), false, "unknown profile");
 });
 
 test("verify-existing malformed C journal leaves Restore terminal failed with manual recovery required", async () => {

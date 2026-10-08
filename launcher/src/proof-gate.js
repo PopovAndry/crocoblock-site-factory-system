@@ -11,6 +11,7 @@ const {
 } = require("./project-store");
 const { deriveProjectBinding, validateManifest } = require("./structural-snapshot-store");
 const { baselineFingerprint, coverageFingerprint, exactCoverage, proposedChangeFingerprint } = require("./viewing-date-preview");
+const { assertEvidence: assertPropertyAreaEvidence } = require("./property-area-range-evidence");
 
 const PROOF_GATE_SCHEMA = "csf_proof_gate";
 const PROOF_GATE_VERSION = 0;
@@ -52,6 +53,10 @@ function planId(value) {
     && /^viewing-date-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 }
 
+function propertyAreaPlanId(value) {
+  return typeof value === "string" && /^property-area-range-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+
 function snapshotId(value) {
   return typeof value === "string"
     && /^snapshot-\d{4}-\d{2}-\d{2}t\d{2}-\d{2}-\d{2}-\d{3}z-[a-f0-9]{12}$/.test(value);
@@ -88,6 +93,18 @@ function readOnlyJson(root, segments) {
   } catch (_) {
     return { ok: false, code: "evidence_missing_or_invalid" };
   }
+}
+
+function exactEvidenceDirectory(root, filename) {
+  try {
+    const canonical = fs.realpathSync(root);
+    const stat = fs.lstatSync(canonical);
+    const entries = fs.readdirSync(canonical);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || entries.length !== 1 || entries[0] !== filename) return false;
+    const file = path.join(canonical, filename);
+    const fileStat = fs.lstatSync(file);
+    return fileStat.isFile() && !fileStat.isSymbolicLink() && inside(canonical, fs.realpathSync(file));
+  } catch (_) { return false; }
 }
 
 function records(value) {
@@ -269,6 +286,92 @@ function emptyResult(slug, restoreOperationId) {
   };
 }
 
+function evaluatePropertyAreaRangeProofGate(options, projectState, binding, restore, result) {
+  const project = projectState.project;
+  const runtimePath = projectState.runtimePath;
+  const metadata = restore.metadata;
+  const requiredMetadata = ["plan_id", "property_area_range_apply_operation_id", "property_area_range_plan_id", "property_area_range_project_binding_fingerprint", "property_area_range_project_id", "property_area_range_snapshot_id", "restore_scope"];
+  if (!plainObject(restore) || restore.schema !== "factory_project_operation" || restore.version !== 1 || restore.project_slug !== project.slug
+    || restore.operation_type !== "property_area_range_restore" || restore.status !== "succeeded" || restore.stage !== "completed"
+    || !hasOnlyKeys(metadata, requiredMetadata) || metadata.restore_scope !== "managed_website_same_project"
+    || !propertyAreaPlanId(metadata.property_area_range_plan_id) || !operationId(metadata.property_area_range_apply_operation_id)
+    || metadata.property_area_range_project_id !== project.project_id || metadata.property_area_range_project_binding_fingerprint !== binding.fingerprint
+    || typeof metadata.plan_id !== "string" || !/^restore-plan-[a-z0-9-]+$/.test(metadata.plan_id)
+    || typeof metadata.property_area_range_snapshot_id !== "string" || !/^snapshot-[a-z0-9-]+$/.test(metadata.property_area_range_snapshot_id)) {
+    for (const claim of CLAIMS) addGap(result, claim, "restore_operation_invalid");
+    return result;
+  }
+  const planRead = readOnlyJson(runtimePath, ["proofs", "property-area-range-preview-v1", "plans", metadata.property_area_range_plan_id + ".json"]);
+  const recoveryRead = readOnlyJson(runtimePath, ["proofs", "property-area-range-preview-v1", "recovery-results", metadata.property_area_range_plan_id + ".json"]);
+  const applyRead = readOnlyJson(runtimePath, ["runs", "operations", metadata.property_area_range_apply_operation_id + ".json"]);
+  const evidenceRead = readOnlyJson(runtimePath, ["proofs", "property-area-range-preview-v1", "business-evidence", metadata.property_area_range_plan_id + ".json"]);
+  const restorePlanRead = readOnlyJson(runtimePath, ["runs", "restore-plans", metadata.plan_id + ".json"]);
+  const snapshotRead = readOnlyJson(path.join(resolveProjectsRoot(options && options.projectsRoot), ".factory-recovery", "snapshots", binding.binding_key), [metadata.property_area_range_snapshot_id, "manifest.json"]);
+  if (![planRead, recoveryRead, applyRead, restorePlanRead, snapshotRead].every((entry) => entry.ok)) {
+    for (const claim of CLAIMS) addGap(result, claim, "transaction_lineage_evidence_missing");
+    return result;
+  }
+  const plan = planRead.value; const recovery = recoveryRead.value; const apply = applyRead.value;
+  const recoveryKeys = ["baseline_sha256", "coverage", "coverage_sha256", "coverage_version", "created_at", "plan_id", "profile_id", "profile_version", "project_id", "project_identity_fingerprint", "project_slug", "proposed_change_sha256", "schema", "snapshot_id", "snapshot_identity", "status", "version"];
+  const planValid = plainObject(plan) && plan.schema === "csf_property_area_range_preview" && plan.version === 1
+    && plan.plan_id === metadata.property_area_range_plan_id && plan.project_slug === project.slug && plan.project_id === project.project_id
+    && plan.profile === "property_area_range@1" && plan.profile_id === "property_area_range" && plan.profile_version === 1
+    && plainObject(plan.baseline) && isDeepStrictEqual(plan.baseline.project_binding, binding)
+    && sha256(plan.baseline.plugin_identity_sha256) && sha256(plan.baseline.property_areas_sha256) && Number.isInteger(plan.baseline.property_count)
+    && hasOnlyKeys(recovery, recoveryKeys) && recovery.schema === "csf_property_area_range_recovery_result" && recovery.version === 3 && recovery.status === "prepared"
+    && recovery.plan_id === plan.plan_id && recovery.snapshot_id === metadata.property_area_range_snapshot_id && recovery.project_slug === project.slug && recovery.project_id === project.project_id
+    && recovery.project_identity_fingerprint === binding.fingerprint && recovery.profile_id === "property_area_range" && recovery.profile_version === 1
+    && recovery.baseline_sha256 === baselineFingerprint(plan) && recovery.proposed_change_sha256 === proposedChangeFingerprint(plan)
+    && recovery.coverage_version === 1 && Boolean(exactCoverage(recovery.coverage)) && recovery.coverage_sha256 === coverageFingerprint(recovery.coverage)
+    && verifiedSnapshot(snapshotRead.value, project, recovery.snapshot_id, binding) && snapshotIdentityMatches(recovery.snapshot_identity, snapshotRead.value, snapshotRead.sha256)
+    && restorePlanLineage({ ...restorePlanRead.value, snapshot_id: restorePlanRead.value && restorePlanRead.value.snapshot_id }, project, { ...metadata, viewing_date_snapshot_id: metadata.property_area_range_snapshot_id }, binding, snapshotRead.value);
+  if (!planValid) addGap(result, "transaction_lineage", "transaction_lineage_conflict"); else passClaim(result, "transaction_lineage");
+  const after = apply && apply.result_summary && apply.result_summary.after_state;
+  if (!plainObject(apply) || apply.schema !== "factory_project_operation" || apply.version !== 1 || apply.operation_id !== metadata.property_area_range_apply_operation_id
+    || apply.project_slug !== project.slug || apply.operation_type !== "property_area_range_apply" || apply.status !== "succeeded"
+    || !plainObject(apply.metadata) || apply.metadata.plan_id !== plan.plan_id || apply.metadata.project_id !== project.project_id || apply.metadata.project_binding_fingerprint !== binding.fingerprint || apply.metadata.recovery_snapshot_id !== recovery.snapshot_id
+    || !plainObject(apply.result_summary) || apply.result_summary.status !== "applied" || apply.result_summary.mutation_performed !== true
+    || !plainObject(after) || after.option_name !== "factory_property_area_range_v1" || after.property_areas_sha256 !== plan.baseline.property_areas_sha256 || after.property_count !== plan.baseline.property_count) {
+    addGap(result, "authoritative_outcomes", "apply_outcome_invalid");
+  } else passClaim(result, "authoritative_outcomes");
+  const prepared = { projectState, authority: { plan, recovery }, apply: Object.assign({ raw: apply }, apply) };
+  let evidence;
+  if (!evidenceRead.ok) addGap(result, "business_submissions", "business_observation_evidence_missing");
+  else if (!exactEvidenceDirectory(path.join(runtimePath, "proofs", "property-area-range-preview-v1", "business-evidence"), metadata.property_area_range_plan_id + ".json")) addGap(result, "business_submissions", "business_observation_evidence_duplicate_or_unsafe");
+  else try { evidence = assertPropertyAreaEvidence(evidenceRead.value, prepared); } catch (_) { addGap(result, "business_submissions", "business_observation_evidence_invalid"); }
+  if (evidence) passClaim(result, "business_submissions");
+  const identity = restore.result_summary && restore.result_summary.property_area_range_restore;
+  const restored = identity && identity.restored_baseline;
+  if (!plainObject(restore.result_summary) || restore.result_summary.restore_verified !== true || !plainObject(restore.result_summary.verification) || restore.result_summary.verification.successful !== true
+    || !plainObject(identity) || identity.schema !== "csf_property_area_range_restore_identity" || identity.version !== 1 || identity.status !== "restored"
+    || identity.project_slug !== project.slug || identity.project_id !== project.project_id || identity.project_binding_fingerprint !== binding.fingerprint
+    || identity.plan_id !== plan.plan_id || identity.snapshot_id !== recovery.snapshot_id || identity.apply_operation_id !== apply.operation_id
+    || !plainObject(restored) || restored.option_absent !== true || restored.plugin_identity_sha256 !== plan.baseline.plugin_identity_sha256
+    || restored.property_areas_sha256 !== plan.baseline.property_areas_sha256 || restored.property_count !== plan.baseline.property_count
+    || !evidence || restored.business_evidence_sha256 !== evidenceRead.sha256 || restored.unfiltered_archive_sha256 !== hashBytes(stableStringify(evidence.unfiltered))) {
+    addGap(result, "authoritative_outcomes", "restore_outcome_invalid"); addGap(result, "restored_baseline", "restored_baseline_invalid");
+  } else { passClaim(result, "authoritative_outcomes"); passClaim(result, "restored_baseline"); }
+  const journalRead = readOnlyJson(runtimePath, ["runs", "restore-work", restore.operation_id, "property-area-range-verify-existing.json"]);
+  const completedRead = readOnlyJson(runtimePath, ["runs", "restore-work", restore.operation_id, "restore-journal.json"]);
+  const journal = journalRead.value;
+  const health = journal && journal.health;
+  if (!journalRead.ok || !completedRead.ok || !hasOnlyKeys(journal, ["apply_operation_id", "b", "health_attempt", "health", "observation_nonce", "operation_id", "phase", "plan_id", "project_binding_fingerprint", "project_id", "project_slug", "schema", "snapshot_id", "version"])
+    || journal.schema !== "csf_property_area_range_restore_verify_existing_journal" || journal.version !== 1 || journal.phase !== "health_recorded"
+    || journal.operation_id !== restore.operation_id || journal.project_slug !== project.slug || journal.project_id !== project.project_id || journal.project_binding_fingerprint !== binding.fingerprint
+    || journal.plan_id !== plan.plan_id || journal.snapshot_id !== recovery.snapshot_id || journal.apply_operation_id !== apply.operation_id
+    || !sha256(journal.observation_nonce) || !plainObject(journal.b) || !hasOnlyKeys(journal.b, ["application_password_identity_sha256", "credential_hmac_sha256", "credential_metadata_sha256", "env_identity", "surface", "wp_config_sha256"])
+    || ![journal.b.application_password_identity_sha256, journal.b.credential_hmac_sha256, journal.b.credential_metadata_sha256, journal.b.wp_config_sha256].every(sha256)
+    || !hasOnlyKeys(journal.b.env_identity, ["dev", "ino", "sha256", "size"]) || !Number.isInteger(journal.b.env_identity.dev) || !Number.isInteger(journal.b.env_identity.ino) || !Number.isInteger(journal.b.env_identity.size) || journal.b.env_identity.size < 0 || !sha256(journal.b.env_identity.sha256)
+    || !canonicalVerifyExistingSurface(journal.b.surface) || !healthAttemptEvidence(journal.health_attempt, project) || !hasOnlyKeys(health, ["expires_at", "key_id", "method", "project_slug", "request_id", "route"])
+    || health.method !== "GET" || health.route !== "/factory/v1/agent/health" || health.project_slug !== project.slug || health.key_id !== journal.health_attempt.key_id || health.request_id !== journal.health_attempt.request_id
+    || !completedRestoreJournal(completedRead.value, restore.operation_id, project, { ...metadata, viewing_date_snapshot_id: recovery.snapshot_id }, binding)) {
+    addGap(result, "verification_chain", "verification_chain_evidence_invalid");
+  } else { passClaim(result, "verification_chain"); result.evidence_limits.push("literal_signed_health_call_cardinality_unproven_without_transport_log"); }
+  result.evidence_gaps.sort(); result.evidence_limits.sort();
+  result.verdict = result.evidence_gaps.length === 0 ? "PASS" : "BLOCKED";
+  return result;
+}
+
 function evaluateProofGate(options) {
   let slug;
   let restoreOperationId;
@@ -300,6 +403,9 @@ function evaluateProofGate(options) {
     return result;
   }
   const restore = restoreRead.value;
+  if (restore && restore.operation_type === "property_area_range_restore") {
+    return evaluatePropertyAreaRangeProofGate(options, projectState, binding, restore, result);
+  }
   const metadata = restore.metadata;
   if (!plainObject(restore) || restore.schema !== "factory_project_operation" || restore.version !== 1
     || restore.operation_id !== restoreOperationId || restore.project_slug !== project.slug

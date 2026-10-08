@@ -61,8 +61,12 @@ const LIGHTWEIGHT_DB_RESCUE_FILENAME = "lightweight-database-rescue.sql";
 const VERIFY_EXISTING_JOURNAL_FILENAME = "viewing-date-verify-existing.json";
 const VERIFY_EXISTING_JOURNAL_SCHEMA = "csf_viewing_date_restore_verify_existing_journal";
 const VERIFY_EXISTING_JOURNAL_VERSION = 1;
+const PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_FILENAME = "property-area-range-verify-existing.json";
+const PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_SCHEMA = "csf_property_area_range_restore_verify_existing_journal";
+const PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_VERSION = 1;
 const RESTORE_JOURNAL_SCHEMA_VERSION = 1;
 const VIEWING_DATE_RESTORE_OPERATION_TYPE = "viewing_date_restore";
+const PROPERTY_AREA_RANGE_RESTORE_OPERATION_TYPE = "property_area_range_restore";
 const AGENT_CREDENTIAL_OPTION = "factory_agent_signed_auth_credentials";
 const AGENT_REPLAY_PREFIX = "factory_agent_replay_";
 const AGENT_RATE_PREFIX = "factory_agent_rate_";
@@ -74,6 +78,15 @@ const VIEWING_DATE_RESTORE_METADATA_KEYS = [
   "viewing_date_project_binding_fingerprint",
   "viewing_date_project_id",
   "viewing_date_snapshot_id"
+];
+const PROPERTY_AREA_RANGE_RESTORE_METADATA_KEYS = [
+  "plan_id",
+  "property_area_range_apply_operation_id",
+  "property_area_range_plan_id",
+  "property_area_range_project_binding_fingerprint",
+  "property_area_range_project_id",
+  "property_area_range_snapshot_id",
+  "restore_scope"
 ];
 const VERIFY_EXISTING_JOURNAL_KEYS = [
   "apply_operation_id",
@@ -281,36 +294,71 @@ function isExactCompletedRestoreJournal(workRoot, context) {
   }
 }
 
-function isExactVerifyExistingJournal(value, context) {
+function verifyExistingProfileForContext(context) {
+  const operation = context && context.operation;
+  if (!context || context.agentAuthorityMode !== "verify_existing" || !operation) {
+    return null;
+  }
+  if (operation.operation_type === VIEWING_DATE_RESTORE_OPERATION_TYPE) {
+    return {
+      applyOperationIdKey: "viewing_date_apply_operation_id",
+      filename: VERIFY_EXISTING_JOURNAL_FILENAME,
+      journalSchema: VERIFY_EXISTING_JOURNAL_SCHEMA,
+      journalVersion: VERIFY_EXISTING_JOURNAL_VERSION,
+      metadataKeys: VIEWING_DATE_RESTORE_METADATA_KEYS,
+      planIdKey: "viewing_date_plan_id",
+      planIdPattern: /^viewing-date-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      projectBindingFingerprintKey: "viewing_date_project_binding_fingerprint",
+      projectIdKey: "viewing_date_project_id",
+      snapshotIdKey: "viewing_date_snapshot_id"
+    };
+  }
+  if (operation.operation_type === PROPERTY_AREA_RANGE_RESTORE_OPERATION_TYPE) {
+    return {
+      applyOperationIdKey: "property_area_range_apply_operation_id",
+      filename: PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_FILENAME,
+      journalSchema: PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_SCHEMA,
+      journalVersion: PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_VERSION,
+      metadataKeys: PROPERTY_AREA_RANGE_RESTORE_METADATA_KEYS,
+      planIdKey: "property_area_range_plan_id",
+      planIdPattern: /^property-area-range-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      projectBindingFingerprintKey: "property_area_range_project_binding_fingerprint",
+      projectIdKey: "property_area_range_project_id",
+      snapshotIdKey: "property_area_range_snapshot_id"
+    };
+  }
+  return null;
+}
+
+function isExactVerifyExistingJournal(value, context, profile) {
   const operation = context && context.operation;
   const metadata = operation && operation.metadata;
   const project = context && context.projectState && context.projectState.project;
   const restorePlan = context && context.restorePlan;
-  if (!context || context.agentAuthorityMode !== "verify_existing"
-    || !operation || operation.operation_type !== VIEWING_DATE_RESTORE_OPERATION_TYPE
+  if (!profile || !operation
     || !/^op-[a-z0-9-]+$/i.test(operation.operation_id)
-    || !hasExactKeys(metadata, VIEWING_DATE_RESTORE_METADATA_KEYS)
+    || !hasExactKeys(metadata, profile.metadataKeys)
     || metadata.restore_scope !== "managed_website_same_project"
     || !project || !restorePlan
     || metadata.plan_id !== restorePlan.plan_id
-    || metadata.viewing_date_snapshot_id !== restorePlan.snapshot_id
-    || metadata.viewing_date_project_id !== project.project_id
-    || metadata.viewing_date_project_binding_fingerprint !== restorePlan.project_identity_fingerprint
+    || metadata[profile.snapshotIdKey] !== restorePlan.snapshot_id
+    || metadata[profile.projectIdKey] !== project.project_id
+    || metadata[profile.projectBindingFingerprintKey] !== restorePlan.project_identity_fingerprint
     || !isHexDigest(restorePlan.project_identity_fingerprint)
     || !isExactCompletedRestoreJournal(context.workRoot, context)
-    || !/^viewing-date-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(metadata.viewing_date_plan_id)
-    || !/^op-[a-z0-9-]+$/i.test(metadata.viewing_date_apply_operation_id)
-    || !isHexDigest(metadata.viewing_date_project_binding_fingerprint)
+    || !profile.planIdPattern.test(metadata[profile.planIdKey])
+    || !/^op-[a-z0-9-]+$/i.test(metadata[profile.applyOperationIdKey])
+    || !isHexDigest(metadata[profile.projectBindingFingerprintKey])
     || !hasExactKeys(value, VERIFY_EXISTING_JOURNAL_KEYS)
-    || value.schema !== VERIFY_EXISTING_JOURNAL_SCHEMA
-    || value.version !== VERIFY_EXISTING_JOURNAL_VERSION
+    || value.schema !== profile.journalSchema
+    || value.version !== profile.journalVersion
     || value.operation_id !== operation.operation_id
     || value.project_slug !== project.slug
     || value.project_id !== project.project_id
-    || value.project_binding_fingerprint !== metadata.viewing_date_project_binding_fingerprint
-    || value.plan_id !== metadata.viewing_date_plan_id
-    || value.snapshot_id !== metadata.viewing_date_snapshot_id
-    || value.apply_operation_id !== metadata.viewing_date_apply_operation_id
+    || value.project_binding_fingerprint !== metadata[profile.projectBindingFingerprintKey]
+    || value.plan_id !== metadata[profile.planIdKey]
+    || value.snapshot_id !== metadata[profile.snapshotIdKey]
+    || value.apply_operation_id !== metadata[profile.applyOperationIdKey]
     || value.phase !== "health_recorded"
     || !isHexDigest(value.observation_nonce)
     || !hasExactKeys(value.b, ["application_password_identity_sha256", "credential_hmac_sha256", "credential_metadata_sha256", "env_identity", "surface", "wp_config_sha256"])
@@ -337,18 +385,19 @@ function isRestoreWorkRootClean(workRoot, verifyExistingContext) {
     return true;
   }
   const entries = fs.readdirSync(workRoot);
+  const profile = verifyExistingProfileForContext(verifyExistingContext);
   if (entries.every((entry) => entry === JOURNAL_FILENAME)) {
     return true;
   }
-  if (entries.length !== 2 || !entries.includes(JOURNAL_FILENAME) || !entries.includes(VERIFY_EXISTING_JOURNAL_FILENAME)) {
+  if (!profile || entries.length !== 2 || !entries.includes(JOURNAL_FILENAME) || !entries.includes(profile.filename)) {
     return false;
   }
-  const verifyExistingPath = path.join(workRoot, VERIFY_EXISTING_JOURNAL_FILENAME);
+  const verifyExistingPath = path.join(workRoot, profile.filename);
   if (!isSafeJournalFile(verifyExistingPath)) {
     return false;
   }
   try {
-    return isExactVerifyExistingJournal(JSON.parse(fs.readFileSync(verifyExistingPath, "utf8")), verifyExistingContext);
+    return isExactVerifyExistingJournal(JSON.parse(fs.readFileSync(verifyExistingPath, "utf8")), verifyExistingContext, profile);
   } catch (_) {
     return false;
   }

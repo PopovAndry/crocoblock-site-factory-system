@@ -1709,7 +1709,7 @@ class Factory_Render_Adapter {
 			$query_args = $this->apply_property_archive_controls_to_query_args( $query_args, $property_filters );
 		}
 
-		$query = new WP_Query( $query_args );
+		$query = $this->create_property_listing_query( $query_args );
 
 		if ( ! $query->have_posts() && ! $is_property_archive ) {
 			return '<p>No items found.</p>';
@@ -1864,6 +1864,10 @@ class Factory_Render_Adapter {
 			'bedrooms'      => '',
 			'price_min'     => '',
 			'price_max'     => '',
+			'area_min'      => '',
+			'area_max'      => '',
+			'area_range_enabled' => false,
+			'area_range_invalid' => false,
 			'sort'          => 'newest',
 			'per_page'      => '9',
 		];
@@ -1906,7 +1910,105 @@ class Factory_Render_Adapter {
 			$state['price_min'] = $min;
 		}
 
+		if ( null !== $this->get_property_area_range_activation() ) {
+			$state['area_range_enabled'] = true;
+			$area_min                     = $this->get_property_area_range_bound( 'area_min' );
+			$area_max                     = $this->get_property_area_range_bound( 'area_max' );
+
+			if ( ! $area_min['valid'] || ! $area_max['valid'] ) {
+				$state['area_range_invalid'] = true;
+			} else {
+				$state['area_min'] = $area_min['value'];
+				$state['area_max'] = $area_max['value'];
+
+				if ( '' !== $state['area_min'] && '' !== $state['area_max'] && $this->compare_property_area_decimals( $state['area_min'], $state['area_max'] ) > 0 ) {
+					$state['area_range_invalid'] = true;
+				}
+			}
+		}
+
 		return $state;
+	}
+
+	private function get_property_area_range_activation(): ?array {
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'factory_runtime_binding_v1_read' ) ) {
+			return null;
+		}
+
+		$activation = get_option( 'factory_property_area_range_v1', null );
+		$expected   = [ 'operation_id', 'plan_id', 'project_id', 'schema_version', 'snapshot_id', 'state' ];
+
+		if ( ! is_array( $activation ) ) {
+			return null;
+		}
+
+		$actual = array_keys( $activation );
+		sort( $actual );
+		sort( $expected );
+
+		if (
+			$actual !== $expected
+			|| 1 !== $activation['schema_version']
+			|| 'enabled' !== $activation['state']
+			|| ! is_string( $activation['project_id'] )
+			|| ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $activation['project_id'] )
+			|| ! is_string( $activation['plan_id'] )
+			|| ! preg_match( '/^property-area-range-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $activation['plan_id'] )
+			|| ! is_string( $activation['snapshot_id'] )
+			|| ! preg_match( '/^snapshot-[a-z0-9]+(?:-[a-z0-9]+)+$/', $activation['snapshot_id'] )
+			|| ! is_string( $activation['operation_id'] )
+			|| ! preg_match( '/^op-[a-z0-9-]+$/i', $activation['operation_id'] )
+		) {
+			return null;
+		}
+
+		$binding = factory_runtime_binding_v1_read();
+
+		if ( ! is_array( $binding ) || true !== ( $binding['ok'] ?? false ) || ! is_array( $binding['binding'] ?? null ) || $activation['project_id'] !== ( $binding['binding']['project_id'] ?? null ) ) {
+			return null;
+		}
+
+		return $activation;
+	}
+
+	private function get_property_area_range_bound( string $key ): array {
+		if ( ! array_key_exists( $key, $_GET ) ) {
+			return [ 'present' => false, 'valid' => true, 'value' => '', 'raw' => '' ];
+		}
+
+		$value = $_GET[ $key ];
+
+		if ( ! is_string( $value ) ) {
+			return [ 'present' => true, 'valid' => false, 'value' => '', 'raw' => '' ];
+		}
+
+		$value = function_exists( 'wp_unslash' ) ? wp_unslash( $value ) : $value;
+
+		if ( ! is_string( $value ) ) {
+			return [ 'present' => true, 'valid' => false, 'value' => '', 'raw' => '' ];
+		}
+
+		if ( '' === $value ) {
+			return [ 'present' => true, 'valid' => true, 'value' => '', 'raw' => '' ];
+		}
+
+		if ( ! preg_match( '/^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$/D', $value ) ) {
+			return [ 'present' => true, 'valid' => false, 'value' => '', 'raw' => $value ];
+		}
+
+		return [ 'present' => true, 'valid' => true, 'value' => $value, 'raw' => $value ];
+	}
+
+	private function compare_property_area_decimals( string $left, string $right ): int {
+		$normalize = static function ( string $value ): int {
+			$parts    = explode( '.', $value, 2 );
+			$whole    = (int) $parts[0];
+			$fraction = isset( $parts[1] ) ? str_pad( $parts[1], 2, '0' ) : '00';
+
+			return ( $whole * 100 ) + (int) $fraction;
+		};
+
+		return $normalize( $left ) <=> $normalize( $right );
 	}
 
 	private function get_query_param_string( string $key ): string {
@@ -1998,6 +2100,17 @@ class Factory_Render_Adapter {
 			];
 		}
 
+		if ( ! empty( $filters['area_range_enabled'] ) ) {
+			if ( ! empty( $filters['area_range_invalid'] ) ) {
+				$args['post__in'] = [ 0 ];
+			} elseif ( '' !== ( $filters['area_min'] ?? '' ) || '' !== ( $filters['area_max'] ?? '' ) ) {
+				$args['factory_property_area_range'] = [
+					'area_min' => $filters['area_min'] ?? '',
+					'area_max' => $filters['area_max'] ?? '',
+				];
+			}
+		}
+
 		if ( ! empty( $tax_query ) ) {
 			if ( count( $tax_query ) > 1 ) {
 				$tax_query['relation'] = 'AND';
@@ -2015,6 +2128,61 @@ class Factory_Render_Adapter {
 		}
 
 		return $args;
+	}
+
+	private function create_property_listing_query( array $query_args ): WP_Query {
+		$has_area_range = isset( $query_args['factory_property_area_range'] );
+
+		if ( $has_area_range ) {
+			add_filter( 'posts_where', [ $this, 'filter_property_area_range_where' ], 10, 2 );
+		}
+
+		try {
+			return new WP_Query( $query_args );
+		} finally {
+			if ( $has_area_range ) {
+				remove_filter( 'posts_where', [ $this, 'filter_property_area_range_where' ], 10 );
+			}
+		}
+	}
+
+	public function filter_property_area_range_where( string $where, WP_Query $query ): string {
+		$range = $query->get( 'factory_property_area_range' );
+
+		if ( ! is_array( $range ) || [ 'area_min', 'area_max' ] !== array_keys( $range ) ) {
+			return $where . ' AND 1=0';
+		}
+
+		$area_min = $range['area_min'];
+		$area_max = $range['area_max'];
+
+		if ( ! is_string( $area_min ) || ! is_string( $area_max ) || ( '' === $area_min && '' === $area_max ) ) {
+			return $where . ' AND 1=0';
+		}
+
+		global $wpdb;
+
+		$conditions = [
+			'factory_area_meta.meta_key = %s',
+			"factory_area_meta.meta_value REGEXP '^(0|[1-9][0-9]{0,9})([.][0-9]{1,2})?$'",
+		];
+		$values = [ 'property_size' ];
+
+		if ( '' !== $area_min && '' !== $area_max ) {
+			$conditions[] = 'CAST(factory_area_meta.meta_value AS DECIMAL(12,2)) BETWEEN CAST(%s AS DECIMAL(12,2)) AND CAST(%s AS DECIMAL(12,2))';
+			$values[]     = $area_min;
+			$values[]     = $area_max;
+		} elseif ( '' !== $area_min ) {
+			$conditions[] = 'CAST(factory_area_meta.meta_value AS DECIMAL(12,2)) >= CAST(%s AS DECIMAL(12,2))';
+			$values[]     = $area_min;
+		} else {
+			$conditions[] = 'CAST(factory_area_meta.meta_value AS DECIMAL(12,2)) <= CAST(%s AS DECIMAL(12,2))';
+			$values[]     = $area_max;
+		}
+
+		$predicate = $wpdb->prepare( implode( ' AND ', $conditions ), ...$values );
+
+		return $where . " AND EXISTS ( SELECT 1 FROM {$wpdb->postmeta} AS factory_area_meta WHERE factory_area_meta.post_id = {$wpdb->posts}.ID AND {$predicate} )";
 	}
 
 	private function apply_property_archive_controls_to_query_args( array $args, array $filters ): array {
@@ -2090,6 +2258,22 @@ class Factory_Render_Adapter {
 					<?php echo esc_html( 'Price max' ); ?>
 					<input type="number" min="0" step="1" name="price_max" value="<?php echo esc_attr( $filters['price_max'] ); ?>" placeholder="300000" style="width: 100%; border: 1px solid <?php echo esc_attr( $border ); ?>; border-radius: 12px; min-height: 42px; padding: 8px 11px; background: <?php echo esc_attr( $surface ); ?>;">
 				</label>
+
+				<?php if ( ! empty( $filters['area_range_enabled'] ) ) : ?>
+					<label style="display: grid; gap: 7px; color: <?php echo esc_attr( $text ); ?>; font-size: 13px; font-weight: 800;">
+						<?php echo esc_html( 'Area min (sq m)' ); ?>
+						<input type="text" inputmode="decimal" pattern="^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$" name="area_min" value="<?php echo esc_attr( $filters['area_min'] ); ?>" placeholder="74" style="width: 100%; border: 1px solid <?php echo esc_attr( $border ); ?>; border-radius: 12px; min-height: 42px; padding: 8px 11px; background: <?php echo esc_attr( $surface ); ?>;">
+					</label>
+
+					<label style="display: grid; gap: 7px; color: <?php echo esc_attr( $text ); ?>; font-size: 13px; font-weight: 800;">
+						<?php echo esc_html( 'Area max (sq m)' ); ?>
+						<input type="text" inputmode="decimal" pattern="^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$" name="area_max" value="<?php echo esc_attr( $filters['area_max'] ); ?>" placeholder="120" style="width: 100%; border: 1px solid <?php echo esc_attr( $border ); ?>; border-radius: 12px; min-height: 42px; padding: 8px 11px; background: <?php echo esc_attr( $surface ); ?>;">
+					</label>
+
+					<a class="factory-button-link" href="<?php echo esc_url( $this->get_property_area_range_reset_url() ); ?>" style="color: <?php echo esc_attr( $style_tokens['link'] ); ?>; font-weight: 800; text-decoration: none;">
+						<?php echo esc_html( 'Clear area' ); ?>
+					</a>
+				<?php endif; ?>
 
 				<div style="display: flex; gap: 10px; flex-wrap: wrap;">
 					<button type="submit" style="border: 0; border-radius: 999px; background: <?php echo esc_attr( $style_tokens['button'] ); ?>; color: <?php echo esc_attr( $style_tokens['button_text'] ); ?>; min-height: 42px; padding: 0 18px; font-weight: 800; cursor: pointer;">
@@ -2192,6 +2376,16 @@ class Factory_Render_Adapter {
 			}
 		}
 
+		if ( null !== $this->get_property_area_range_activation() ) {
+			foreach ( [ 'area_min', 'area_max' ] as $key ) {
+				$bound = $this->get_property_area_range_bound( $key );
+
+				if ( $bound['present'] && '' !== $bound['raw'] ) {
+					$args[ $key ] = $bound['raw'];
+				}
+			}
+		}
+
 		return $args;
 	}
 
@@ -2258,6 +2452,15 @@ class Factory_Render_Adapter {
 		}
 
 		return home_url( '/properties/' );
+	}
+
+	private function get_property_area_range_reset_url(): string {
+		$permalink = $this->get_property_filter_reset_url();
+		$args      = $this->get_property_archive_pagination_args();
+
+		unset( $args['area_min'], $args['area_max'] );
+
+		return empty( $args ) ? $permalink : add_query_arg( $args, $permalink );
 	}
 
 	private function get_listing_query_args( array $listing, array $blueprint, string $query_key = '' ): array {

@@ -23,6 +23,7 @@ const AGENT_RATE_PREFIX = "factory_agent_rate_";
 const VERIFY_EXISTING_JOURNAL_SCHEMA = "csf_viewing_date_restore_verify_existing_journal";
 const VERIFY_EXISTING_JOURNAL_VERSION = 1;
 const VERIFY_EXISTING_JOURNAL_FILENAME = "viewing-date-verify-existing.json";
+const PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_SCHEMA = "csf_property_area_range_restore_verify_existing_journal";
 const SUBMISSION_RECEIPTS_SCHEMA = "csf_viewing_date_submission_receipts";
 const SUBMISSION_RECEIPTS_VERSION = 1;
 
@@ -192,13 +193,13 @@ function healthAttempt(observation) {
   };
 }
 
-function makeVerifyExistingJournal(context, checkpoint, nonce, preserved, attempt) {
+function makeVerifyExistingJournalForSchema(context, checkpoint, nonce, preserved, attempt, schema) {
   assertVerifyExistingObservation(checkpoint, context.projectSlug);
   if (!Buffer.isBuffer(nonce) || nonce.length !== 32) throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
   const reservedAttempt = healthAttempt(attempt);
   if (reservedAttempt.project_slug !== context.projectSlug) throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be stored safely.");
   return {
-    schema: VERIFY_EXISTING_JOURNAL_SCHEMA,
+    schema,
     version: VERIFY_EXISTING_JOURNAL_VERSION,
     operation_id: context.operationId,
     project_slug: context.projectSlug,
@@ -221,11 +222,11 @@ function makeVerifyExistingJournal(context, checkpoint, nonce, preserved, attemp
   };
 }
 
-function assertVerifyExistingJournal(value, context, phase) {
+function assertVerifyExistingJournalForSchema(value, context, phase, schema) {
   const expectedKeys = ["apply_operation_id", "b", "health_attempt", "health", "observation_nonce", "operation_id", "phase", "plan_id", "project_binding_fingerprint", "project_id", "project_slug", "schema", "snapshot_id", "version"];
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value).sort().join(",") !== expectedKeys.filter((key) => key === "health" ? phase === "health_recorded" : true).sort().join(",")
-    || value.schema !== VERIFY_EXISTING_JOURNAL_SCHEMA || value.version !== VERIFY_EXISTING_JOURNAL_VERSION
+    || value.schema !== schema || value.version !== VERIFY_EXISTING_JOURNAL_VERSION
     || value.operation_id !== context.operationId || value.project_slug !== context.projectSlug || value.project_id !== context.projectId
     || value.project_binding_fingerprint !== context.projectBindingFingerprint
     || value.plan_id !== context.planId || value.snapshot_id !== context.snapshotId || value.apply_operation_id !== context.applyOperationId
@@ -257,6 +258,25 @@ function assertVerifyExistingJournal(value, context, phase) {
     throw fail("viewing_date_restore_verification_journal_invalid", "Restore verification evidence could not be verified safely.");
   }
   return value;
+}
+
+// These wrappers are the only profile selection boundary.  Neither plans nor
+// callers can supply a schema: Restore chooses one of the two fixed server
+// profiles before it reaches the B -> health -> C callbacks.
+function makeVerifyExistingJournal(context, checkpoint, nonce, preserved, attempt) {
+  return makeVerifyExistingJournalForSchema(context, checkpoint, nonce, preserved, attempt, VERIFY_EXISTING_JOURNAL_SCHEMA);
+}
+
+function assertVerifyExistingJournal(value, context, phase) {
+  return assertVerifyExistingJournalForSchema(value, context, phase, VERIFY_EXISTING_JOURNAL_SCHEMA);
+}
+
+function makePropertyAreaRangeVerifyExistingJournal(context, checkpoint, nonce, preserved, attempt) {
+  return makeVerifyExistingJournalForSchema(context, checkpoint, nonce, preserved, attempt, PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_SCHEMA);
+}
+
+function assertPropertyAreaRangeVerifyExistingJournal(value, context, phase) {
+  return assertVerifyExistingJournalForSchema(value, context, phase, PROPERTY_AREA_RANGE_VERIFY_EXISTING_JOURNAL_SCHEMA);
 }
 
 function writeVerifyExistingJournal(context, journal) {
@@ -876,4 +896,4 @@ async function restoreViewingDate(options) {
   return { status: "restored", mutation_performed: true };
 }
 
-module.exports = { RESTORE_HANDLE, RESTORE_IDENTITY_SCHEMA, RESTORE_IDENTITY_VERSION, AGENT_CREDENTIAL_OPTION, AGENT_CREDENTIAL_FIELDS, AGENT_REPLAY_PREFIX, assertAgentCredentialObservation, assertAgentRepairDelta, assertAgentRepairSurface, assertApplicationPasswordIdentity, assertPostApply, assertRestoredBaseline, assertSnapshotMetadata, assertStableEnv, assertUnchangedApplicationPasswordIdentity, assertVerifyExistingObservation, fileIdentity, isAcceptedApply, isExactRestoreSuccess, parseCanonicalRateCounter, prepareViewingDateRestore, prepareViewingDateRestoreAuthority, readAgentRepairSurface, readVerifyExistingSurface, replayOptionName, restoreViewingDate, restoreIdentity, resolveRestoreTerminal, verifyCredentialChallenge, verifyFunctionalSurfaces, verifyRestoredFilesystem };
+module.exports = { RESTORE_HANDLE, RESTORE_IDENTITY_SCHEMA, RESTORE_IDENTITY_VERSION, AGENT_CREDENTIAL_OPTION, AGENT_CREDENTIAL_FIELDS, AGENT_REPLAY_PREFIX, assertAgentCredentialObservation, assertAgentRepairDelta, assertAgentRepairSurface, assertApplicationPasswordIdentity, assertPostApply, assertPropertyAreaRangeVerifyExistingJournal, assertRestoredBaseline, assertSnapshotMetadata, assertStableEnv, assertUnchangedApplicationPasswordIdentity, assertVerifyExistingJournal, assertVerifyExistingObservation, fileIdentity, isAcceptedApply, isExactRestoreSuccess, makePropertyAreaRangeVerifyExistingJournal, makeVerifyExistingJournal, parseCanonicalRateCounter, prepareViewingDateRestore, prepareViewingDateRestoreAuthority, readAgentRepairSurface, readVerifyExistingSurface, replayOptionName, restoreViewingDate, restoreIdentity, resolveRestoreTerminal, verifyCredentialChallenge, verifyFunctionalSurfaces, verifyRestoredFilesystem };

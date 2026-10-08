@@ -98,6 +98,18 @@ const {
   RESTORE_HANDLE: VIEWING_DATE_RESTORE_HANDLE,
   restoreViewingDate
 } = require("./viewing-date-restore");
+const {
+  createPropertyAreaRangePreview,
+  hasPersistedPropertyAreaRangePlan,
+  preparePropertyAreaRangeRecovery
+} = require("./property-area-range-preview");
+const {
+  applyPropertyAreaRange
+} = require("./property-area-range-apply");
+const {
+  RESTORE_HANDLE: PROPERTY_AREA_RANGE_RESTORE_HANDLE,
+  restorePropertyAreaRange
+} = require("./property-area-range-restore");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -549,9 +561,56 @@ function validateViewingDateRestorePayload(payload) {
   }
 }
 
+function validatePropertyAreaRangePreviewPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length !== 0) {
+    throw createStructuredError("Property Area Range Preview does not accept browser-supplied change details.", "property_area_range_preview_request_rejected", 400);
+  }
+}
+
+function isPropertyAreaRangePlanId(value) {
+  return typeof value === "string" && /^property-area-range-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+
+function isSnapshotId(value) {
+  return typeof value === "string" && /^snapshot-[a-z0-9-]+$/.test(value);
+}
+
+function isOperationId(value) {
+  return typeof value === "string" && /^op-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{6}$/.test(value);
+}
+
+function validatePropertyAreaRangeRecoveryPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length !== 2 || !isPropertyAreaRangePlanId(input.plan_id) || input.confirm_prepare_recovery_point !== true) {
+    throw createStructuredError("Property Area Range Recovery requires the prepared Preview and confirmation.", "property_area_range_recovery_request_rejected", 400);
+  }
+  return input.plan_id;
+}
+
+function validatePropertyAreaRangeApplyPayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length !== 2 || !isPropertyAreaRangePlanId(input.plan_id) || input.confirm_apply !== true) {
+    throw createStructuredError("Property Area Range Apply requires the prepared Preview and confirmation.", "property_area_range_apply_request_rejected", 400);
+  }
+  return input.plan_id;
+}
+
+function validatePropertyAreaRangeRestorePayload(payload) {
+  const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  if (Object.keys(input).length !== 5 || input.confirm_restore !== true || input.restore_handle !== PROPERTY_AREA_RANGE_RESTORE_HANDLE
+    || !isPropertyAreaRangePlanId(input.plan_id) || !isSnapshotId(input.snapshot_id) || !isOperationId(input.apply_operation_id)) {
+    throw createStructuredError("Property Area Range Restore requires the exact accepted lineage and confirmation.", "property_area_range_restore_request_rejected", 400);
+  }
+  return { planId: input.plan_id, snapshotId: input.snapshot_id, applyOperationId: input.apply_operation_id };
+}
+
 function assertGenericRestoreAllowed(slug, projectsRoot) {
   if (hasPersistedViewingDatePlan({ slug, projectsRoot })) {
     throw createStructuredError("This project requires its guarded Restore flow.", "viewing_date_restore_required", 409);
+  }
+  if (hasPersistedPropertyAreaRangePlan({ slug, projectsRoot })) {
+    throw createStructuredError("This project requires its guarded Restore flow.", "property_area_range_restore_required", 409);
   }
 }
 
@@ -568,6 +627,14 @@ function sendViewingDateRestoreError(response, error) {
   const message = statusCode >= 500
     ? "Viewing-date Restore is temporarily unavailable."
     : "Viewing-date Restore cannot proceed safely.";
+  sendJson(response, statusCode, { ok: false, status: "blocked", error: message, message });
+}
+
+function sendPropertyAreaRangeError(response, error) {
+  const statusCode = Number.isInteger(error && error.statusCode) ? error.statusCode : 500;
+  const message = statusCode >= 500
+    ? "Property Area Range is temporarily unavailable."
+    : "Property Area Range cannot proceed safely.";
   sendJson(response, statusCode, { ok: false, status: "blocked", error: message, message });
 }
 
@@ -764,6 +831,7 @@ function sendRestoreFlowError(response, error) {
     restore_artifact_digest_mismatch: [409, "Recovery Point changed after review. Review it again."],
     restore_execution_input_rejected: [400, "Restore execution accepts the reviewed plan and exact confirmation only."],
     viewing_date_restore_required: [409, "This project requires its guarded Restore flow."],
+    property_area_range_restore_required: [409, "This project requires its guarded Restore flow."],
     restore_verification_failed: [500, "Restore did not complete verification."],
     idempotency_key_conflict: [409, "Restore request conflicts with an earlier request."],
     operation_retry_requires_new_idempotency_key: [409, "Restore did not complete. Review the result and try again."]
@@ -2037,6 +2105,73 @@ function createLauncherServer(options) {
         return;
       }
 
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/property-area-range\/preview$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          validatePropertyAreaRangePreviewPayload(payload);
+          const previewService = options.propertyAreaRangePreviewService || createPropertyAreaRangePreview;
+          const result = await previewService({ projectsRoot, slug });
+          sendJson(response, 200, { ok: true, status: result.status, plan_id: result.plan_id });
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendPropertyAreaRangeError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/property-area-range\/recovery-point$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const planId = validatePropertyAreaRangeRecoveryPayload(payload);
+          const recoveryService = options.propertyAreaRangeRecoveryService || preparePropertyAreaRangeRecovery;
+          const result = await recoveryService({ projectsRoot, slug, planId });
+          sendJson(response, 200, { ok: true, status: result.status, snapshot_id: result.snapshot_id });
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendPropertyAreaRangeError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/property-area-range\/apply$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const planId = validatePropertyAreaRangeApplyPayload(payload);
+          const applyService = options.propertyAreaRangeApplyService || applyPropertyAreaRange;
+          const result = await applyService({ projectsRoot, slug, planId, idempotencyKey: getRequestIdempotencyKey(request) });
+          if (!result || !["applied", "already_applied"].includes(result.status) || !isPropertyAreaRangePlanId(result.plan_id) || !isSnapshotId(result.snapshot_id) || !isOperationId(result.operation_id)) {
+            throw createStructuredError("Property Area Range Apply did not produce authoritative lineage.", "property_area_range_apply_response_invalid", 500);
+          }
+          sendJson(response, 200, { ok: true, status: result.status, mutation_performed: result.mutation_performed === true, lineage: { plan_id: result.plan_id, snapshot_id: result.snapshot_id, apply_operation_id: result.operation_id } });
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendPropertyAreaRangeError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "POST" && /^\/api\/projects\/[^/]+\/property-area-range\/restore$/.test(requestUrl.pathname)) {
+        try {
+          const payload = await readJsonPayload(request);
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const confirmation = validatePropertyAreaRangeRestorePayload(payload);
+          const restoreService = options.propertyAreaRangeRestoreService || restorePropertyAreaRange;
+          const result = await restoreService({ projectsRoot, slug, confirmation, idempotencyKey: getRequestIdempotencyKey(request) });
+          sendJson(response, 200, { ok: true, status: result.status, mutation_performed: result.mutation_performed === true });
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendPropertyAreaRangeError(response, error);
+        }
+        return;
+      }
+
       if (request.method === "POST" && /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname)) {
         try {
           const payload = await readJsonPayload(request);
@@ -2067,7 +2202,7 @@ function createLauncherServer(options) {
           const payload = await readJsonPayload(request);
           const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
           assertProjectExistsForRoute(slug, projectsRoot);
-          assertGenericRestoreAllowed(slug);
+          assertGenericRestoreAllowed(slug, projectsRoot);
           const input = validateRestoreExecutionPayload(payload);
           const operationResult = await executeManagedWebsiteRestore({
             projectsRoot,
@@ -2580,6 +2715,10 @@ function createLauncherServer(options) {
         /^\/api\/projects\/[^/]+\/viewing-date\/preview$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/viewing-date\/recovery-point$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/viewing-date\/apply$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/property-area-range\/preview$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/property-area-range\/recovery-point$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/property-area-range\/apply$/.test(requestUrl.pathname) ||
+        /^\/api\/projects\/[^/]+\/property-area-range\/restore$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/recovery-points\/[^/]+\/restore-plan$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/restore\/execute$/.test(requestUrl.pathname) ||
         /^\/api\/projects\/[^/]+\/site\/surface-proof$/.test(requestUrl.pathname) ||

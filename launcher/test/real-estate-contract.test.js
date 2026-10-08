@@ -219,6 +219,50 @@ test("Property Discovery rules fail closed for missing, unknown, duplicate, and 
   assert.throws(() => buildRealEstateBusinessSummary(orCombination), { code: "real_estate_contract_invalid_business_semantics" });
 });
 
+test("Property Area range contract is exact, dormant-by-default, and fail-closed", () => {
+  const contract = loadRealEstateContract();
+  assert.deepEqual(contract.property_area_ranges, [{
+    id: "property_area_range",
+    query_id: "property_catalog",
+    field_id: "property_size",
+    label: "Area",
+    unit: "sq_m",
+    selection_mode: "optional_range",
+    comparison: "inclusive",
+    decimal_type: "decimal_12_2",
+    accepted_value_grammar: "nonnegative_decimal_12_2",
+    activation: "server_owned_transaction_only",
+    unactivated_behavior: "base_catalog",
+    invalid_input_behavior: "empty_state",
+    missing_value_behavior: "exclude_when_active",
+    reset_behavior: "clear_area_bounds_only"
+  }]);
+
+  for (const [key, value] of [
+    ["field_id", "price"],
+    ["comparison", "exclusive"],
+    ["decimal_type", "numeric"],
+    ["accepted_value_grammar", "integer"],
+    ["activation", "browser_get"],
+    ["unactivated_behavior", "active"],
+    ["invalid_input_behavior", "base_catalog"],
+    ["missing_value_behavior", "include_when_active"],
+    ["reset_behavior", "clear_all_filters"]
+  ]) {
+    const invalid = clone(contract);
+    invalid.property_area_ranges[0][key] = value;
+    assert.throws(() => validateRealEstateContract(invalid), undefined, key);
+  }
+
+  const malformed = clone(contract);
+  malformed.property_area_ranges[0].provider = "JetSmartFilters";
+  assert.throws(() => validateRealEstateContract(malformed), { code: "real_estate_contract_invalid_business_semantics" });
+
+  const duplicate = clone(contract);
+  duplicate.property_area_ranges.push(clone(duplicate.property_area_ranges[0]));
+  assert.throws(() => validateRealEstateContract(duplicate), { code: "real_estate_contract_duplicate_id" });
+});
+
 test("Request Viewing form, selected property context, and exact journey bindings validate deterministically", () => {
   const contract = loadRealEstateContract();
   assert.equal(contract.forms[0].id, "request_viewing_form");
