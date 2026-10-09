@@ -68,23 +68,54 @@ function pluginDirectory() {
   return path.resolve(__dirname, "../../wordpress-plugin");
 }
 
+function pluginIdentityRecord(relativePath, sha256) {
+  if (typeof relativePath !== "string" || !relativePath || relativePath.startsWith("/")
+    || relativePath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+    || typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)) {
+    throw fail("property_area_range_plugin_identity_invalid", "The reviewed Factory plugin could not be identified.");
+  }
+  return String(Buffer.byteLength(relativePath, "utf8")) + ":" + relativePath + ":" + sha256;
+}
+
+function pluginIdentityDigest(records) {
+  if (!Array.isArray(records) || records.some((record) => typeof record !== "string" || !record)) {
+    throw fail("property_area_range_plugin_identity_invalid", "The reviewed Factory plugin could not be identified.");
+  }
+  return hash(Buffer.from(records.join("\n") + "\n", "utf8"));
+}
+
 function directoryIdentity(directory) {
-  const root = path.resolve(directory);
-  const rootStat = fs.lstatSync(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw fail("property_area_range_plugin_identity_invalid", "The reviewed Factory plugin could not be identified.");
-  const files = [];
-  const visit = (current) => {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const target = path.join(current, entry.name);
-      const stat = fs.lstatSync(target);
-      if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) throw fail("property_area_range_plugin_identity_invalid", "The reviewed Factory plugin could not be identified.");
-      if (stat.isDirectory()) visit(target);
-      else files.push({ name: path.relative(root, target).split(path.sep).join("/"), sha256: hash(fs.readFileSync(target)) });
-    }
-  };
-  visit(root);
-  files.sort((left, right) => left.name.localeCompare(right.name));
-  return hash(files);
+  try {
+    const root = path.resolve(directory);
+    const rootStat = fs.lstatSync(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw fail("property_area_range_plugin_identity_invalid", "The reviewed Factory plugin could not be identified.");
+    const files = [];
+    const visit = (current) => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const target = path.join(current, entry.name);
+        const stat = fs.lstatSync(target);
+        if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) throw fail("property_area_range_plugin_identity_invalid", "The reviewed Factory plugin could not be identified.");
+        if (stat.isDirectory()) visit(target);
+        else {
+          const relative = path.relative(root, target).split(path.sep).join("/");
+          files.push(pluginIdentityRecord(relative, hash(fs.readFileSync(target))));
+        }
+      }
+    };
+    visit(root);
+    files.sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+    return pluginIdentityDigest(files);
+  } catch (error) {
+    if (error && error.code === "property_area_range_plugin_identity_invalid") throw error;
+    throw fail("property_area_range_plugin_identity_invalid", "The reviewed Factory plugin could not be identified.");
+  }
+}
+
+function nativePluginIdentityPhp(rootExpression) {
+  return "$factory_plugin_identity_root=" + rootExpression + ";"
+    + "$factory_plugin_identity_files=[];$factory_plugin_identity_valid=is_dir($factory_plugin_identity_root)&&!is_link($factory_plugin_identity_root);"
+    + "if($factory_plugin_identity_valid){$factory_plugin_identity_iterator=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($factory_plugin_identity_root,FilesystemIterator::SKIP_DOTS));foreach($factory_plugin_identity_iterator as $factory_plugin_identity_file){if($factory_plugin_identity_file->isLink()||!$factory_plugin_identity_file->isFile()){$factory_plugin_identity_valid=false;break;}$factory_plugin_identity_relative=str_replace('\\\\','/',substr($factory_plugin_identity_file->getPathname(),strlen($factory_plugin_identity_root)+1));$factory_plugin_identity_hash=hash_file('sha256',$factory_plugin_identity_file->getPathname());if($factory_plugin_identity_relative===''||str_starts_with($factory_plugin_identity_relative,'/')||preg_match('#(?:^|/)\\.\\.?(/|$)#',$factory_plugin_identity_relative)||$factory_plugin_identity_hash===false||!preg_match('/^[a-f0-9]{64}$/',$factory_plugin_identity_hash)){$factory_plugin_identity_valid=false;break;}$factory_plugin_identity_files[]=strlen($factory_plugin_identity_relative).':'.$factory_plugin_identity_relative.':'.$factory_plugin_identity_hash;}}"
+    + "sort($factory_plugin_identity_files,SORT_STRING);$factory_plugin_identity_sha256=$factory_plugin_identity_valid?hash('sha256',implode(\"\\n\",$factory_plugin_identity_files).\"\\n\"):null;";
 }
 
 function exactAreaContractIdentity() {
@@ -113,11 +144,11 @@ function nativeScript(input) {
   const encoded = Buffer.from(JSON.stringify(input), "utf8").toString("base64");
   return "$_=json_decode(base64_decode('" + encoded + "'),true);"
     + "$binding=function_exists('factory_runtime_binding_v1_read')?factory_runtime_binding_v1_read():['ok'=>false];"
-    + "$root=WP_PLUGIN_DIR.'/crocoblock-site-factory';$files=[];$valid=is_dir($root);if($valid){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS));foreach($it as $f){if($f->isLink()||!$f->isFile()){$valid=false;break;}$files[]=str_replace('\\\\','/',substr($f->getPathname(),strlen($root)+1)).':'.hash_file('sha256',$f->getPathname());}}sort($files,SORT_STRING);$plugin_hash=$valid?hash('sha256',wp_json_encode($files)):null;"
+    + nativePluginIdentityPhp("WP_PLUGIN_DIR.'/crocoblock-site-factory'")
     + "$ids=get_posts(['post_type'=>'property','post_status'=>'publish','fields'=>'ids','numberposts'=>-1,'orderby'=>'ID','order'=>'ASC']);$areas=[];foreach($ids as $id){$v=get_post_meta((int)$id,'property_size',false);$areas[]=['post_id'=>(int)$id,'values'=>array_values($v)];}"
     + "$sentinel=new stdClass();$option=get_option('" + OPTION_NAME + "',$sentinel);$option_present=$option!==$sentinel;"
     + "if(($_['mode']??'read')==='write'){$expected=$_['activation']??null;if(!$option_present&&is_array($expected)&&add_option('" + OPTION_NAME + "',$expected,'',false)){$option=get_option('" + OPTION_NAME + "',$sentinel);$option_present=$option!==$sentinel;}}"
-    + "echo wp_json_encode(['runtime_binding'=>$binding,'plugin_identity_sha256'=>$plugin_hash,'property_areas'=>$areas,'option_present'=>$option_present,'option_value'=>$option_present?$option:null]);";
+    + "echo wp_json_encode(['runtime_binding'=>$binding,'plugin_identity_sha256'=>$factory_plugin_identity_sha256,'property_areas'=>$areas,'option_present'=>$option_present,'option_value'=>$option_present?$option:null]);";
 }
 
 async function observeAreaRuntime(projectState, options) {
