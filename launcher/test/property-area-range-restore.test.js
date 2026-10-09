@@ -15,7 +15,7 @@ const { restorePropertyAreaRange } = require("../src/property-area-range-restore
 
 const PLUGIN = "a".repeat(64);
 const SECRET = "property-area-range-server-secret";
-const COVERAGE = { schema: "csf_viewing_date_recovery_scope_coverage", version: 1, database: { scope: "full_database", capture_authority: true, artifact_bytes_verified: true, affected_resources: ["request_viewing_form_post", "request_viewing_form_meta_actions_ownership", "request_viewing_policy_binding_option"], row_level_inspection: false, restore_verification_required: true }, wordpress_filesystem: { scope: "wordpress_filesystem_archive", artifact_bytes_verified: true, policy_file_verified: true }, project_metadata: { scope: "project_metadata", artifact_bytes_verified: true, project_identity_verified: true } };
+const COVERAGE = { schema: "csf_property_area_range_recovery_scope_coverage", version: 1, database: { scope: "full_database", capture_authority: true, artifact_bytes_verified: true, affected_resources: ["property_catalog_posts", "property_catalog_property_size_meta", "property_catalog_filter_taxonomies", "property_area_range_activation_option"], row_level_inspection: false, restore_verification_required: true }, wordpress_filesystem: { scope: "wordpress_filesystem_archive", artifact_bytes_verified: true, required_files_verified: ["wordpress/wp-content/plugins/crocoblock-site-factory/crocoblock-site-factory.php", "wordpress/wp-content/plugins/crocoblock-site-factory/includes/adapters/render-adapter.php"] }, project_metadata: { scope: "project_metadata", artifact_bytes_verified: true, project_identity_verified: true } };
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function hash(value) { return crypto.createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex"); }
@@ -26,6 +26,10 @@ async function fixture() {
   const state = readProjectBySlug(scaffold.project.slug, projectsRoot);
   fs.mkdirSync(path.join(state.project.runtime_path, "wordpress"), { recursive: true });
   fs.writeFileSync(path.join(state.project.runtime_path, "wordpress", "wp-config.php"), "fixture-config", "utf8");
+  const pluginRoot = path.join(state.project.runtime_path, "wordpress", "wp-content", "plugins", "crocoblock-site-factory");
+  fs.mkdirSync(path.join(pluginRoot, "includes", "adapters"), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, "crocoblock-site-factory.php"), "<?php // factory plugin\n", "utf8");
+  fs.writeFileSync(path.join(pluginRoot, "includes", "adapters", "render-adapter.php"), "<?php // archive adapter\n", "utf8");
   let option = null;
   const observe = () => ({ runtime_binding: { ok: true, binding: { schema_version: 1, binding_kind: "server_owned_runtime_binding", project_id: state.project.project_id, project_slug: state.project.slug } }, plugin_identity_sha256: PLUGIN, property_areas: [{ post_id: 3, values: ["74.12"] }, { post_id: 7, values: ["120"] }], option_present: option !== null, option_value: option });
   const preview = await createPropertyAreaRangePreview({ projectsRoot, slug: state.project.slug, observe: async () => observe(), expectedPluginIdentity: PLUGIN, verifyRuntimeBinding: () => ({ ok: true }) });

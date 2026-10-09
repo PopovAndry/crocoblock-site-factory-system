@@ -1,7 +1,8 @@
 "use strict";
 
-// This is deliberately a one-profile service.  It reads the managed runtime,
-// builds a proposal, and prepares a recovery association; it does not apply it.
+// This module reads the managed runtime, builds proposals, and prepares
+// recovery associations; it does not apply them. Coverage contracts are
+// selected only from trusted server-owned transaction profiles.
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -22,7 +23,17 @@ const RECOVERY_COVERAGE_SCHEMA = "csf_viewing_date_recovery_scope_coverage";
 const RECOVERY_COVERAGE_VERSION = 1;
 const REQUIRED_ARTIFACT_TYPES = ["database_dump", "wordpress_filesystem", "project_metadata"];
 const POLICY_ARCHIVE_PATH = "wordpress/wp-content/mu-plugins/factory-request-viewing-before-v1-policy.php";
+const PROPERTY_AREA_RANGE_ARCHIVE_PATHS = [
+  "wordpress/wp-content/plugins/crocoblock-site-factory/crocoblock-site-factory.php",
+  "wordpress/wp-content/plugins/crocoblock-site-factory/includes/adapters/render-adapter.php"
+];
 const DATABASE_RESOURCE_SCOPE = ["request_viewing_form_post", "request_viewing_form_meta_actions_ownership", "request_viewing_policy_binding_option"];
+const PROPERTY_AREA_RANGE_DATABASE_RESOURCE_SCOPE = [
+  "property_catalog_posts",
+  "property_catalog_property_size_meta",
+  "property_catalog_filter_taxonomies",
+  "property_area_range_activation_option"
+];
 const REQUIRED_DATABASE_CAPTURE_CHECKS = ["file_exists", "size_positive", "sha256_valid", "sql_create_table_markers", "wordpress_options_table", "wordpress_posts_table", "wordpress_postmeta_table"];
 
 function error(code, message, statusCode) {
@@ -102,27 +113,15 @@ function baselineFingerprint(plan) {
   return hash(plan.baseline);
 }
 
-function exactCoverage(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const keys = Object.keys(value).sort();
-  const required = ["database", "project_metadata", "schema", "version", "wordpress_filesystem"];
-  if (keys.length !== required.length || keys.some((key, index) => key !== required[index])) return null;
-  const exactObject = (candidate, expected) => candidate && typeof candidate === "object" && !Array.isArray(candidate)
-    && Object.keys(candidate).sort().join("\n") === Object.keys(expected).sort().join("\n")
+function exactObject(value, expected) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join("\n") === Object.keys(expected).sort().join("\n")
     && Object.entries(expected).every(([key, expectedValue]) => Array.isArray(expectedValue)
-      ? Array.isArray(candidate[key]) && candidate[key].length === expectedValue.length && candidate[key].every((item, index) => item === expectedValue[index])
-      : candidate[key] === expectedValue);
-  if (value.schema !== RECOVERY_COVERAGE_SCHEMA || value.version !== RECOVERY_COVERAGE_VERSION
-    || !exactObject(value.database, {
-      scope: "full_database", capture_authority: true, artifact_bytes_verified: true,
-      affected_resources: DATABASE_RESOURCE_SCOPE, row_level_inspection: false, restore_verification_required: true
-    })
-    || !exactObject(value.wordpress_filesystem, {
-      scope: "wordpress_filesystem_archive", artifact_bytes_verified: true, policy_file_verified: true
-    })
-    || !exactObject(value.project_metadata, {
-      scope: "project_metadata", artifact_bytes_verified: true, project_identity_verified: true
-    })) return null;
+      ? Array.isArray(value[key]) && value[key].length === expectedValue.length && value[key].every((item, index) => item === expectedValue[index])
+      : value[key] === expectedValue);
+}
+
+function viewingDateCoverageContract() {
   return {
     schema: RECOVERY_COVERAGE_SCHEMA,
     version: RECOVERY_COVERAGE_VERSION,
@@ -135,8 +134,57 @@ function exactCoverage(value) {
   };
 }
 
+function propertyAreaRangeCoverageContract() {
+  return {
+    schema: "csf_property_area_range_recovery_scope_coverage",
+    version: 1,
+    database: {
+      scope: "full_database", capture_authority: true, artifact_bytes_verified: true,
+      affected_resources: PROPERTY_AREA_RANGE_DATABASE_RESOURCE_SCOPE.slice(), row_level_inspection: false, restore_verification_required: true
+    },
+    wordpress_filesystem: {
+      scope: "wordpress_filesystem_archive", artifact_bytes_verified: true,
+      required_files_verified: PROPERTY_AREA_RANGE_ARCHIVE_PATHS.slice()
+    },
+    project_metadata: { scope: "project_metadata", artifact_bytes_verified: true, project_identity_verified: true }
+  };
+}
+
+function coverageContractForPlan(plan) {
+  if (profileMatches(plan)) return viewingDateCoverageContract();
+  if (plan && plan.profile === "property_area_range@1" && plan.profile_id === "property_area_range" && plan.profile_version === 1) {
+    return propertyAreaRangeCoverageContract();
+  }
+  return null;
+}
+
+function exactCoverageAgainstContract(value, contract) {
+  if (!contract || !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  const required = ["database", "project_metadata", "schema", "version", "wordpress_filesystem"];
+  if (keys.length !== required.length || keys.some((key, index) => key !== required[index])) return null;
+  if (value.schema !== contract.schema || value.version !== contract.version
+    || !exactObject(value.database, contract.database)
+    || !exactObject(value.wordpress_filesystem, contract.wordpress_filesystem)
+    || !exactObject(value.project_metadata, contract.project_metadata)) return null;
+  return contract;
+}
+
+function exactCoverage(value) {
+  return exactCoverageAgainstContract(value, viewingDateCoverageContract());
+}
+
+function exactCoverageForPlan(value, plan) {
+  return exactCoverageAgainstContract(value, coverageContractForPlan(plan));
+}
+
 function coverageFingerprint(coverage) {
   const exact = exactCoverage(coverage);
+  return exact ? hash(exact) : null;
+}
+
+function coverageFingerprintForPlan(coverage, plan) {
+  const exact = exactCoverageForPlan(coverage, plan);
   return exact ? hash(exact) : null;
 }
 
@@ -439,6 +487,8 @@ async function inspectSnapshotSinglePass(options) {
   if (!projectState || !plan || !isSnapshotId(snapshotId)) return null;
   let context;
   try { context = resolveSnapshotDirectory({ projectsRoot: options.projectsRoot, slug: projectState.project.slug, snapshotId }); } catch (caught) { return null; }
+  const coverageContract = coverageContractForPlan(plan);
+  if (!coverageContract) return null;
   if (!guardSnapshotContext(fileSystem, context)) return null;
   const manifestBytes = readGuardedManifest(fileSystem, context);
   if (!manifestBytes) return null;
@@ -480,19 +530,32 @@ async function inspectSnapshotSinglePass(options) {
   try { metadataValid = exactProjectMetadata(JSON.parse(Buffer.concat(metadata).toString("utf8")), projectState, context.binding.basis); } catch (caught) { metadataValid = false; }
   const inventory = tarParser.finish();
   if (!metadataValid) return null;
-  const coverage = exactCoverage({
-    schema: RECOVERY_COVERAGE_SCHEMA,
-    version: RECOVERY_COVERAGE_VERSION,
-    database: {
-      scope: "full_database", capture_authority: true, artifact_bytes_verified: true,
-      affected_resources: DATABASE_RESOURCE_SCOPE.slice(), row_level_inspection: false, restore_verification_required: true
-    },
-    wordpress_filesystem: {
-      scope: "wordpress_filesystem_archive", artifact_bytes_verified: true,
-      policy_file_verified: Boolean(inventory && inventory.get(POLICY_ARCHIVE_PATH)?.type === "0" && inventory.get(POLICY_ARCHIVE_PATH)?.size > 0)
-    },
-    project_metadata: { scope: "project_metadata", artifact_bytes_verified: true, project_identity_verified: true }
-  });
+  const propertyAreaFilesReady = coverageContract.schema !== RECOVERY_COVERAGE_SCHEMA
+    && inventory
+    && PROPERTY_AREA_RANGE_ARCHIVE_PATHS.every((entry) => {
+      const current = inventory.get(entry);
+      return current && current.type === "0" && current.size > 0;
+    });
+  if (coverageContract.schema !== RECOVERY_COVERAGE_SCHEMA && !propertyAreaFilesReady) return null;
+  const coverage = coverageContract.schema === RECOVERY_COVERAGE_SCHEMA
+    ? exactCoverage({
+      schema: RECOVERY_COVERAGE_SCHEMA,
+      version: RECOVERY_COVERAGE_VERSION,
+      database: coverageContract.database,
+      wordpress_filesystem: Object.assign({}, coverageContract.wordpress_filesystem, {
+        policy_file_verified: Boolean(inventory && inventory.get(POLICY_ARCHIVE_PATH)?.type === "0" && inventory.get(POLICY_ARCHIVE_PATH)?.size > 0)
+      }),
+      project_metadata: coverageContract.project_metadata
+    })
+    : exactCoverageForPlan({
+      schema: coverageContract.schema,
+      version: coverageContract.version,
+      database: coverageContract.database,
+      wordpress_filesystem: Object.assign({}, coverageContract.wordpress_filesystem, {
+        required_files_verified: PROPERTY_AREA_RANGE_ARCHIVE_PATHS.slice()
+      }),
+      project_metadata: coverageContract.project_metadata
+    }, plan);
   if (!coverage) return null;
   return {
     manifest,
@@ -509,6 +572,9 @@ async function inspectSnapshotSinglePass(options) {
 
 async function verifySnapshotArtifacts(manifest, projectState, projectsRoot, options) {
   const plan = options && options.plan || {
+    profile: "add_optional_viewing_date@1",
+    profile_id: PROFILE_ID,
+    profile_version: PROFILE_VERSION,
     baseline: { project_binding: { fingerprint: deriveProjectBinding(projectState.project).fingerprint } }
   };
   return inspectSnapshotSinglePass(Object.assign({}, options || {}, { manifest, projectState, projectsRoot, plan, snapshotId: manifest && manifest.snapshot_id }));
@@ -827,4 +893,4 @@ async function prepareViewingDateRecovery(options) {
   }
 }
 
-module.exports = { PROFILE_ID, PROFILE_VERSION, DATE_BLOCK, nativeFactsFromObservation, buildPatch, nativeObservationScript, observeNativeRuntime, createViewingDatePreview, prepareViewingDateRecovery, browserSummary, matchingPreparedRecovery, proposedChangeFingerprint, reattestExistingSnapshot, canonicalTarEntryInventory, exactCoverage, exactProjectMetadata, coverageFingerprint, baselineFingerprint, snapshotIdentity, streamSha256Artifact, verifySnapshotArtifacts, inspectSnapshotSinglePass, createTarInventoryParser, exactPlanAuthority, hasPersistedViewingDatePlan };
+module.exports = { PROFILE_ID, PROFILE_VERSION, DATE_BLOCK, PROPERTY_AREA_RANGE_ARCHIVE_PATHS, nativeFactsFromObservation, buildPatch, nativeObservationScript, observeNativeRuntime, createViewingDatePreview, prepareViewingDateRecovery, browserSummary, matchingPreparedRecovery, proposedChangeFingerprint, reattestExistingSnapshot, canonicalTarEntryInventory, exactCoverage, exactCoverageForPlan, exactProjectMetadata, coverageFingerprint, coverageFingerprintForPlan, propertyAreaRangeCoverageContract, baselineFingerprint, snapshotIdentity, streamSha256Artifact, verifySnapshotArtifacts, inspectSnapshotSinglePass, createTarInventoryParser, exactPlanAuthority, hasPersistedViewingDatePlan };

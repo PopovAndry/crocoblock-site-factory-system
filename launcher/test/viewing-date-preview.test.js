@@ -21,6 +21,8 @@ const {
   canonicalTarEntryInventory,
   baselineFingerprint,
   coverageFingerprint,
+  coverageFingerprintForPlan,
+  propertyAreaRangeCoverageContract,
   proposedChangeFingerprint,
   streamSha256Artifact,
   inspectSnapshotSinglePass,
@@ -360,7 +362,7 @@ function createSinglePassSnapshot(projectsRoot, options) {
   for (const artifact of artifacts) fs.writeFileSync(path.join(context.snapshotDirectory, artifact.relative_filename), [db, tar, metadata][artifacts.indexOf(artifact)]);
   transitionManifestStatus({ projectsRoot, slug, snapshotId, status: "complete" });
   transitionManifestStatus({ projectsRoot, slug, snapshotId, status: "verified", patch: { verification: { status: "passed", successful: true, checks: ["file_exists", "size_positive", "sha256_valid", "sql_create_table_markers", "wordpress_options_table", "wordpress_posts_table", "wordpress_postmeta_table"] }, restore_compatibility: { status: "compatible", blocking: false, blockers: [] } } });
-  return { projectState, context, snapshotId, manifest: created.manifest, plan: { baseline: { project_binding: { fingerprint: binding.fingerprint } } }, artifacts };
+  return { projectState, context, snapshotId, manifest: created.manifest, plan: { profile: "add_optional_viewing_date@1", profile_id: "add_optional_viewing_date", profile_version: 1, baseline: { project_binding: { fingerprint: binding.fingerprint } } }, artifacts };
 }
 
 function countedFileSystem(counts, options) {
@@ -586,6 +588,33 @@ test("single-pass inspection derives full-database scope without interpreting SQ
   assert.deepEqual(inspected.coverage, approvedCoverage());
   assert.equal(inspected.inspection.artifact_verification, "single_pass");
   assert.deepEqual(counts, { manifest: 1, "database.sql": 1, "wordpress.tar": 1, "project-metadata.json": 1 });
+});
+
+test("single-pass inspection selects the exact server-owned ST-2 coverage and rejects mixed or incomplete archives", async () => {
+  const plan = {
+    profile: "property_area_range@1",
+    profile_id: "property_area_range",
+    profile_version: 1,
+    baseline: { project_binding: null }
+  };
+  const requiredTar = tarFixture([
+    { name: "wordpress/wp-content/plugins/crocoblock-site-factory/crocoblock-site-factory.php", content: "<?php // plugin" },
+    { name: "wordpress/wp-content/plugins/crocoblock-site-factory/includes/adapters/render-adapter.php", content: "<?php // adapter" }
+  ]);
+  const projectsRoot = fixtureProject();
+  const snapshot = createSinglePassSnapshot(projectsRoot, { tar: requiredTar });
+  plan.baseline.project_binding = { fingerprint: deriveProjectBinding(snapshot.projectState.project).fingerprint };
+  const inspected = await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan, snapshotId: snapshot.snapshotId });
+  assert.ok(inspected);
+  assert.deepEqual(inspected.coverage, propertyAreaRangeCoverageContract());
+  assert.equal(coverageFingerprintForPlan(inspected.coverage, plan), coverageFingerprintForPlan(propertyAreaRangeCoverageContract(), plan));
+  assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: snapshot.plan, snapshotId: snapshot.snapshotId }), null, "ST-1 still requires its exact policy artifact");
+
+  const incompleteRoot = fixtureProject();
+  const incomplete = createSinglePassSnapshot(incompleteRoot, { tar: tarFixture([{ name: "wordpress/wp-content/plugins/crocoblock-site-factory/crocoblock-site-factory.php", content: "<?php // plugin" }]) });
+  const incompletePlan = Object.assign({}, plan, { baseline: { project_binding: { fingerprint: deriveProjectBinding(incomplete.projectState.project).fingerprint } } });
+  assert.equal(await inspectSnapshotSinglePass({ projectsRoot: incompleteRoot, projectState: incomplete.projectState, plan: incompletePlan, snapshotId: incomplete.snapshotId }), null, "missing ST-2 archive file");
+  assert.equal(await inspectSnapshotSinglePass({ projectsRoot, projectState: snapshot.projectState, plan: { profile: "caller-selected", profile_id: "property_area_range", profile_version: 1 }, snapshotId: snapshot.snapshotId }), null, "unknown profile");
 });
 
 test("full-database capture authority and metadata identity fail closed", async () => {

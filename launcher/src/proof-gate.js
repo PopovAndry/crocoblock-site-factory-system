@@ -10,7 +10,7 @@ const {
   validateExplicitSlug
 } = require("./project-store");
 const { deriveProjectBinding, validateManifest } = require("./structural-snapshot-store");
-const { baselineFingerprint, coverageFingerprint, exactCoverage, proposedChangeFingerprint } = require("./viewing-date-preview");
+const { baselineFingerprint, coverageFingerprint, coverageFingerprintForPlan, exactCoverage, exactCoverageForPlan, proposedChangeFingerprint } = require("./viewing-date-preview");
 const { assertEvidence: assertPropertyAreaEvidence } = require("./property-area-range-evidence");
 
 const PROOF_GATE_SCHEMA = "csf_proof_gate";
@@ -322,7 +322,7 @@ function evaluatePropertyAreaRangeProofGate(options, projectState, binding, rest
     && recovery.plan_id === plan.plan_id && recovery.snapshot_id === metadata.property_area_range_snapshot_id && recovery.project_slug === project.slug && recovery.project_id === project.project_id
     && recovery.project_identity_fingerprint === binding.fingerprint && recovery.profile_id === "property_area_range" && recovery.profile_version === 1
     && recovery.baseline_sha256 === baselineFingerprint(plan) && recovery.proposed_change_sha256 === proposedChangeFingerprint(plan)
-    && recovery.coverage_version === 1 && Boolean(exactCoverage(recovery.coverage)) && recovery.coverage_sha256 === coverageFingerprint(recovery.coverage)
+    && recovery.coverage_version === 1 && Boolean(exactCoverageForPlan(recovery.coverage, plan)) && recovery.coverage_sha256 === coverageFingerprintForPlan(recovery.coverage, plan)
     && verifiedSnapshot(snapshotRead.value, project, recovery.snapshot_id, binding) && snapshotIdentityMatches(recovery.snapshot_identity, snapshotRead.value, snapshotRead.sha256)
     && restorePlanLineage({ ...restorePlanRead.value, snapshot_id: restorePlanRead.value && restorePlanRead.value.snapshot_id }, project, { ...metadata, viewing_date_snapshot_id: metadata.property_area_range_snapshot_id }, binding, snapshotRead.value);
   if (!planValid) addGap(result, "transaction_lineage", "transaction_lineage_conflict"); else passClaim(result, "transaction_lineage");

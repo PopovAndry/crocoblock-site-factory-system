@@ -13,15 +13,23 @@ const { nativeQueryScript } = require("../src/property-area-range-evidence");
 
 const PLUGIN_HASH = "a".repeat(64);
 const COVERAGE = {
-  schema: "csf_viewing_date_recovery_scope_coverage", version: 1,
-  database: { scope: "full_database", capture_authority: true, artifact_bytes_verified: true, affected_resources: ["request_viewing_form_post", "request_viewing_form_meta_actions_ownership", "request_viewing_policy_binding_option"], row_level_inspection: false, restore_verification_required: true },
-  wordpress_filesystem: { scope: "wordpress_filesystem_archive", artifact_bytes_verified: true, policy_file_verified: true },
+  schema: "csf_property_area_range_recovery_scope_coverage", version: 1,
+  database: { scope: "full_database", capture_authority: true, artifact_bytes_verified: true, affected_resources: ["property_catalog_posts", "property_catalog_property_size_meta", "property_catalog_filter_taxonomies", "property_area_range_activation_option"], row_level_inspection: false, restore_verification_required: true },
+  wordpress_filesystem: { scope: "wordpress_filesystem_archive", artifact_bytes_verified: true, required_files_verified: ["wordpress/wp-content/plugins/crocoblock-site-factory/crocoblock-site-factory.php", "wordpress/wp-content/plugins/crocoblock-site-factory/includes/adapters/render-adapter.php"] },
   project_metadata: { scope: "project_metadata", artifact_bytes_verified: true, project_identity_verified: true }
 };
+
+function writeCoverageFiles(state) {
+  const pluginRoot = path.join(state.project.runtime_path, "wordpress", "wp-content", "plugins", "crocoblock-site-factory");
+  fs.mkdirSync(path.join(pluginRoot, "includes", "adapters"), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, "crocoblock-site-factory.php"), "<?php // factory plugin\n", "utf8");
+  fs.writeFileSync(path.join(pluginRoot, "includes", "adapters", "render-adapter.php"), "<?php // archive adapter\n", "utf8");
+}
 
 function fixture() {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-area-range-"));
   const state = createProjectScaffold({ name: "Area Range", slug: "property-area-range-test", port: 31981, projectsRoot });
+  writeCoverageFiles(state);
   let option = null;
   let writes = 0;
   const observe = () => ({
@@ -88,6 +96,23 @@ test("ST-2 Preview and Recovery reject noncanonical sizes and snapshot drift bef
   await assert.rejects(() => createPropertyAreaRangePreview({ projectsRoot: value.projectsRoot, slug: value.state.project.slug, observe: async () => malformed, expectedPluginIdentity: PLUGIN_HASH, verifyRuntimeBinding: () => ({ ok: true }) }), { code: "property_area_range_data_malformed" });
   const preview = await createPropertyAreaRangePreview({ projectsRoot: value.projectsRoot, slug: value.state.project.slug, observe: async () => value.observe(), expectedPluginIdentity: PLUGIN_HASH, verifyRuntimeBinding: () => ({ ok: true }) });
   await assert.rejects(() => preparePropertyAreaRangeRecovery({ projectsRoot: value.projectsRoot, slug: value.state.project.slug, planId: preview.plan_id, observe: async () => value.observe(), captureSnapshot: async () => ({ result: { snapshot_id: "snapshot-2026-10-08t12-00-00-000z-abcdef123456" } }), reattest: async () => null }), { code: "property_area_range_recovery_missing" });
+});
+
+test("ST-2 Recovery readiness fails before capture when an exact required archive file is absent", async () => {
+  const value = fixture();
+  const preview = await createPropertyAreaRangePreview({ projectsRoot: value.projectsRoot, slug: value.state.project.slug, observe: async () => value.observe(), expectedPluginIdentity: PLUGIN_HASH, verifyRuntimeBinding: () => ({ ok: true }) });
+  fs.unlinkSync(path.join(value.state.project.runtime_path, "wordpress", "wp-content", "plugins", "crocoblock-site-factory", "includes", "adapters", "render-adapter.php"));
+  let captureCalls = 0;
+  await assert.rejects(() => preparePropertyAreaRangeRecovery({
+    projectsRoot: value.projectsRoot,
+    slug: value.state.project.slug,
+    planId: preview.plan_id,
+    observe: async () => value.observe(),
+    captureSnapshot: async () => { captureCalls += 1; return { result: { snapshot_id: "snapshot-2026-10-08t12-00-00-000z-abcdef123456" } }; },
+    reattest: async () => reattestation(value, "snapshot-2026-10-08t12-00-00-000z-abcdef123456")
+  }), { code: "property_area_range_recovery_coverage_unready" });
+  assert.equal(captureCalls, 0);
+  assert.equal(fs.existsSync(path.join(value.state.project.runtime_path, "proofs", "property-area-range-preview-v1", "recovery-attempts", preview.plan_id + ".json")), false);
 });
 
 test("ST-2 Apply writes the exact operation-bound option once, verifies read-back, and replays without a second write", async () => {

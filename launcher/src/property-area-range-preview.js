@@ -11,7 +11,14 @@ const { readProjectBySlug, readStrictProjectInventory, resolveProjectsRoot, vali
 const { assertReadyRuntimeBinding } = require("./runtime-binding");
 const { deriveProjectBinding } = require("./structural-snapshot-store");
 const { createFullStructuralSnapshot } = require("./structural-snapshot-capture");
-const { inspectSnapshotSinglePass, exactCoverage, coverageFingerprint, baselineFingerprint, proposedChangeFingerprint } = require("./viewing-date-preview");
+const {
+  PROPERTY_AREA_RANGE_ARCHIVE_PATHS,
+  inspectSnapshotSinglePass,
+  exactCoverageForPlan,
+  coverageFingerprintForPlan,
+  baselineFingerprint,
+  proposedChangeFingerprint
+} = require("./viewing-date-preview");
 const { CONTRACT_PATH, loadRealEstateContract } = require("./real-estate-contract");
 
 const PROFILE = "property_area_range@1";
@@ -53,6 +60,31 @@ function planPath(projectState, planId) {
 
 function recoveryPath(projectState, planId) {
   return path.join(planDirectory(projectState), "recovery-results", planId + ".json");
+}
+
+function assertPropertyAreaRangeCoverageReadiness(projectState) {
+  const wordpressRoot = path.resolve(projectState.runtimePath, "wordpress");
+  let rootReal;
+  try {
+    const rootStat = fs.lstatSync(wordpressRoot);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("unsafe_root");
+    rootReal = fs.realpathSync(wordpressRoot);
+  } catch (_) {
+    throw fail("property_area_range_recovery_coverage_unready", "Property Area Range Recovery cannot verify its required archive coverage.");
+  }
+  for (const archivePath of PROPERTY_AREA_RANGE_ARCHIVE_PATHS) {
+    const relative = archivePath.split("/").slice(1);
+    const target = path.join(wordpressRoot, ...relative);
+    try {
+      const targetStat = fs.lstatSync(target);
+      const targetReal = fs.realpathSync(target);
+      if (!targetStat.isFile() || targetStat.isSymbolicLink()
+        || (targetReal !== rootReal && !targetReal.startsWith(rootReal + path.sep))) throw new Error("unsafe_target");
+    } catch (_) {
+      throw fail("property_area_range_recovery_coverage_unready", "Property Area Range Recovery cannot verify its required archive coverage.");
+    }
+  }
+  return { required_archive_paths: PROPERTY_AREA_RANGE_ARCHIVE_PATHS.slice() };
 }
 
 function atomicJson(filePath, value) {
@@ -263,7 +295,7 @@ function exactRecovery(result, plan, projectState) {
     && result.plan_id === plan.plan_id && result.project_id === projectState.project.project_id && result.project_slug === projectState.project.slug
     && result.project_identity_fingerprint === plan.baseline.project_binding.fingerprint && result.profile_id === PROFILE_ID && result.profile_version === PROFILE_VERSION
     && result.baseline_sha256 === baselineFingerprint(plan) && result.proposed_change_sha256 === proposedChangeFingerprint(plan)
-    && result.coverage_version === 1 && exactCoverage(result.coverage) && result.coverage_sha256 === coverageFingerprint(result.coverage)
+    && result.coverage_version === 1 && exactCoverageForPlan(result.coverage, plan) && result.coverage_sha256 === coverageFingerprintForPlan(result.coverage, plan)
     && typeof result.snapshot_id === "string" && /^snapshot-[a-z0-9-]+$/.test(result.snapshot_id));
 }
 
@@ -278,7 +310,7 @@ async function matchingPreparedRecovery(projectState, plan, projectsRoot, reatte
     || !inspected.snapshot_identity || inspected.snapshot_identity.snapshot_id !== result.snapshot_id
     || inspected.snapshot_identity.project_identity_fingerprint !== plan.baseline.project_binding.fingerprint
     || JSON.stringify(inspected.snapshot_identity) !== JSON.stringify(result.snapshot_identity)
-    || coverageFingerprint(inspected.coverage) !== result.coverage_sha256) return null;
+    || coverageFingerprintForPlan(inspected.coverage, plan) !== result.coverage_sha256) return null;
   return { status: "prepared", snapshot_id: result.snapshot_id };
 }
 
@@ -317,6 +349,8 @@ async function preparePropertyAreaRangeRecovery(options) {
   const expectedPluginIdentity = plan.baseline.plugin_identity_sha256;
   const before = assertObservation(await (options && options.observe ? options.observe({ projectState }) : observeAreaRuntime(projectState, options)), projectState, expectedPluginIdentity);
   if (before.option_present || hash(before.property_areas) !== plan.baseline.property_areas_sha256 || before.property_areas.length !== plan.baseline.property_count) throw fail("property_area_range_baseline_drift", "Property Area Range changed before Recovery Point preparation.");
+  const verifyCoverageReadiness = options && options.verifyCoverageReadiness || assertPropertyAreaRangeCoverageReadiness;
+  verifyCoverageReadiness(projectState);
   atomicJson(attemptPath, { schema: "csf_property_area_range_recovery_attempt", version: 1, plan_id: plan.plan_id, project_slug: slug, started_at: new Date().toISOString() });
   try {
     const capture = options && options.captureSnapshot || createFullStructuralSnapshot;
@@ -324,14 +358,14 @@ async function preparePropertyAreaRangeRecovery(options) {
     const snapshotId = captured && captured.result && captured.result.snapshot_id;
     if (typeof snapshotId !== "string" || !/^snapshot-[a-z0-9-]+$/.test(snapshotId)) throw fail("property_area_range_recovery_capture_invalid", "Recovery Point preparation could not be verified.");
     const inspected = await (options && options.reattest ? options.reattest({ projectsRoot, projectState, plan, snapshotId }) : inspectSnapshotSinglePass({ projectsRoot, projectState, plan, snapshotId }));
-    if (!inspected || !inspected.inspection || inspected.inspection.artifact_verification !== "single_pass" || !exactCoverage(inspected.coverage) || !inspected.snapshot_identity) throw fail("property_area_range_recovery_missing", "Recovery Point preparation could not be verified.");
+    if (!inspected || !inspected.inspection || inspected.inspection.artifact_verification !== "single_pass" || !exactCoverageForPlan(inspected.coverage, plan) || !inspected.snapshot_identity) throw fail("property_area_range_recovery_missing", "Recovery Point preparation could not be verified.");
     const after = assertObservation(await (options && options.observe ? options.observe({ projectState }) : observeAreaRuntime(projectState, options)), projectState, expectedPluginIdentity);
     if (after.option_present || hash(after.property_areas) !== plan.baseline.property_areas_sha256 || after.property_areas.length !== plan.baseline.property_count) throw fail("property_area_range_baseline_drift", "Property Area Range changed during Recovery Point preparation.");
-    atomicJson(recoveryPath(projectState, plan.plan_id), { schema: RECOVERY_SCHEMA, version: RECOVERY_VERSION, plan_id: plan.plan_id, project_slug: slug, project_id: projectState.project.project_id, project_identity_fingerprint: plan.baseline.project_binding.fingerprint, profile_id: PROFILE_ID, profile_version: PROFILE_VERSION, baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "prepared", snapshot_id: snapshotId, snapshot_identity: inspected.snapshot_identity, coverage: exactCoverage(inspected.coverage), coverage_sha256: coverageFingerprint(inspected.coverage), coverage_version: 1, created_at: new Date().toISOString() });
+    atomicJson(recoveryPath(projectState, plan.plan_id), { schema: RECOVERY_SCHEMA, version: RECOVERY_VERSION, plan_id: plan.plan_id, project_slug: slug, project_id: projectState.project.project_id, project_identity_fingerprint: plan.baseline.project_binding.fingerprint, profile_id: PROFILE_ID, profile_version: PROFILE_VERSION, baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "prepared", snapshot_id: snapshotId, snapshot_identity: inspected.snapshot_identity, coverage: exactCoverageForPlan(inspected.coverage, plan), coverage_sha256: coverageFingerprintForPlan(inspected.coverage, plan), coverage_version: 1, created_at: new Date().toISOString() });
     return { ok: true, status: "prepared", snapshot_id: snapshotId };
   } catch (caught) {
     throw caught;
   }
 }
 
-module.exports = { PROFILE, PROFILE_ID, PROFILE_VERSION, PLAN_ROOT, OPTION_NAME, DECIMAL_GRAMMAR, directoryIdentity, exactAreaContractIdentity, assertCurrentContract, nativeScript, observeAreaRuntime, writeAreaActivation, normalizePropertyAreas, exactActivation, assertObservation, assertPlan, readPlan, hasPersistedPropertyAreaRangePlan, matchingPreparedRecovery, createPropertyAreaRangePreview, preparePropertyAreaRangeRecovery, planPath, recoveryPath };
+module.exports = { PROFILE, PROFILE_ID, PROFILE_VERSION, PLAN_ROOT, OPTION_NAME, DECIMAL_GRAMMAR, directoryIdentity, exactAreaContractIdentity, assertCurrentContract, nativeScript, observeAreaRuntime, writeAreaActivation, normalizePropertyAreas, exactActivation, assertObservation, assertPlan, readPlan, hasPersistedPropertyAreaRangePlan, matchingPreparedRecovery, createPropertyAreaRangePreview, preparePropertyAreaRangeRecovery, assertPropertyAreaRangeCoverageReadiness, planPath, recoveryPath };

@@ -8,13 +8,21 @@ const test = require("node:test");
 const { createHash } = require("node:crypto");
 const { createProjectScaffold, readProjectBySlug } = require("../src/project-store");
 const { deriveProjectBinding } = require("../src/structural-snapshot-store");
-const { baselineFingerprint, proposedChangeFingerprint } = require("../src/viewing-date-preview");
+const { baselineFingerprint, coverageFingerprintForPlan, proposedChangeFingerprint } = require("../src/viewing-date-preview");
 const { evaluateProofGate } = require("../src/proof-gate");
 const { captureBusinessEvidence } = require("../src/property-area-range-evidence");
 
 function digest(value) { return createHash("sha256").update(value).digest("hex"); }
 function stable(value) { return value === null || typeof value !== "object" ? JSON.stringify(value) : Array.isArray(value) ? "[" + value.map(stable).join(",") + "]" : "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + stable(value[key])).join(",") + "}"; }
 function write(filePath, value) { fs.mkdirSync(path.dirname(filePath), { recursive: true }); fs.writeFileSync(filePath, JSON.stringify(value, null, 2)); }
+
+const AREA_COVERAGE = {
+  schema: "csf_property_area_range_recovery_scope_coverage",
+  version: 1,
+  database: { scope: "full_database", capture_authority: true, artifact_bytes_verified: true, affected_resources: ["property_catalog_posts", "property_catalog_property_size_meta", "property_catalog_filter_taxonomies", "property_area_range_activation_option"], row_level_inspection: false, restore_verification_required: true },
+  wordpress_filesystem: { scope: "wordpress_filesystem_archive", artifact_bytes_verified: true, required_files_verified: ["wordpress/wp-content/plugins/crocoblock-site-factory/crocoblock-site-factory.php", "wordpress/wp-content/plugins/crocoblock-site-factory/includes/adapters/render-adapter.php"] },
+  project_metadata: { scope: "project_metadata", artifact_bytes_verified: true, project_identity_verified: true }
+};
 
 function fixture() {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-proof-gate-"));
@@ -75,7 +83,7 @@ async function propertyAreaFixture() {
   const areas = [{ post_id: 3, property_size: "74.12" }, { post_id: 7, property_size: "120" }];
   const plan = { schema: "csf_property_area_range_preview", version: 1, plan_id: planId, project_slug: value.slug, project_id: state.project.project_id, profile: "property_area_range@1", profile_id: "property_area_range", profile_version: 1, recovery_result_version: 3, recovery_coverage_version: 1, baseline: { project_binding: binding, contract_sha256: "a".repeat(64), plugin_identity_sha256: "b".repeat(64), property_areas_sha256: digest(JSON.stringify(areas)), property_count: 2 }, proposed_delta: { add_option: { key: "factory_property_area_range_v1", schema_version: 1, state: "enabled" } }, expected: { activation_option: "factory_property_area_range_v1", option_absent_before_apply: true }, created_at: "2026-10-02T19:40:00.000Z" };
   const st1Recovery = JSON.parse(fs.readFileSync(path.join(state.runtimePath, "proofs", "viewing-date-preview-v1", "recovery-results", value.planId + ".json"), "utf8"));
-  const recovery = { schema: "csf_property_area_range_recovery_result", version: 3, plan_id: planId, project_slug: value.slug, project_id: state.project.project_id, project_identity_fingerprint: binding.fingerprint, profile_id: "property_area_range", profile_version: 1, baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "prepared", snapshot_id: snapshotId, snapshot_identity: st1Recovery.snapshot_identity, coverage: st1Recovery.coverage, coverage_sha256: st1Recovery.coverage_sha256, coverage_version: 1, created_at: "2026-10-02T19:40:00.000Z" };
+  const recovery = { schema: "csf_property_area_range_recovery_result", version: 3, plan_id: planId, project_slug: value.slug, project_id: state.project.project_id, project_identity_fingerprint: binding.fingerprint, profile_id: "property_area_range", profile_version: 1, baseline_sha256: baselineFingerprint(plan), proposed_change_sha256: proposedChangeFingerprint(plan), status: "prepared", snapshot_id: snapshotId, snapshot_identity: st1Recovery.snapshot_identity, coverage: AREA_COVERAGE, coverage_sha256: coverageFingerprintForPlan(AREA_COVERAGE, plan), coverage_version: 1, created_at: "2026-10-02T19:40:00.000Z" };
   const apply = { schema: "factory_project_operation", version: 1, operation_id: applyOperationId, project_slug: value.slug, operation_type: "property_area_range_apply", status: "succeeded", metadata: { plan_id: planId, project_id: state.project.project_id, project_binding_fingerprint: binding.fingerprint, recovery_snapshot_id: snapshotId }, result_summary: { status: "applied", mutation_performed: true, plan_id: planId, snapshot_id: snapshotId, activation_option: "factory_property_area_range_v1", after_state: { option_name: "factory_property_area_range_v1", property_areas_sha256: plan.baseline.property_areas_sha256, property_count: 2 } } };
   write(path.join(state.runtimePath, "proofs", "property-area-range-preview-v1", "plans", planId + ".json"), plan);
   write(path.join(state.runtimePath, "proofs", "property-area-range-preview-v1", "recovery-results", planId + ".json"), recovery);
@@ -93,7 +101,7 @@ async function propertyAreaFixture() {
   const journal = { schema: "csf_property_area_range_restore_verify_existing_journal", version: 1, operation_id: restoreOperationId, project_slug: value.slug, project_id: state.project.project_id, project_binding_fingerprint: binding.fingerprint, plan_id: planId, snapshot_id: snapshotId, apply_operation_id: applyOperationId, phase: "health_recorded", observation_nonce: "9".repeat(64), b: { credential_metadata_sha256: "a".repeat(64), credential_hmac_sha256: "b".repeat(64), application_password_identity_sha256: "c".repeat(64), env_identity: { dev: 1, ino: 2, sha256: "d".repeat(64), size: 3 }, wp_config_sha256: "e".repeat(64), surface: { other_factory_options: [], rates: [], replays: [] } }, health_attempt: { method: "GET", route: "/factory/v1/agent/health", project_slug: value.slug, key_id: "factory_agent_test", request_id: "property-request", state: "response_recorded", response: { signed_agent: "ok" } }, health: { method: "GET", route: "/factory/v1/agent/health", project_slug: value.slug, key_id: "factory_agent_test", request_id: "property-request", expires_at: 1790984340 } };
   const completed = { journal_schema_version: 1, operation_id: restoreOperationId, project_slug: value.slug, restore_plan_id: restorePlanId, source_snapshot_id: snapshotId, verification_completed: true, project_binding: { slug: value.slug, binding_key: binding.binding_key, fingerprint: binding.fingerprint } };
   write(path.join(state.runtimePath, "runs", "operations", restoreOperationId + ".json"), restore); write(path.join(state.runtimePath, "runs", "restore-plans", restorePlanId + ".json"), restorePlan); write(path.join(state.runtimePath, "runs", "restore-work", restoreOperationId, "property-area-range-verify-existing.json"), journal); write(path.join(state.runtimePath, "runs", "restore-work", restoreOperationId, "restore-journal.json"), completed);
-  return { ...value, restoreOperationId, planId, evidencePath: path.join(state.runtimePath, "proofs", "property-area-range-preview-v1", "business-evidence", planId + ".json") };
+  return { ...value, restoreOperationId, planId, st1Coverage: st1Recovery.coverage, evidencePath: path.join(state.runtimePath, "proofs", "property-area-range-preview-v1", "business-evidence", planId + ".json") };
 }
 
 test("Proof Gate v0 accepts complete transaction-bound receipt and health-attempt evidence", (t) => {
@@ -118,6 +126,19 @@ test("Proof Gate accepts Property Area Range evidence produced at the trusted Re
   assert.deepEqual(result.claims.business_submissions, { status: "PASS", gaps: [] });
   assert.deepEqual(result.claims.verification_chain, { status: "PASS", gaps: [] });
   assert.equal(result.evidence_limits.includes("literal_signed_health_call_cardinality_unproven_without_transport_log"), true);
+});
+
+test("Proof Gate rejects a mixed ST-1 coverage contract on an ST-2 transaction", async (t) => {
+  const value = await propertyAreaFixture();
+  t.after(() => fs.rmSync(value.projectsRoot, { recursive: true, force: true }));
+  const recoveryPath = path.join(value.state.runtimePath, "proofs", "property-area-range-preview-v1", "recovery-results", value.planId + ".json");
+  const recovery = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
+  recovery.coverage = value.st1Coverage;
+  recovery.coverage_sha256 = digest(JSON.stringify(recovery.coverage));
+  fs.writeFileSync(recoveryPath, JSON.stringify(recovery));
+  const result = evaluateProofGate(value);
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.claims.transaction_lineage.gaps.includes("transaction_lineage_conflict"), true);
 });
 
 test("Proof Gate rejects missing, stale, malformed, and cross-transaction Property Area evidence", async (t) => {
