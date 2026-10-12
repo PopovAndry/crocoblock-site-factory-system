@@ -602,7 +602,7 @@ function validatePropertyAreaRangeRestorePayload(payload) {
     || !isPropertyAreaRangePlanId(input.plan_id) || !isSnapshotId(input.snapshot_id) || !isOperationId(input.apply_operation_id)) {
     throw createStructuredError("Property Area Range Restore requires the exact accepted lineage and confirmation.", "property_area_range_restore_request_rejected", 400);
   }
-  return { planId: input.plan_id, snapshotId: input.snapshot_id, applyOperationId: input.apply_operation_id };
+  return { plan_id: input.plan_id, snapshot_id: input.snapshot_id, apply_operation_id: input.apply_operation_id };
 }
 
 function assertGenericRestoreAllowed(slug, projectsRoot) {

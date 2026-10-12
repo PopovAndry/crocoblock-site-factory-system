@@ -100,6 +100,24 @@ test("Property Area Range Restore rejects profile injection, journal-write failu
   await assert.rejects(() => restorePropertyAreaRange(makeOptions({ writeVerifyExistingJournal: () => { throw new Error("disk full"); }, readVerifyExistingSurface: async (_state, nonce) => observer(value.state.project.slug, nonce, false).value, executeRestore: async (request) => { await request.preRestoreVerifier(); value.setOption(null); const { expires_at: _unusedExpiresAt, ...attempt } = observer(value.state.project.slug, crypto.randomBytes(32), false).signed; const operationId = "op-2026-10-08T12-00-00-000Z-failure"; const workRoot = path.join(value.state.project.runtime_path, "runs", "restore-work", operationId); fs.mkdirSync(workRoot, { recursive: true }); await request.beforeSignedHealthObserver(Object.assign({}, attempt, { operation_id: operationId, work_root: workRoot })); } })), { code: "property_area_range_restore_journal_write_failed" });
 });
 
+test("Property Area Range Restore rejects stale confirmation before evidence capture or native Restore", async () => {
+  const value = await fixture();
+  let readNativeCalls = 0;
+  let nativeRestoreCalls = 0;
+  const evidencePath = path.join(value.state.project.runtime_path, "proofs", "property-area-range-preview-v1", "business-evidence", value.planId + ".json");
+  await assert.rejects(() => restorePropertyAreaRange({
+    projectsRoot: value.projectsRoot,
+    slug: value.state.project.slug,
+    confirmation: { plan_id: "property-area-range-plan-ffffffff-ffff-4fff-8fff-ffffffffffff", snapshot_id: value.snapshotId, apply_operation_id: "op-2026-10-08T12-00-00-000Z-aabbcc" },
+    verifyPrepared: async () => value.prepared,
+    readNative: async () => { readNativeCalls += 1; return value.observe(); },
+    executeRestore: async () => { nativeRestoreCalls += 1; }
+  }), { code: "property_area_range_restore_confirmation_invalid" });
+  assert.equal(readNativeCalls, 0);
+  assert.equal(nativeRestoreCalls, 0);
+  assert.equal(fs.existsSync(evidencePath), false);
+});
+
 test("Property Area Range Restore makes post-C Agent drift terminal after one health", async () => {
   const value = await fixture();
   const operationId = "op-2026-10-08T12-00-00-000Z-cdrift";

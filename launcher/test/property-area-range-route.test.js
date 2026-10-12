@@ -8,7 +8,7 @@ const test = require("node:test");
 const { createLauncherServer } = require("../src/server");
 const { createProjectScaffold } = require("../src/project-store");
 const { classifyLauncherRoute } = require("../src/http-security");
-const { RESTORE_HANDLE } = require("../src/property-area-range-restore");
+const { RESTORE_HANDLE, assertConfirmation } = require("../src/property-area-range-restore");
 
 const PLAN_ID = "property-area-range-plan-11111111-1111-4111-8111-111111111111";
 const OTHER_PLAN_ID = "property-area-range-plan-22222222-2222-4222-8222-222222222222";
@@ -28,6 +28,7 @@ async function withServer(callback) {
   createProjectScaffold({ name: "Area Route", slug: "area-route", port: port += 1, projectsRoot });
   createProjectScaffold({ name: "Other Area Route", slug: "other-area-route", port: port += 1, projectsRoot });
   const calls = [];
+  const restoreBoundary = { invoked: 0, confirmationAccepted: 0, sideEffects: 0 };
   const server = createLauncherServer({
     host: "127.0.0.1", port: port += 1, projectsRoot, skipRestoreReconciliation: true,
     propertyAreaRangePreviewService: async (input) => { calls.push(["preview", input]); return { status: "prepared_for_recovery", plan_id: PLAN_ID }; },
@@ -46,12 +47,22 @@ async function withServer(callback) {
     },
     propertyAreaRangeRestoreService: async (input) => {
       calls.push(["restore", input]);
+      restoreBoundary.invoked += 1;
+      assertConfirmation({
+        authority: {
+          plan: { plan_id: input.slug === "area-route" ? PLAN_ID : OTHER_PLAN_ID },
+          recovery: { snapshot_id: SNAPSHOT_ID }
+        },
+        apply: { operation_id: APPLY_ID }
+      }, input.confirmation);
+      restoreBoundary.confirmationAccepted += 1;
       if (input.idempotencyKey === "failed-terminal") throw serviceError("property_area_range_restore_prior_attempt_terminal", 409);
+      restoreBoundary.sideEffects += 1;
       return { status: "restored", mutation_performed: true };
     }
   });
   const info = await server.listen();
-  try { await callback("http://127.0.0.1:" + info.port, calls, projectsRoot); } finally { await server.close(); }
+  try { await callback("http://127.0.0.1:" + info.port, calls, projectsRoot, restoreBoundary); } finally { await server.close(); }
 }
 
 async function request(baseUrl, pathname, body, idempotencyKey) {
@@ -65,7 +76,7 @@ async function request(baseUrl, pathname, body, idempotencyKey) {
 function endpoint(slug, name) { return "/api/projects/" + slug + "/property-area-range/" + name; }
 
 test("Property Area Range routes accept only the exact server-owned lineage", async () => {
-  await withServer(async (baseUrl, calls) => {
+  await withServer(async (baseUrl, calls, _projectsRoot, restoreBoundary) => {
     const preview = await request(baseUrl, endpoint("area-route", "preview"), {});
     assert.deepEqual(preview.body, { ok: true, status: "prepared_for_recovery", plan_id: PLAN_ID });
 
@@ -84,11 +95,13 @@ test("Property Area Range routes accept only the exact server-owned lineage", as
     assert.deepEqual(Object.keys(calls[1][1]).sort(), ["planId", "projectsRoot", "slug"]);
     assert.deepEqual(Object.keys(calls[2][1]).sort(), ["idempotencyKey", "planId", "projectsRoot", "slug"]);
     assert.deepEqual(Object.keys(calls[3][1]).sort(), ["confirmation", "idempotencyKey", "projectsRoot", "slug"]);
+    assert.deepEqual(calls[3][1].confirmation, { plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID, apply_operation_id: APPLY_ID });
+    assert.deepEqual(restoreBoundary, { invoked: 1, confirmationAccepted: 1, sideEffects: 1 });
   });
 });
 
 test("Property Area Range routes reject injected profile, schema, option, evidence, and project authority before dispatch", async () => {
-  await withServer(async (baseUrl, calls) => {
+  await withServer(async (baseUrl, calls, _projectsRoot, restoreBoundary) => {
     const cases = [
       ["preview", { profile: "viewing_date" }],
       ["recovery-point", { plan_id: PLAN_ID, confirm_prepare_recovery_point: true, schema: 1 }],
@@ -103,6 +116,27 @@ test("Property Area Range routes reject injected profile, schema, option, eviden
       assert.doesNotMatch(JSON.stringify(result.body), /profile|schema|option|evidence|project_id|snapshot_id|apply_operation_id/i);
     }
     assert.equal(calls.length, 0);
+    assert.deepEqual(restoreBoundary, { invoked: 0, confirmationAccepted: 0, sideEffects: 0 });
+  });
+});
+
+test("Property Area Range Restore route rejects malformed, stale, cross-project, and camelCase lineage before side effects", async () => {
+  await withServer(async (baseUrl, calls, _projectsRoot, restoreBoundary) => {
+    const valid = { restore_handle: RESTORE_HANDLE, confirm_restore: true, plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID, apply_operation_id: APPLY_ID };
+    const cases = [
+      ["missing", endpoint("area-route", "restore"), { restore_handle: RESTORE_HANDLE, confirm_restore: true, plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID }],
+      ["camelCase", endpoint("area-route", "restore"), { restore_handle: RESTORE_HANDLE, confirm_restore: true, planId: PLAN_ID, snapshot_id: SNAPSHOT_ID, apply_operation_id: APPLY_ID }],
+      ["stale", endpoint("area-route", "restore"), Object.assign({}, valid, { plan_id: OTHER_PLAN_ID })],
+      ["cross-project", endpoint("other-area-route", "restore"), valid]
+    ];
+    for (const [_name, route, body] of cases) {
+      const result = await request(baseUrl, route, body, "restore-reject-" + _name);
+      assert.equal(result.response.status, 400);
+      assert.equal(result.body.status, "blocked");
+      assert.doesNotMatch(JSON.stringify(result.body), /plan_id|snapshot_id|operation_id|proof|path|evidence/i);
+    }
+    assert.deepEqual(calls.map(([name]) => name), ["restore", "restore"]);
+    assert.deepEqual(restoreBoundary, { invoked: 2, confirmationAccepted: 0, sideEffects: 0 });
   });
 });
 
