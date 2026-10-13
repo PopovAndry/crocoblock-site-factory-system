@@ -127,6 +127,12 @@ test("ST-2 Apply writes the exact operation-bound option once, verifies read-bac
   assert.equal(value.writes, 1);
   const operation = listOperations({ projectsRoot: value.projectsRoot, slug: value.state.project.slug, includeRaw: true }).find((entry) => entry.operation_type === "property_area_range_apply");
   assert.ok(operation);
+  const plan = readPlan(readProjectBySlug(value.state.project.slug, value.projectsRoot), value.planId);
+  assert.deepEqual(operation.raw.result_summary, {
+    status: "applied", mutation_performed: true, plan_id: value.planId, snapshot_id: value.snapshotId,
+    activation_option: "factory_property_area_range_v1", option_name: "factory_property_area_range_v1",
+    property_areas_sha256: plan.baseline.property_areas_sha256, property_count: plan.baseline.property_count
+  });
   assert.deepEqual(value.observe().option_value, { schema_version: 1, state: "enabled", project_id: value.state.project.project_id, plan_id: value.planId, snapshot_id: value.snapshotId, operation_id: operation.operation_id });
   const replay = await applyPropertyAreaRange(options);
   assert.equal(replay.status, "already_applied");

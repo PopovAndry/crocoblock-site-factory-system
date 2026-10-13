@@ -326,12 +326,15 @@ function evaluatePropertyAreaRangeProofGate(options, projectState, binding, rest
     && verifiedSnapshot(snapshotRead.value, project, recovery.snapshot_id, binding) && snapshotIdentityMatches(recovery.snapshot_identity, snapshotRead.value, snapshotRead.sha256)
     && restorePlanLineage({ ...restorePlanRead.value, snapshot_id: restorePlanRead.value && restorePlanRead.value.snapshot_id }, project, { ...metadata, viewing_date_snapshot_id: metadata.property_area_range_snapshot_id }, binding, snapshotRead.value);
   if (!planValid) addGap(result, "transaction_lineage", "transaction_lineage_conflict"); else passClaim(result, "transaction_lineage");
-  const after = apply && apply.result_summary && apply.result_summary.after_state;
+  const applySummary = apply && apply.result_summary;
   if (!plainObject(apply) || apply.schema !== "factory_project_operation" || apply.version !== 1 || apply.operation_id !== metadata.property_area_range_apply_operation_id
     || apply.project_slug !== project.slug || apply.operation_type !== "property_area_range_apply" || apply.status !== "succeeded"
     || !plainObject(apply.metadata) || apply.metadata.plan_id !== plan.plan_id || apply.metadata.project_id !== project.project_id || apply.metadata.project_binding_fingerprint !== binding.fingerprint || apply.metadata.recovery_snapshot_id !== recovery.snapshot_id
-    || !plainObject(apply.result_summary) || apply.result_summary.status !== "applied" || apply.result_summary.mutation_performed !== true
-    || !plainObject(after) || after.option_name !== "factory_property_area_range_v1" || after.property_areas_sha256 !== plan.baseline.property_areas_sha256 || after.property_count !== plan.baseline.property_count) {
+    || !plainObject(applySummary) || !hasOnlyKeys(applySummary, ["activation_option", "mutation_performed", "option_name", "plan_id", "property_areas_sha256", "property_count", "snapshot_id", "status"])
+    || applySummary.status !== "applied" || applySummary.mutation_performed !== true
+    || applySummary.plan_id !== plan.plan_id || applySummary.snapshot_id !== recovery.snapshot_id
+    || applySummary.activation_option !== "factory_property_area_range_v1" || applySummary.option_name !== "factory_property_area_range_v1"
+    || applySummary.property_areas_sha256 !== plan.baseline.property_areas_sha256 || applySummary.property_count !== plan.baseline.property_count) {
     addGap(result, "authoritative_outcomes", "apply_outcome_invalid");
   } else passClaim(result, "authoritative_outcomes");
   const prepared = { projectState, authority: { plan, recovery }, apply: Object.assign({ raw: apply }, apply) };
