@@ -11,7 +11,7 @@ const { deriveProjectBinding } = require("../src/structural-snapshot-store");
 const { createPropertyAreaRangePreview, preparePropertyAreaRangeRecovery } = require("../src/property-area-range-preview");
 const { applyPropertyAreaRange } = require("../src/property-area-range-apply");
 const { isRestoreWorkRootClean } = require("../src/structural-restore-execution");
-const { restorePropertyAreaRange } = require("../src/property-area-range-restore");
+const { prepareAuthority, restoreIdentity, restorePropertyAreaRange } = require("../src/property-area-range-restore");
 
 const PLUGIN = "a".repeat(64);
 const SECRET = "property-area-range-server-secret";
@@ -39,7 +39,7 @@ async function fixture() {
   const prepared = { status: "prepared", snapshot_id: snapshotId };
   const applied = await applyPropertyAreaRange({ projectsRoot, slug: state.project.slug, planId: preview.plan_id, idempotencyKey: "property-area-range-apply-key", readNative: async () => observe(), writeNative: async (_state, activation) => { option = activation; return observe(); }, verifyPrepared: async () => prepared });
   assert.equal(applied.status, "applied");
-  return { projectsRoot, state, observe, setOption: (value) => { option = value; }, planId: preview.plan_id, snapshotId, binding, prepared };
+  return { projectsRoot, state, observe, setOption: (value) => { option = value; }, planId: preview.plan_id, snapshotId, applyOperationId: applied.operation_id, binding, prepared };
 }
 
 function observer(slug, nonce, after) {
@@ -58,6 +58,38 @@ function queryResults(_state, bounds) {
 function writeCompletedRestoreJournal(workRoot, operation, restorePlan, project) {
   fs.writeFileSync(path.join(workRoot, "restore-journal.json"), JSON.stringify({ journal_schema_version: 1, operation_id: operation.operation_id, project_slug: project.slug, restore_plan_id: restorePlan.plan_id, source_snapshot_id: restorePlan.snapshot_id, verification_completed: true, project_binding: { binding_key: project.slug + "-" + restorePlan.project_identity_fingerprint.slice(0, 16), fingerprint: restorePlan.project_identity_fingerprint, slug: project.slug } }) + "\n", "utf8");
 }
+
+test("ST-2 Restore consumes the persisted flat Apply summary and emits a bound v2 post-Apply projection", async (t) => {
+  const value = await fixture();
+  t.after(() => fs.rmSync(value.projectsRoot, { recursive: true, force: true }));
+  const prepared = await prepareAuthority({ projectsRoot: value.projectsRoot, slug: value.state.project.slug, verifyPrepared: async () => value.prepared });
+  assert.equal(prepared.apply.operation_id, value.applyOperationId);
+  const identity = restoreIdentity(prepared, { sha256: "a".repeat(64), evidence: { unfiltered: { result_ids: [3, 7], result_count: 2 } } });
+  assert.equal(identity.version, 2);
+  assert.deepEqual(identity.post_apply, {
+    option_name: "factory_property_area_range_v1",
+    property_areas_sha256: prepared.authority.plan.baseline.property_areas_sha256,
+    property_count: prepared.authority.plan.baseline.property_count
+  });
+});
+
+test("ST-2 Restore rejects malformed or cross-lineage persisted Apply summaries before native Restore", async (t) => {
+  const cases = [
+    ["missing option name", (summary) => { delete summary.option_name; }],
+    ["cross plan", (summary) => { summary.plan_id = "property-area-range-plan-ffffffff-ffff-4fff-8fff-ffffffffffff"; }],
+    ["inconsistent property hash", (summary) => { summary.property_areas_sha256 = "0".repeat(64); }],
+    ["unexpected field", (summary) => { summary.unexpected = true; }]
+  ];
+  for (const [_label, mutate] of cases) {
+    const value = await fixture();
+    t.after(() => fs.rmSync(value.projectsRoot, { recursive: true, force: true }));
+    const applyPath = path.join(value.state.runtimePath, "runs", "operations", value.applyOperationId + ".json");
+    const apply = JSON.parse(fs.readFileSync(applyPath, "utf8"));
+    mutate(apply.result_summary);
+    fs.writeFileSync(applyPath, JSON.stringify(apply));
+    await assert.rejects(() => prepareAuthority({ projectsRoot: value.projectsRoot, slug: value.state.project.slug, verifyPrepared: async () => value.prepared }), { code: "property_area_range_restore_apply_missing" });
+  }
+});
 
 test("Property Area Range Restore produces the exact profile journal through B, one health, C, and cleanup", async () => {
   const value = await fixture();

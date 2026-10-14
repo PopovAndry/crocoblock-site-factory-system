@@ -345,8 +345,16 @@ function evaluatePropertyAreaRangeProofGate(options, projectState, binding, rest
   if (evidence) passClaim(result, "business_submissions");
   const identity = restore.result_summary && restore.result_summary.property_area_range_restore;
   const restored = identity && identity.restored_baseline;
+  const identityPostApply = identity && identity.post_apply;
+  const identityKeys = ["apply_operation_id", "correlated_rate_guard", "correlated_replay_guard", "mutation_performed", "plan_id", "post_verification_completed", "preservation_mode", "preservation_version", "profile_id", "profile_version", "project_binding_fingerprint", "project_id", "project_slug", "recovery_result_schema", "recovery_result_version", "recovery_status", "restored_baseline", "runtime_authority_mode", "schema", "snapshot_id", "status", "version"];
+  const legacyIdentity = identity && identity.version === 1 && hasOnlyKeys(identity, identityKeys);
+  const currentIdentity = identity && identity.version === 2 && hasOnlyKeys(identity, [...identityKeys, "post_apply"]) && plainObject(identityPostApply)
+    && hasOnlyKeys(identityPostApply, ["option_name", "property_areas_sha256", "property_count"])
+    && identityPostApply.option_name === applySummary.option_name
+    && identityPostApply.property_areas_sha256 === applySummary.property_areas_sha256
+    && identityPostApply.property_count === applySummary.property_count;
   if (!plainObject(restore.result_summary) || restore.result_summary.restore_verified !== true || !plainObject(restore.result_summary.verification) || restore.result_summary.verification.successful !== true
-    || !plainObject(identity) || identity.schema !== "csf_property_area_range_restore_identity" || identity.version !== 1 || identity.status !== "restored"
+    || !plainObject(identity) || identity.schema !== "csf_property_area_range_restore_identity" || !(legacyIdentity || currentIdentity) || identity.status !== "restored"
     || identity.project_slug !== project.slug || identity.project_id !== project.project_id || identity.project_binding_fingerprint !== binding.fingerprint
     || identity.plan_id !== plan.plan_id || identity.snapshot_id !== recovery.snapshot_id || identity.apply_operation_id !== apply.operation_id
     || !plainObject(restored) || restored.option_absent !== true || restored.plugin_identity_sha256 !== plan.baseline.plugin_identity_sha256

@@ -72,7 +72,7 @@ function fixture() {
   return { projectsRoot, slug, restoreOperationId, state, planId, applyOperationId };
 }
 
-async function propertyAreaFixture() {
+async function propertyAreaFixture(identityVersion = 1) {
   const value = fixture();
   const state = value.state;
   const binding = deriveProjectBinding(state.project);
@@ -95,7 +95,9 @@ async function propertyAreaFixture() {
   const evidence = producedEvidence.evidence;
   const evidenceSha = producedEvidence.sha256;
   const restorePlanId = "restore-plan-2026-10-02t19-46-32-094z-abcdef";
-  const restore = { schema: "factory_project_operation", version: 1, operation_id: restoreOperationId, project_slug: value.slug, operation_type: "property_area_range_restore", status: "succeeded", stage: "completed", metadata: { restore_scope: "managed_website_same_project", plan_id: restorePlanId, property_area_range_plan_id: planId, property_area_range_snapshot_id: snapshotId, property_area_range_apply_operation_id: applyOperationId, property_area_range_project_id: state.project.project_id, property_area_range_project_binding_fingerprint: binding.fingerprint }, result_summary: { restore_verified: true, verification: { successful: true }, property_area_range_restore: { schema: "csf_property_area_range_restore_identity", version: 1, project_slug: value.slug, project_id: state.project.project_id, project_binding_fingerprint: binding.fingerprint, plan_id: planId, profile_id: "property_area_range", profile_version: 1, apply_operation_id: applyOperationId, recovery_result_schema: "csf_property_area_range_recovery_result", recovery_result_version: 3, recovery_status: "prepared", snapshot_id: snapshotId, restored_baseline: { option_absent: true, plugin_identity_sha256: plan.baseline.plugin_identity_sha256, property_areas_sha256: plan.baseline.property_areas_sha256, property_count: 2, business_evidence_sha256: evidenceSha, unfiltered_archive_sha256: digest(stable(evidence.unfiltered)) }, preservation_mode: "same_project_structural_restore", preservation_version: 1, runtime_authority_mode: "same_project_runtime_authority_v1", correlated_replay_guard: true, correlated_rate_guard: true, mutation_performed: true, post_verification_completed: true, status: "restored" } } };
+  const identity = { schema: "csf_property_area_range_restore_identity", version: identityVersion, project_slug: value.slug, project_id: state.project.project_id, project_binding_fingerprint: binding.fingerprint, plan_id: planId, profile_id: "property_area_range", profile_version: 1, apply_operation_id: applyOperationId, recovery_result_schema: "csf_property_area_range_recovery_result", recovery_result_version: 3, recovery_status: "prepared", snapshot_id: snapshotId, restored_baseline: { option_absent: true, plugin_identity_sha256: plan.baseline.plugin_identity_sha256, property_areas_sha256: plan.baseline.property_areas_sha256, property_count: 2, business_evidence_sha256: evidenceSha, unfiltered_archive_sha256: digest(stable(evidence.unfiltered)) }, preservation_mode: "same_project_structural_restore", preservation_version: 1, runtime_authority_mode: "same_project_runtime_authority_v1", correlated_replay_guard: true, correlated_rate_guard: true, mutation_performed: true, post_verification_completed: true, status: "restored" };
+  if (identityVersion === 2) identity.post_apply = { option_name: apply.result_summary.option_name, property_areas_sha256: apply.result_summary.property_areas_sha256, property_count: apply.result_summary.property_count };
+  const restore = { schema: "factory_project_operation", version: 1, operation_id: restoreOperationId, project_slug: value.slug, operation_type: "property_area_range_restore", status: "succeeded", stage: "completed", metadata: { restore_scope: "managed_website_same_project", plan_id: restorePlanId, property_area_range_plan_id: planId, property_area_range_snapshot_id: snapshotId, property_area_range_apply_operation_id: applyOperationId, property_area_range_project_id: state.project.project_id, property_area_range_project_binding_fingerprint: binding.fingerprint }, result_summary: { restore_verified: true, verification: { successful: true }, property_area_range_restore: identity } };
   const manifest = JSON.parse(fs.readFileSync(path.join(value.projectsRoot, ".factory-recovery", "snapshots", binding.binding_key, snapshotId, "manifest.json"), "utf8"));
   const restorePlan = { schema: "factory_structural_restore_plan", schema_version: 1, policy_version: 1, plan_id: restorePlanId, project_slug: value.slug, project_binding_key: binding.binding_key, project_identity_fingerprint: binding.fingerprint, snapshot_id: snapshotId, readiness: "ready", immutable_source_fingerprint: { canonical: { policy_version: 1, project_binding: { slug: value.slug, binding_key: binding.binding_key, fingerprint: binding.fingerprint, basis: "local_rescue_project_id_v1" }, snapshot_id: snapshotId, manifest_schema_version: 1, manifest_digest: digest(stable(manifest)), artifacts: manifest.artifacts.map(({ type, digest_algorithm, digest: artifactDigest, size_bytes }) => ({ type, digest_algorithm, digest: artifactDigest, size_bytes })) } } };
   const journal = { schema: "csf_property_area_range_restore_verify_existing_journal", version: 1, operation_id: restoreOperationId, project_slug: value.slug, project_id: state.project.project_id, project_binding_fingerprint: binding.fingerprint, plan_id: planId, snapshot_id: snapshotId, apply_operation_id: applyOperationId, phase: "health_recorded", observation_nonce: "9".repeat(64), b: { credential_metadata_sha256: "a".repeat(64), credential_hmac_sha256: "b".repeat(64), application_password_identity_sha256: "c".repeat(64), env_identity: { dev: 1, ino: 2, sha256: "d".repeat(64), size: 3 }, wp_config_sha256: "e".repeat(64), surface: { other_factory_options: [], rates: [], replays: [] } }, health_attempt: { method: "GET", route: "/factory/v1/agent/health", project_slug: value.slug, key_id: "factory_agent_test", request_id: "property-request", state: "response_recorded", response: { signed_agent: "ok" } }, health: { method: "GET", route: "/factory/v1/agent/health", project_slug: value.slug, key_id: "factory_agent_test", request_id: "property-request", expires_at: 1790984340 } };
@@ -126,6 +128,42 @@ test("Proof Gate accepts Property Area Range evidence produced at the trusted Re
   assert.deepEqual(result.claims.business_submissions, { status: "PASS", gaps: [] });
   assert.deepEqual(result.claims.verification_chain, { status: "PASS", gaps: [] });
   assert.equal(result.evidence_limits.includes("literal_signed_health_call_cardinality_unproven_without_transport_log"), true);
+});
+
+test("Proof Gate requires the exact v2 ST-2 post-Apply projection while preserving v1 evidence", async (t) => {
+  const accepted = await propertyAreaFixture(2);
+  t.after(() => fs.rmSync(accepted.projectsRoot, { recursive: true, force: true }));
+  assert.equal(evaluateProofGate(accepted).verdict, "PASS");
+  const cases = [
+    ["missing", (identity) => { delete identity.post_apply; }],
+    ["extra", (identity) => { identity.post_apply.unexpected = true; }],
+    ["extra root", (identity) => { identity.unexpected_root = true; }],
+    ["cross-apply hash", (identity) => { identity.post_apply.property_areas_sha256 = "0".repeat(64); }],
+    ["legacy version with a projection", (identity) => { identity.version = 1; }]
+  ];
+  for (const [_label, mutate] of cases) {
+    const value = await propertyAreaFixture(2);
+    t.after(() => fs.rmSync(value.projectsRoot, { recursive: true, force: true }));
+    const restorePath = path.join(value.state.runtimePath, "runs", "operations", value.restoreOperationId + ".json");
+    const restore = JSON.parse(fs.readFileSync(restorePath, "utf8"));
+    mutate(restore.result_summary.property_area_range_restore);
+    fs.writeFileSync(restorePath, JSON.stringify(restore));
+    const result = evaluateProofGate(value);
+    assert.equal(result.verdict, "BLOCKED");
+    assert.equal(result.claims.authoritative_outcomes.gaps.includes("restore_outcome_invalid"), true);
+  }
+});
+
+test("Proof Gate rejects extra root fields on the historical v1 ST-2 Restore identity", async (t) => {
+  const value = await propertyAreaFixture();
+  t.after(() => fs.rmSync(value.projectsRoot, { recursive: true, force: true }));
+  const restorePath = path.join(value.state.runtimePath, "runs", "operations", value.restoreOperationId + ".json");
+  const restore = JSON.parse(fs.readFileSync(restorePath, "utf8"));
+  restore.result_summary.property_area_range_restore.unexpected_root = true;
+  fs.writeFileSync(restorePath, JSON.stringify(restore));
+  const result = evaluateProofGate(value);
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.claims.authoritative_outcomes.gaps.includes("restore_outcome_invalid"), true);
 });
 
 test("Proof Gate accepts only the exact flat persisted ST-2 Apply outcome schema", async (t) => {

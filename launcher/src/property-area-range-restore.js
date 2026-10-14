@@ -25,6 +25,7 @@ function fail(code, message, statusCode) { const error = new Error(message || "P
 function stable(value) { if (value === null || typeof value !== "object") return JSON.stringify(value); if (Array.isArray(value)) return "[" + value.map(stable).join(",") + "]"; return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + stable(value[key])).join(",") + "}"; }
 function digest(value) { return crypto.createHash("sha256").update(stable(value)).digest("hex"); }
 function digestFile(filePath) { return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex"); }
+function exactKeys(value, keys) { return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join(",") === keys.slice().sort().join(","); }
 
 function journalContext(input, prepared) {
   const plan = prepared.authority.plan;
@@ -55,13 +56,24 @@ function replace(context, value) {
 
 function readJournal(context) { try { return JSON.parse(fs.readFileSync(journalPath(context), "utf8")); } catch (_) { throw fail("property_area_range_restore_journal_missing", "Restore verification evidence is unavailable."); } }
 
+function postApplyFromSummary(summary) {
+  if (!exactKeys(summary, ["activation_option", "mutation_performed", "option_name", "plan_id", "property_areas_sha256", "property_count", "snapshot_id", "status"])
+    || summary.status !== "applied" || summary.mutation_performed !== true || summary.activation_option !== OPTION_NAME || summary.option_name !== OPTION_NAME
+    || typeof summary.plan_id !== "string" || !/^property-area-range-plan-[0-9a-f-]{36}$/.test(summary.plan_id)
+    || typeof summary.snapshot_id !== "string" || !/^snapshot-[a-z0-9-]+$/.test(summary.snapshot_id)
+    || typeof summary.property_areas_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(summary.property_areas_sha256)
+    || !Number.isInteger(summary.property_count) || summary.property_count < 0) return null;
+  return { option_name: summary.option_name, property_areas_sha256: summary.property_areas_sha256, property_count: summary.property_count };
+}
+
 function isAcceptedApply(entry, projectState) {
   const raw = entry && entry.raw; const metadata = raw && raw.metadata; const summary = raw && raw.result_summary; const project = projectState && projectState.project;
+  const postApply = postApplyFromSummary(summary);
   return Boolean(entry && entry.operation_type === "property_area_range_apply" && entry.status === "succeeded" && raw && metadata && summary
     && raw.project_slug === project.slug && metadata.project_id === project.project_id && metadata.project_binding_fingerprint === deriveProjectBinding(project).fingerprint
     && typeof metadata.plan_id === "string" && /^property-area-range-plan-[0-9a-f-]{36}$/.test(metadata.plan_id)
     && typeof metadata.recovery_snapshot_id === "string" && /^snapshot-[a-z0-9-]+$/.test(metadata.recovery_snapshot_id)
-    && summary.status === "applied" && summary.mutation_performed === true && summary.plan_id === metadata.plan_id && summary.snapshot_id === metadata.recovery_snapshot_id && summary.activation_option === OPTION_NAME);
+    && postApply && summary.plan_id === metadata.plan_id && summary.snapshot_id === metadata.recovery_snapshot_id);
 }
 
 function assertConfirmation(prepared, confirmation) {
@@ -84,18 +96,28 @@ async function prepareAuthority(options) {
   const candidates = listOperations({ projectsRoot, slug, includeRaw: true }).filter((entry) => isAcceptedApply(entry, projectState));
   if (candidates.length !== 1) throw fail("property_area_range_restore_apply_missing", "Property Area Range Restore requires one accepted Apply operation.");
   const apply = candidates[0]; const authority = await readApplyAuthority({ projectsRoot, slug, planId: apply.raw.metadata.plan_id, verifyPrepared: options && options.verifyPrepared }, projectState);
-  if (authority.recovery.snapshot_id !== apply.raw.metadata.recovery_snapshot_id) throw fail("property_area_range_restore_snapshot_mismatch", "Property Area Range Restore requires the verified Recovery Point.");
+  const postApply = postApplyFromSummary(apply.raw.result_summary);
+  if (authority.recovery.snapshot_id !== apply.raw.metadata.recovery_snapshot_id || !postApply
+    || postApply.property_areas_sha256 !== authority.plan.baseline.property_areas_sha256 || postApply.property_count !== authority.plan.baseline.property_count) {
+    throw fail("property_area_range_restore_apply_missing", "Property Area Range Restore requires one accepted Apply operation.");
+  }
   return { projectsRoot, projectState, authority, apply };
 }
 
 function restoreIdentity(prepared, evidence) {
   const project = prepared.projectState.project; const plan = prepared.authority.plan; const recovery = prepared.authority.recovery;
-  return { schema: "csf_property_area_range_restore_identity", version: 1, project_slug: project.slug, project_id: project.project_id, project_binding_fingerprint: plan.baseline.project_binding.fingerprint, plan_id: plan.plan_id, profile_id: "property_area_range", profile_version: 1, apply_operation_id: prepared.apply.operation_id, recovery_result_schema: "csf_property_area_range_recovery_result", recovery_result_version: 3, recovery_status: "prepared", snapshot_id: recovery.snapshot_id, post_apply: prepared.apply.raw.result_summary.after_state, restored_baseline: { option_absent: true, plugin_identity_sha256: plan.baseline.plugin_identity_sha256, property_areas_sha256: plan.baseline.property_areas_sha256, property_count: plan.baseline.property_count, business_evidence_sha256: evidence.sha256, unfiltered_archive_sha256: digest(evidence.evidence.unfiltered) }, preservation_mode: "same_project_structural_restore", preservation_version: 1, runtime_authority_mode: "same_project_runtime_authority_v1", correlated_replay_guard: true, correlated_rate_guard: true, mutation_performed: true, post_verification_completed: true, status: "restored" };
+  const postApply = postApplyFromSummary(prepared.apply.raw.result_summary);
+  if (!postApply) throw fail("property_area_range_restore_apply_missing", "Property Area Range Restore requires one accepted Apply operation.");
+  return { schema: "csf_property_area_range_restore_identity", version: 2, project_slug: project.slug, project_id: project.project_id, project_binding_fingerprint: plan.baseline.project_binding.fingerprint, plan_id: plan.plan_id, profile_id: "property_area_range", profile_version: 1, apply_operation_id: prepared.apply.operation_id, recovery_result_schema: "csf_property_area_range_recovery_result", recovery_result_version: 3, recovery_status: "prepared", snapshot_id: recovery.snapshot_id, post_apply: postApply, restored_baseline: { option_absent: true, plugin_identity_sha256: plan.baseline.plugin_identity_sha256, property_areas_sha256: plan.baseline.property_areas_sha256, property_count: plan.baseline.property_count, business_evidence_sha256: evidence.sha256, unfiltered_archive_sha256: digest(evidence.evidence.unfiltered) }, preservation_mode: "same_project_structural_restore", preservation_version: 1, runtime_authority_mode: "same_project_runtime_authority_v1", correlated_replay_guard: true, correlated_rate_guard: true, mutation_performed: true, post_verification_completed: true, status: "restored" };
 }
 
 async function assertPostApply(prepared, options) {
   const observation = await (options && options.readNative ? options.readNative(prepared.projectState) : observeAreaRuntime(prepared.projectState, options));
-  afterState(observation, prepared.projectState, prepared.authority, prepared.apply.operation_id);
+  const observed = afterState(observation, prepared.projectState, prepared.authority, prepared.apply.operation_id);
+  const persisted = postApplyFromSummary(prepared.apply.raw.result_summary);
+  if (!persisted || persisted.option_name !== observed.option_name || persisted.property_areas_sha256 !== observed.property_areas_sha256 || persisted.property_count !== observed.property_count) {
+    throw fail("property_area_range_restore_apply_missing", "Property Area Range Restore requires one accepted Apply operation.");
+  }
   return assertObservation(observation, prepared.projectState, prepared.authority.plan.baseline.plugin_identity_sha256);
 }
 
@@ -150,4 +172,4 @@ async function restorePropertyAreaRange(options) {
   return { status: "restored", mutation_performed: true };
 }
 
-module.exports = { OPERATION_TYPE, JOURNAL_SCHEMA, JOURNAL_FILENAME, RESTORE_HANDLE, prepareAuthority, restoreIdentity, isAcceptedApply, assertConfirmation, resolveRestoreTerminal, restorePropertyAreaRange };
+module.exports = { OPERATION_TYPE, JOURNAL_SCHEMA, JOURNAL_FILENAME, RESTORE_HANDLE, prepareAuthority, restoreIdentity, isAcceptedApply, postApplyFromSummary, assertConfirmation, resolveRestoreTerminal, restorePropertyAreaRange };
