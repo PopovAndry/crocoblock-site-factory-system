@@ -8,6 +8,7 @@ const test = require("node:test");
 const { createLauncherServer } = require("../src/server");
 const { createProjectScaffold } = require("../src/project-store");
 const { classifyLauncherRoute } = require("../src/http-security");
+const { runProjectOperation } = require("../src/project-operation-coordinator");
 const { RESTORE_HANDLE, assertConfirmation } = require("../src/property-area-range-restore");
 
 const PLAN_ID = "property-area-range-plan-11111111-1111-4111-8111-111111111111";
@@ -40,6 +41,44 @@ function serviceError(code, statusCode) {
 
 function previewResult() {
   return { status: "prepared_for_recovery", plan_id: PLAN_ID, browser_summary: JSON.parse(JSON.stringify(PREVIEW_SUMMARY)) };
+}
+
+function proofResult(slug, restoreOperationId, verdict) {
+  const resolvedVerdict = verdict || "PASS";
+  const claims = Object.fromEntries([
+    "transaction_lineage",
+    "authoritative_outcomes",
+    "business_submissions",
+    "verification_chain",
+    "restored_baseline"
+  ].map((claim) => [claim, { status: resolvedVerdict === "PASS" ? "PASS" : "NOT_PROVEN", gaps: resolvedVerdict === "PASS" ? [] : ["evidence_missing"] }]));
+  return {
+    schema: "csf_proof_gate",
+    version: 0,
+    verdict: resolvedVerdict,
+    transaction: { project_slug: slug, restore_operation_id: restoreOperationId },
+    claims,
+    evidence_gaps: resolvedVerdict === "PASS" ? [] : ["evidence_missing"],
+    evidence_limits: resolvedVerdict === "PASS" ? ["literal_signed_health_call_cardinality_unproven_without_transport_log"] : []
+  };
+}
+
+async function createCompletedRestoreOperation(projectsRoot, slug) {
+  const outcome = await runProjectOperation({
+    projectsRoot,
+    slug,
+    operationType: "property_area_range_restore",
+    idempotencyKey: "property-area-range-proof-route",
+    fingerprintInput: { plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID, apply_operation_id: APPLY_ID },
+    metadata: {
+      property_area_range_plan_id: PLAN_ID,
+      property_area_range_snapshot_id: SNAPSHOT_ID,
+      property_area_range_apply_operation_id: APPLY_ID
+    },
+    safety: { apply_used: true },
+    execute: async () => ({ result: { status: "restored", mutation_performed: true }, resultSummary: {} })
+  });
+  return outcome.operation.operation_id;
 }
 
 async function withServer(callback, overrides) {
@@ -82,7 +121,11 @@ async function withServer(callback, overrides) {
       restoreBoundary.confirmationAccepted += 1;
       if (input.idempotencyKey === "failed-terminal") throw serviceError("property_area_range_restore_prior_attempt_terminal", 409);
       restoreBoundary.sideEffects += 1;
-      return { status: "restored", mutation_performed: true };
+      return overrides && overrides.restoreResult ? overrides.restoreResult(input) : { status: "restored", mutation_performed: true };
+    },
+    propertyAreaRangeProofService: async (input) => {
+      calls.push(["proof", input]);
+      return overrides && overrides.proofResult ? overrides.proofResult(input) : proofResult(input.slug, input.restoreOperationId);
     }
   });
   const info = await server.listen();
@@ -94,6 +137,11 @@ async function request(baseUrl, pathname, body, idempotencyKey) {
   const headers = { "Content-Type": "application/json", Origin: baseUrl, "X-Factory-CSRF-Token": session.csrf_token };
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const response = await fetch(baseUrl + pathname, { method: "POST", headers, body: JSON.stringify(body) });
+  return { response, body: await response.json() };
+}
+
+async function read(baseUrl, pathname) {
+  const response = await fetch(baseUrl + pathname);
   return { response, body: await response.json() };
 }
 
@@ -188,6 +236,82 @@ test("Property Area Range Apply route fails closed for non-authoritative observe
   }
 });
 
+test("Property Area Range Restore response fails closed unless it is authoritative", async () => {
+  const cases = [
+    () => ({ status: "restored", mutation_performed: false }),
+    () => ({ status: "already_restored", mutation_performed: true }),
+    () => ({ status: "failed", mutation_performed: false })
+  ];
+  for (const restoreResult of cases) {
+    await withServer(async (baseUrl, calls) => {
+      const result = await request(baseUrl, endpoint("area-route", "restore"), {
+        restore_handle: RESTORE_HANDLE,
+        confirm_restore: true,
+        plan_id: PLAN_ID,
+        snapshot_id: SNAPSHOT_ID,
+        apply_operation_id: APPLY_ID
+      }, "restore-response-invalid");
+      assert.equal(result.response.status, 500);
+      assert.deepEqual(result.body, {
+        ok: false,
+        status: "blocked",
+        error: "Property Area Range is temporarily unavailable.",
+        message: "Property Area Range is temporarily unavailable."
+      });
+      assert.deepEqual(calls.map(([name]) => name), ["restore"]);
+    }, { restoreResult });
+  }
+});
+
+test("Property Area Range Proof derives one completed Restore server-side and returns only presentation data", async () => {
+  await withServer(async (baseUrl, calls, projectsRoot) => {
+    const restoreOperationId = await createCompletedRestoreOperation(projectsRoot, "area-route");
+    const result = await read(baseUrl, endpoint("area-route", "proof"));
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.body, {
+      ok: true,
+      verdict: "PASS",
+      claims: {
+        transaction_lineage: "PASS",
+        authoritative_outcomes: "PASS",
+        business_submissions: "PASS",
+        verification_chain: "PASS",
+        restored_baseline: "PASS"
+      },
+      evidence_limits: ["literal_signed_health_call_cardinality_unproven_without_transport_log"]
+    });
+    assert.doesNotMatch(JSON.stringify(result.body), /operation_id|plan_id|snapshot_id|project_id|hash|path|gap/i);
+    assert.deepEqual(calls.map(([name]) => name), ["proof"]);
+    assert.deepEqual(Object.keys(calls[0][1]).sort(), ["projectsRoot", "restoreOperationId", "slug"]);
+    assert.equal(calls[0][1].restoreOperationId, restoreOperationId);
+  });
+});
+
+test("Property Area Range Proof stays read-only and fail-closed for missing, cross-project, injected, or blocked context", async () => {
+  await withServer(async (baseUrl, calls, projectsRoot) => {
+    const missing = await read(baseUrl, endpoint("area-route", "proof"));
+    const crossProject = await read(baseUrl, endpoint("other-area-route", "proof"));
+    const injected = await read(baseUrl, endpoint("area-route", "proof") + "?restore_operation_id=op-2026-10-08T12-00-00-000Z-aabbcc");
+    for (const result of [missing, crossProject, injected]) {
+      assert.ok([400, 409].includes(result.response.status));
+      assert.deepEqual(result.body, {
+        ok: false,
+        status: "blocked",
+        error: "Property Area Range cannot proceed safely.",
+        message: "Property Area Range cannot proceed safely."
+      });
+    }
+    assert.deepEqual(calls, []);
+
+    await createCompletedRestoreOperation(projectsRoot, "area-route");
+    const blocked = await read(baseUrl, endpoint("area-route", "proof"));
+    assert.equal(blocked.response.status, 200);
+    assert.equal(blocked.body.verdict, "BLOCKED");
+  }, {
+    proofResult: (input) => proofResult(input.slug, input.restoreOperationId, "BLOCKED")
+  });
+});
+
 test("Property Area Range routes reject injected profile, schema, option, evidence, and project authority before dispatch", async () => {
   await withServer(async (baseUrl, calls, _projectsRoot, restoreBoundary) => {
     const cases = [
@@ -249,6 +373,10 @@ test("Property Area Range routes remain explicit mutation boundaries", () => {
   assert.equal(classifyLauncherRoute("POST", endpoint("area-route", "recovery-point")).id, "property_area_range_recovery_prepare");
   assert.equal(classifyLauncherRoute("POST", endpoint("area-route", "apply")).id, "property_area_range_apply");
   assert.equal(classifyLauncherRoute("POST", endpoint("area-route", "restore")).id, "property_area_range_restore");
+  const proof = classifyLauncherRoute("GET", endpoint("area-route", "proof"));
+  assert.equal(proof.id, "property_area_range_proof");
+  assert.equal(proof.group, "read_only");
+  assert.equal(proof.mutation, false);
 });
 
 test("generic Restore cannot bypass a persisted Property Area Range plan", async () => {

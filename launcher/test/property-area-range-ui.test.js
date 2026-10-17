@@ -25,11 +25,12 @@ class FakeElement {
     this.className = "";
     this.dataset = {};
     this.elements = {};
+    this.attributes = new Map();
   }
 
   addEventListener() {}
-  setAttribute() {}
-  getAttribute() { return null; }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
   querySelector() { return null; }
   closest() { return null; }
 }
@@ -44,6 +45,11 @@ function createUiHarness(baseUrl, options) {
     name: new FakeElement(), slug: new FakeElement(), port: new FakeElement()
   };
   getElementById("generate-project-slug").value = "area-route";
+  if (options && options.siteUrl) {
+    const openSite = getElementById("selected-project-open");
+    openSite.hidden = false;
+    openSite.setAttribute("href", options.siteUrl);
+  }
   const window = {
     FactoryLauncherConfig: { testMode: true, skipInitialLoad: true },
     FactoryLauncherTestHooks: {},
@@ -72,6 +78,11 @@ function createUiHarness(baseUrl, options) {
         && target.pathname.endsWith("/property-area-range/apply")) {
         throw new TypeError("simulated browser response interruption");
       }
+      if (options && options.interruptRestoreResponse === true
+        && String(requestOptions.method || "GET").toUpperCase() === "POST"
+        && target.pathname.endsWith("/property-area-range/restore")) {
+        throw new TypeError("simulated browser response interruption");
+      }
       return response;
     },
     AbortController,
@@ -89,7 +100,11 @@ function createUiHarness(baseUrl, options) {
     result: getElementById("property-area-range-preview-result"),
     recoveryButton: getElementById("property-area-range-recovery-button"),
     applyConfirmation: getElementById("property-area-range-apply-confirmation"),
-    applyButton: getElementById("property-area-range-apply-button")
+    applyButton: getElementById("property-area-range-apply-button"),
+    restoreConfirmation: getElementById("property-area-range-restore-confirmation"),
+    restoreButton: getElementById("property-area-range-restore-button"),
+    proofButton: getElementById("property-area-range-proof-button"),
+    openSite: getElementById("property-area-range-open-site")
   };
 }
 
@@ -121,6 +136,26 @@ function applyResult() {
   };
 }
 
+function proofResult(slug, restoreOperationId, verdict) {
+  const resolvedVerdict = verdict || "PASS";
+  const claims = Object.fromEntries([
+    "transaction_lineage",
+    "authoritative_outcomes",
+    "business_submissions",
+    "verification_chain",
+    "restored_baseline"
+  ].map((claim) => [claim, { status: resolvedVerdict === "PASS" ? "PASS" : "NOT_PROVEN", gaps: resolvedVerdict === "PASS" ? [] : ["evidence_missing"] }]));
+  return {
+    schema: "csf_proof_gate",
+    version: 0,
+    verdict: resolvedVerdict,
+    transaction: { project_slug: slug, restore_operation_id: restoreOperationId },
+    claims,
+    evidence_gaps: resolvedVerdict === "PASS" ? [] : ["evidence_missing"],
+    evidence_limits: resolvedVerdict === "PASS" ? ["literal_signed_health_call_cardinality_unproven_without_transport_log"] : []
+  };
+}
+
 async function withServer(services, callback) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-property-area-range-ui-"));
   createProjectScaffold({ name: "Area UI", slug: "area-route", port: port += 1, projectsRoot });
@@ -145,6 +180,33 @@ async function withServer(services, callback) {
     propertyAreaRangeApplyService: async (input) => {
       calls.push(["apply", input]);
       return services && services.apply ? services.apply(input) : applyResult();
+    },
+    propertyAreaRangeRestoreService: async (input) => {
+      calls.push(["restore", input]);
+      if (services && services.restore) return services.restore(input);
+      const outcome = await runProjectOperation({
+        projectsRoot: input.projectsRoot,
+        slug: input.slug,
+        operationType: "property_area_range_restore",
+        idempotencyKey: input.idempotencyKey,
+        fingerprintInput: { plan_id: PLAN_ID, snapshot_id: recoveryResult().snapshot_id, apply_operation_id: applyResult().operation_id },
+        metadata: {
+          property_area_range_plan_id: PLAN_ID,
+          property_area_range_snapshot_id: recoveryResult().snapshot_id,
+          property_area_range_apply_operation_id: applyResult().operation_id
+        },
+        safety: { apply_used: true },
+        execute: async ({ setStage }) => {
+          await setStage("restoring");
+          return { result: { status: "restored", mutation_performed: true }, resultSummary: {} };
+        }
+      });
+      assert.equal(outcome.operation.status, "succeeded");
+      return { status: "restored", mutation_performed: true };
+    },
+    propertyAreaRangeProofService: async (input) => {
+      calls.push(["proof", input]);
+      return services && services.proof ? services.proof(input) : proofResult(input.slug, input.restoreOperationId);
     }
   });
   const info = await server.listen();
@@ -181,6 +243,40 @@ test("Property Area Range UI uses exact Preview, verified Recovery, explicit con
     assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply"]);
     assert.deepEqual(Object.keys(calls[1][1]).sort(), ["planId", "projectsRoot", "slug"]);
     assert.deepEqual(Object.keys(calls[2][1]).sort(), ["idempotencyKey", "planId", "projectsRoot", "slug"]);
+  });
+});
+
+test("Property Area Range UI presents Open Site, guarded Restore, and only the real Proof Gate PASS", async () => {
+  await withServer(null, async (baseUrl, calls) => {
+    const { hooks, result, restoreConfirmation, restoreButton, proofButton, openSite } = createUiHarness(baseUrl, { siteUrl: baseUrl + "/" });
+    await hooks.preview();
+    await hooks.prepareRecovery();
+    hooks.setApplyConfirmed(true);
+    await hooks.apply();
+    assert.equal(openSite.hidden, false);
+    assert.equal(openSite.getAttribute("href"), baseUrl + "/");
+    assert.equal(restoreButton.hidden, false);
+    assert.equal(restoreButton.disabled, true);
+    assert.equal(proofButton.hidden, true);
+    hooks.setRestoreConfirmed(true);
+    assert.equal(restoreConfirmation.checked, true);
+    assert.equal(restoreButton.disabled, false);
+    await hooks.restore();
+    assert.match(result.innerHTML, /Baseline restored/);
+    assert.equal(proofButton.hidden, false);
+    assert.doesNotMatch(result.innerHTML, /Proof Gate PASS/);
+    await hooks.readProof();
+    assert.match(result.innerHTML, /Proof Gate PASS/);
+    assert.match(result.innerHTML, /Transaction lineage: PASS/);
+    assert.match(result.innerHTML, /Restored baseline: PASS/);
+    assert.doesNotMatch(result.innerHTML, /property-area-range-plan|snapshot-|op-\d{4}|project_id/i);
+    assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply", "restore", "proof"]);
+    assert.deepEqual(calls[3][1].confirmation, {
+      plan_id: PLAN_ID,
+      snapshot_id: recoveryResult().snapshot_id,
+      apply_operation_id: applyResult().operation_id
+    });
+    assert.deepEqual(Object.keys(calls[4][1]).sort(), ["projectsRoot", "restoreOperationId", "slug"]);
   });
 });
 
@@ -221,6 +317,22 @@ test("Property Area Range UI fails closed after Recovery or Apply failures", asy
     assert.equal(applyButton.hidden, true);
     await hooks.apply();
     assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply"]);
+  });
+});
+
+test("Property Area Range UI fails closed after Restore and never submits it twice", async () => {
+  await withServer({ restore: async () => { throw error(409); } }, async (baseUrl, calls) => {
+    const { hooks, result, restoreButton } = createUiHarness(baseUrl);
+    await hooks.preview();
+    await hooks.prepareRecovery();
+    hooks.setApplyConfirmed(true);
+    await hooks.apply();
+    hooks.setRestoreConfirmed(true);
+    await hooks.restore();
+    assert.equal(result.textContent, "Restore did not complete. This UI will not send another Restore request.");
+    assert.equal(restoreButton.hidden, true);
+    await hooks.restore();
+    assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply", "restore"]);
   });
 });
 
@@ -331,12 +443,86 @@ test("Property Area Range UI treats an interrupted Apply response as persisted o
   });
 });
 
-test("Launcher markup exposes the curated Preview, Recovery, and confirmed Apply actions only", () => {
+test("Property Area Range UI ignores stale Restore completion, blocks double Restore, and does not claim a baseline after interruption", async () => {
+  let releaseRestore;
+  await withServer({
+    restore: async () => await new Promise((resolve) => { releaseRestore = resolve; })
+  }, async (baseUrl, calls) => {
+    const { hooks, result } = createUiHarness(baseUrl);
+    await hooks.preview();
+    await hooks.prepareRecovery();
+    hooks.setApplyConfirmed(true);
+    await hooks.apply();
+    hooks.setRestoreConfirmed(true);
+    const first = hooks.restore();
+    const second = hooks.restore();
+    await waitFor(() => typeof releaseRestore === "function");
+    assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply", "restore"]);
+    hooks.resetForProject("other-area-route");
+    releaseRestore({ status: "restored", mutation_performed: true });
+    await Promise.all([first, second]);
+    assert.equal(result.hidden, true);
+    assert.equal(hooks.getState().phase, "idle");
+  });
+
+  await withServer(null, async (baseUrl, calls) => {
+    const { hooks, result } = createUiHarness(baseUrl, { interruptRestoreResponse: true });
+    await hooks.preview();
+    await hooks.prepareRecovery();
+    hooks.setApplyConfirmed(true);
+    await hooks.apply();
+    hooks.setRestoreConfirmed(true);
+    await hooks.restore();
+    await waitFor(() => /Observed persisted Restore status: succeeded/.test(result.innerHTML));
+    assert.equal(hooks.getState().phase, "restore_interrupted");
+    assert.doesNotMatch(result.innerHTML, /Baseline restored|Proof Gate PASS/);
+    await hooks.restore();
+    assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply", "restore"]);
+  });
+});
+
+test("Property Area Range UI presents a read-only blocked Proof Gate without claiming PASS", async () => {
+  await withServer({ proof: async (input) => proofResult(input.slug, input.restoreOperationId, "BLOCKED") }, async (baseUrl, calls) => {
+    const { hooks, result } = createUiHarness(baseUrl);
+    await hooks.preview();
+    await hooks.prepareRecovery();
+    hooks.setApplyConfirmed(true);
+    await hooks.apply();
+    hooks.setRestoreConfirmed(true);
+    await hooks.restore();
+    await hooks.readProof();
+    assert.match(result.innerHTML, /Proof Gate is BLOCKED/);
+    assert.doesNotMatch(result.innerHTML, /Proof Gate PASS|property-area-range-plan|snapshot-|op-\d{4}|project_id/i);
+    assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply", "restore", "proof"]);
+  });
+});
+
+test("Property Area Range UI distinguishes insufficient Proof evidence from a blocked Gate", async () => {
+  await withServer({ proof: async (input) => proofResult(input.slug, input.restoreOperationId, "INSUFFICIENT_EVIDENCE") }, async (baseUrl, calls) => {
+    const { hooks, result } = createUiHarness(baseUrl);
+    await hooks.preview();
+    await hooks.prepareRecovery();
+    hooks.setApplyConfirmed(true);
+    await hooks.apply();
+    hooks.setRestoreConfirmed(true);
+    await hooks.restore();
+    await hooks.readProof();
+    assert.match(result.innerHTML, /Proof Gate has insufficient evidence/);
+    assert.doesNotMatch(result.innerHTML, /Proof Gate is BLOCKED|Proof Gate PASS/);
+    assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply", "restore", "proof"]);
+  });
+});
+
+test("Launcher markup exposes the curated Preview, Recovery, Apply, Restore, and Proof actions", () => {
   const serverSource = fs.readFileSync(path.resolve(__dirname, "../src/server.js"), "utf8");
   assert.match(serverSource, /id=\\"property-area-range-preview-button\\"/);
   assert.match(serverSource, /Preview Property area range/);
   assert.match(serverSource, /id=\\"property-area-range-recovery-button\\"/);
   assert.match(serverSource, /id=\\"property-area-range-apply-confirmation\\"/);
   assert.match(serverSource, /Apply Property area range/);
-  assert.doesNotMatch(serverSource.slice(serverSource.indexOf("property-area-range-preview-title"), serverSource.indexOf("state-rollback-result")), /Proof Gate PASS|Restore Property area/);
+  assert.match(serverSource, /id=\\"property-area-range-open-site\\"/);
+  assert.match(serverSource, /id=\\"property-area-range-restore-confirmation\\"/);
+  assert.match(serverSource, /Restore Property area baseline/);
+  assert.match(serverSource, /Read Property area Proof Gate/);
+  assert.doesNotMatch(serverSource.slice(serverSource.indexOf("property-area-range-preview-title"), serverSource.indexOf("state-rollback-result")), /Proof Gate PASS|baseline restored/i);
 });

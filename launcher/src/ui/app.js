@@ -43,6 +43,11 @@
   const propertyAreaRangeApplyConfirmation = document.getElementById("property-area-range-apply-confirmation");
   const propertyAreaRangeApplyConfirmationWrap = document.getElementById("property-area-range-apply-confirmation-wrap");
   const propertyAreaRangeApplyButton = document.getElementById("property-area-range-apply-button");
+  const propertyAreaRangeRestoreConfirmation = document.getElementById("property-area-range-restore-confirmation");
+  const propertyAreaRangeRestoreConfirmationWrap = document.getElementById("property-area-range-restore-confirmation-wrap");
+  const propertyAreaRangeRestoreButton = document.getElementById("property-area-range-restore-button");
+  const propertyAreaRangeProofButton = document.getElementById("property-area-range-proof-button");
+  const propertyAreaRangeOpenSite = document.getElementById("property-area-range-open-site");
   const propertyAreaRangePreviewResult = document.getElementById("property-area-range-preview-result");
   const stateRollbackResult = document.getElementById("state-rollback-result");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
@@ -402,12 +407,19 @@
     requestId: 0,
     planId: "",
     snapshotId: "",
+    applyOperationId: "",
     summary: null,
     phase: "idle",
     progress: "",
-    observedOperationStatus: ""
+    observedOperationStatus: "",
+    applyStatus: "",
+    restoreProgress: "",
+    observedRestoreStatus: "",
+    proofVerdict: "",
+    proofClaims: null
   };
   let propertyAreaRangeApplyProgressTimer = null;
+  let propertyAreaRangeRestoreProgressTimer = null;
 
   function isActiveViewingDatePreview(slug, requestId) {
     return String(generateProjectSlug.value || "").trim() === String(slug || "")
@@ -557,14 +569,49 @@
       case "applied": return propertyAreaRangePreviewView.applyStatus === "already_applied"
         ? "Observed Apply status: Already applied."
         : "Observed Apply status: Applied.";
+      case "restoring": return propertyAreaRangePreviewView.restoreProgress
+        ? "Observed Restore progress: " + propertyAreaRangePreviewView.restoreProgress + "."
+        : "Waiting for a server-owned Restore operation update...";
+      case "restore_interrupted": return propertyAreaRangePreviewView.observedRestoreStatus
+        ? "The Restore response was interrupted. Observed persisted Restore status: " + propertyAreaRangePreviewView.observedRestoreStatus + ". No further Restore request will be sent."
+        : "The Restore response was interrupted. The authoritative operation status is unknown; no further Restore request will be sent.";
+      case "restored": return "Baseline restored.";
+      case "proof_loading": return "Reading the persisted Proof Gate result...";
+      case "proof_pass": return "Proof Gate PASS. The restored transaction is supported by persisted evidence.";
+      case "proof_blocked": return "Proof Gate is BLOCKED. It did not verify the complete restored transaction.";
+      case "proof_insufficient": return "Proof Gate has insufficient evidence. It did not verify the complete restored transaction.";
+      case "proof_unavailable": return "Baseline restored. The read-only Proof Gate result is unavailable.";
       default: return "";
     }
+  }
+
+  function propertyAreaRangeSiteHref() {
+    if (!selectedProjectOpen || selectedProjectOpen.hidden) return "";
+    const href = selectedProjectOpen.getAttribute("href");
+    return typeof href === "string" && /^https?:\/\//i.test(href) ? href : "";
+  }
+
+  function propertyAreaRangeProofClaimsText() {
+    const claims = propertyAreaRangePreviewView.proofClaims;
+    if (!claims || typeof claims !== "object") return "";
+    const labels = {
+      transaction_lineage: "Transaction lineage",
+      authoritative_outcomes: "Authoritative outcomes",
+      business_submissions: "Business evidence",
+      verification_chain: "Verification chain",
+      restored_baseline: "Restored baseline"
+    };
+    return Object.keys(labels).map((claim) => labels[claim] + ": " + claims[claim]).join("; ");
   }
 
   function updatePropertyAreaRangeActions() {
     const previewAvailable = propertyAreaRangePreviewView.phase === "idle";
     const recoveryReady = propertyAreaRangePreviewView.phase === "preview_ready";
     const applyReady = propertyAreaRangePreviewView.phase === "recovery_prepared";
+    const restoreReady = propertyAreaRangePreviewView.phase === "applied";
+    const proofReady = propertyAreaRangePreviewView.phase === "restored";
+    const siteHref = propertyAreaRangeSiteHref();
+    const siteAvailable = ["applied", "restoring", "restored", "proof_loading", "proof_pass", "proof_blocked", "proof_insufficient", "proof_unavailable"].includes(propertyAreaRangePreviewView.phase) && Boolean(siteHref);
     if (propertyAreaRangePreviewButton) propertyAreaRangePreviewButton.disabled = !previewAvailable;
     if (propertyAreaRangeRecoveryButton) {
       propertyAreaRangeRecoveryButton.hidden = !recoveryReady;
@@ -575,20 +622,40 @@
       propertyAreaRangeApplyButton.hidden = !applyReady;
       propertyAreaRangeApplyButton.disabled = !applyReady || !propertyAreaRangeApplyConfirmation || propertyAreaRangeApplyConfirmation.checked !== true;
     }
+    if (propertyAreaRangeRestoreConfirmationWrap) propertyAreaRangeRestoreConfirmationWrap.hidden = !restoreReady;
+    if (propertyAreaRangeRestoreButton) {
+      propertyAreaRangeRestoreButton.hidden = !restoreReady;
+      propertyAreaRangeRestoreButton.disabled = !restoreReady || !propertyAreaRangeRestoreConfirmation || propertyAreaRangeRestoreConfirmation.checked !== true;
+    }
+    if (propertyAreaRangeProofButton) {
+      propertyAreaRangeProofButton.hidden = !proofReady;
+      propertyAreaRangeProofButton.disabled = !proofReady;
+    }
+    if (propertyAreaRangeOpenSite) {
+      propertyAreaRangeOpenSite.hidden = !siteAvailable;
+      propertyAreaRangeOpenSite.setAttribute("href", siteAvailable ? siteHref : "#");
+    }
   }
 
   function renderPropertyAreaRangeFlow() {
     const summary = propertyAreaRangePreviewView.summary;
     if (!propertyAreaRangePreviewResult || !isPropertyAreaRangePreviewSummary(summary)) return false;
     propertyAreaRangePreviewResult.hidden = false;
-    propertyAreaRangePreviewResult.className = "result-box result-box-success";
+    propertyAreaRangePreviewResult.className = ["proof_blocked", "proof_insufficient", "proof_unavailable"].includes(propertyAreaRangePreviewView.phase)
+      ? "result-box result-box-error"
+      : "result-box result-box-success";
     propertyAreaRangePreviewResult.innerHTML = [
-      "<strong>Property area range Preview is ready.</strong>",
+      "<strong>" + escapeHtml(propertyAreaRangePreviewView.phase === "restored" || propertyAreaRangePreviewView.phase.startsWith("proof_")
+        ? "Property area range baseline is restored."
+        : propertyAreaRangePreviewView.phase === "applied" || propertyAreaRangePreviewView.phase === "restoring" || propertyAreaRangePreviewView.phase === "restore_interrupted"
+          ? "Property area range Apply is complete."
+          : "Property area range Preview is ready.") + "</strong>",
       "<p><span>Change:</span> " + escapeHtml(summary.change.title) + " on " + escapeHtml(summary.change.archive) + " in " + escapeHtml(summary.change.unit) + ". " + escapeHtml(summary.change.behavior) + "</p>",
       "<p><span>Observed:</span> " + escapeHtml(String(summary.observed.published_property_count)) + " published Properties were checked.</p>",
       "<p><span>Preserved:</span> " + escapeHtml(summary.preservation[0]) + " " + escapeHtml(summary.preservation[1]) + "</p>",
       "<p>" + escapeHtml(summary.boundary) + "</p>",
-      "<p><span>Current status:</span> " + escapeHtml(propertyAreaRangeStatusText()) + "</p>"
+      "<p><span>Current status:</span> " + escapeHtml(propertyAreaRangeStatusText()) + "</p>",
+      propertyAreaRangeProofClaimsText() ? "<p><span>Proof checks:</span> " + escapeHtml(propertyAreaRangeProofClaimsText()) + "</p>" : ""
     ].join("");
     updatePropertyAreaRangeActions();
     return true;
@@ -596,8 +663,10 @@
 
   function showPropertyAreaRangeFailure(message) {
     stopPropertyAreaRangeApplyProgress();
+    stopPropertyAreaRangeRestoreProgress();
     propertyAreaRangePreviewView.phase = "failed";
     if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = false;
+    if (propertyAreaRangeRestoreConfirmation) propertyAreaRangeRestoreConfirmation.checked = false;
     updatePropertyAreaRangeActions();
     if (!propertyAreaRangePreviewResult) return;
     propertyAreaRangePreviewResult.hidden = false;
@@ -607,17 +676,25 @@
 
   function resetPropertyAreaRangePreviewView(slug) {
     stopPropertyAreaRangeApplyProgress();
+    stopPropertyAreaRangeRestoreProgress();
     propertyAreaRangePreviewView = {
       slug: String(slug || "").trim(),
       requestId: propertyAreaRangePreviewView.requestId + 1,
       planId: "",
       snapshotId: "",
+      applyOperationId: "",
       summary: null,
       phase: "idle",
       progress: "",
-      observedOperationStatus: ""
+      observedOperationStatus: "",
+      applyStatus: "",
+      restoreProgress: "",
+      observedRestoreStatus: "",
+      proofVerdict: "",
+      proofClaims: null
     };
     if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = false;
+    if (propertyAreaRangeRestoreConfirmation) propertyAreaRangeRestoreConfirmation.checked = false;
     updatePropertyAreaRangeActions();
     if (propertyAreaRangePreviewResult) {
       propertyAreaRangePreviewResult.hidden = true;
@@ -649,14 +726,51 @@
     );
   }
 
+  function isPropertyAreaRangeRestoreResponse(payload) {
+    return Boolean(
+      payload && typeof payload === "object" && !Array.isArray(payload)
+      && Object.keys(payload).sort().join(",") === "mutation_performed,ok,status"
+      && payload.ok === true && ["restored", "already_restored"].includes(payload.status)
+      && typeof payload.mutation_performed === "boolean"
+      && payload.mutation_performed === (payload.status === "restored")
+    );
+  }
+
+  function isPropertyAreaRangeProofResponse(payload) {
+    const claims = payload && payload.claims;
+    const limits = payload && payload.evidence_limits;
+    const expectedClaims = ["authoritative_outcomes", "business_submissions", "restored_baseline", "transaction_lineage", "verification_chain"];
+    return Boolean(
+      payload && typeof payload === "object" && !Array.isArray(payload)
+      && Object.keys(payload).sort().join(",") === "claims,evidence_limits,ok,verdict"
+      && payload.ok === true && ["PASS", "BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(payload.verdict)
+      && claims && typeof claims === "object" && !Array.isArray(claims)
+      && Object.keys(claims).sort().join(",") === expectedClaims.join(",")
+      && expectedClaims.every((claim) => ["PASS", "NOT_PROVEN"].includes(claims[claim]))
+      && Array.isArray(limits) && limits.every((limit) => limit === "literal_signed_health_call_cardinality_unproven_without_transport_log")
+      && (payload.verdict !== "PASS" || expectedClaims.every((claim) => claims[claim] === "PASS"))
+    );
+  }
+
   function matchingPropertyAreaRangeApplyOperation(payload, slug, planId, snapshotId) {
+    return matchingPropertyAreaRangeOperation(payload, slug, planId, snapshotId, "property_area_range_apply");
+  }
+
+  function matchingPropertyAreaRangeRestoreOperation(payload, slug, planId, snapshotId, applyOperationId) {
+    const operation = matchingPropertyAreaRangeOperation(payload, slug, planId, snapshotId, "property_area_range_restore");
+    return operation && operation.metadata && operation.metadata.property_area_range_apply_operation_id === applyOperationId ? operation : null;
+  }
+
+  function matchingPropertyAreaRangeOperation(payload, slug, planId, snapshotId, operationType) {
     const project = payload && payload.project;
     const operations = payload && payload.operations;
     if (!payload || payload.ok !== true || !project || project.slug !== slug || !Array.isArray(operations)) return null;
     const matches = operations.filter((operation) => {
       const metadata = operation && operation.metadata;
-      return operation && operation.project_slug === slug && operation.operation_type === "property_area_range_apply"
-        && metadata && metadata.plan_id === planId && metadata.recovery_snapshot_id === snapshotId
+      return operation && operation.project_slug === slug && operation.operation_type === operationType
+        && metadata && (operationType === "property_area_range_apply"
+          ? metadata.plan_id === planId && metadata.recovery_snapshot_id === snapshotId
+          : metadata.property_area_range_plan_id === planId && metadata.property_area_range_snapshot_id === snapshotId)
         && ["requested", "running", "succeeded", "failed", "interrupted"].includes(operation.status);
     });
     return matches.length === 1 ? matches[0] : null;
@@ -678,6 +792,13 @@
     if (propertyAreaRangeApplyProgressTimer) {
       clearInterval(propertyAreaRangeApplyProgressTimer);
       propertyAreaRangeApplyProgressTimer = null;
+    }
+  }
+
+  function stopPropertyAreaRangeRestoreProgress() {
+    if (propertyAreaRangeRestoreProgressTimer) {
+      clearInterval(propertyAreaRangeRestoreProgressTimer);
+      propertyAreaRangeRestoreProgressTimer = null;
     }
   }
 
@@ -713,6 +834,38 @@
     propertyAreaRangeApplyProgressTimer = setInterval(refresh, 1000);
   }
 
+  async function refreshPropertyAreaRangeRestoreProgress(slug, requestId, planId, snapshotId, applyOperationId) {
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/operations?limit=20", { cache: "no-store" });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(slug, requestId) || !["restoring", "restore_interrupted"].includes(propertyAreaRangePreviewView.phase) || !response.ok) return;
+      const operation = matchingPropertyAreaRangeRestoreOperation(payload, slug, planId, snapshotId, applyOperationId);
+      if (!operation) return;
+      if (["requested", "running"].includes(operation.status)) {
+        const stage = propertyAreaRangeProgressStage(operation);
+        if (stage) {
+          propertyAreaRangePreviewView.restoreProgress = stage;
+          renderPropertyAreaRangeFlow();
+        }
+        return;
+      }
+      if (propertyAreaRangePreviewView.phase === "restore_interrupted") {
+        propertyAreaRangePreviewView.observedRestoreStatus = operation.status;
+        renderPropertyAreaRangeFlow();
+        stopPropertyAreaRangeRestoreProgress();
+      }
+    } catch (_) {
+      // A read-only progress observation never changes the Restore outcome.
+    }
+  }
+
+  function startPropertyAreaRangeRestoreProgress(slug, requestId, planId, snapshotId, applyOperationId) {
+    stopPropertyAreaRangeRestoreProgress();
+    const refresh = () => refreshPropertyAreaRangeRestoreProgress(slug, requestId, planId, snapshotId, applyOperationId);
+    refresh();
+    propertyAreaRangeRestoreProgressTimer = setInterval(refresh, 1000);
+  }
+
   function renderPropertyAreaRangePreview(payload) {
     const summary = payload && payload.summary;
     if (!payload || payload.ok !== true || payload.status !== "prepared_for_recovery" || !isPropertyAreaRangePlanId(payload.plan_id) || !isPropertyAreaRangePreviewSummary(summary)) {
@@ -729,7 +882,22 @@
     const slug = String(generateProjectSlug.value || "").trim();
     const requestId = propertyAreaRangePreviewView.requestId + 1;
     stopPropertyAreaRangeApplyProgress();
-    propertyAreaRangePreviewView = { slug, requestId, planId: "", snapshotId: "", summary: null, phase: "previewing", progress: "", observedOperationStatus: "" };
+    propertyAreaRangePreviewView = {
+      slug,
+      requestId,
+      planId: "",
+      snapshotId: "",
+      applyOperationId: "",
+      summary: null,
+      phase: "previewing",
+      progress: "",
+      observedOperationStatus: "",
+      applyStatus: "",
+      restoreProgress: "",
+      observedRestoreStatus: "",
+      proofVerdict: "",
+      proofClaims: null
+    };
     if (!slug || !propertyAreaRangePreviewButton) return;
     if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = false;
     updatePropertyAreaRangeActions();
@@ -810,11 +978,95 @@
       }
       stopPropertyAreaRangeApplyProgress();
       propertyAreaRangePreviewView.applyStatus = payload.status;
+      propertyAreaRangePreviewView.applyOperationId = payload.lineage.apply_operation_id;
       propertyAreaRangePreviewView.phase = "applied";
       renderPropertyAreaRangeFlow();
     } catch (_) {
       if (isActivePropertyAreaRangePreview(slug, requestId)) {
         propertyAreaRangePreviewView.phase = "apply_interrupted";
+        renderPropertyAreaRangeFlow();
+      }
+    }
+  }
+
+  function updatePropertyAreaRangeRestoreConfirmation() {
+    updatePropertyAreaRangeActions();
+  }
+
+  async function restorePropertyAreaRange() {
+    const slug = propertyAreaRangePreviewView.slug;
+    const requestId = propertyAreaRangePreviewView.requestId;
+    const planId = propertyAreaRangePreviewView.planId;
+    const snapshotId = propertyAreaRangePreviewView.snapshotId;
+    const applyOperationId = propertyAreaRangePreviewView.applyOperationId;
+    if (!isActivePropertyAreaRangePreview(slug, requestId) || propertyAreaRangePreviewView.phase !== "applied"
+      || !isPropertyAreaRangePlanId(planId) || !isPropertyAreaRangeSnapshotId(snapshotId) || !isPropertyAreaRangeOperationId(applyOperationId)
+      || !propertyAreaRangeRestoreConfirmation || propertyAreaRangeRestoreConfirmation.checked !== true) return;
+    propertyAreaRangePreviewView.phase = "restoring";
+    propertyAreaRangePreviewView.restoreProgress = "";
+    propertyAreaRangePreviewView.observedRestoreStatus = "";
+    renderPropertyAreaRangeFlow();
+    startPropertyAreaRangeRestoreProgress(slug, requestId, planId, snapshotId, applyOperationId);
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/property-area-range/restore", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": createRequestIdempotencyKey("property-area-range-restore")
+        },
+        body: JSON.stringify({
+          restore_handle: "property-area-range-restore-st2-v1",
+          confirm_restore: true,
+          plan_id: planId,
+          snapshot_id: snapshotId,
+          apply_operation_id: applyOperationId
+        })
+      });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(slug, requestId)) return;
+      if (!response.ok || !isPropertyAreaRangeRestoreResponse(payload)) {
+        showPropertyAreaRangeFailure("Restore did not complete. This UI will not send another Restore request.");
+        return;
+      }
+      stopPropertyAreaRangeRestoreProgress();
+      propertyAreaRangePreviewView.phase = "restored";
+      propertyAreaRangePreviewView.restoreStatus = payload.status;
+      if (propertyAreaRangeRestoreConfirmation) propertyAreaRangeRestoreConfirmation.checked = false;
+      renderPropertyAreaRangeFlow();
+    } catch (_) {
+      if (isActivePropertyAreaRangePreview(slug, requestId)) {
+        propertyAreaRangePreviewView.phase = "restore_interrupted";
+        renderPropertyAreaRangeFlow();
+      }
+    }
+  }
+
+  async function readPropertyAreaRangeProof() {
+    const slug = propertyAreaRangePreviewView.slug;
+    const requestId = propertyAreaRangePreviewView.requestId;
+    if (!isActivePropertyAreaRangePreview(slug, requestId) || propertyAreaRangePreviewView.phase !== "restored") return;
+    propertyAreaRangePreviewView.phase = "proof_loading";
+    renderPropertyAreaRangeFlow();
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/property-area-range/proof", { cache: "no-store" });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(slug, requestId)) return;
+      if (!response.ok || !isPropertyAreaRangeProofResponse(payload)) {
+        propertyAreaRangePreviewView.phase = "proof_unavailable";
+        renderPropertyAreaRangeFlow();
+        return;
+      }
+      propertyAreaRangePreviewView.proofVerdict = payload.verdict;
+      propertyAreaRangePreviewView.proofClaims = payload.claims;
+      propertyAreaRangePreviewView.phase = payload.verdict === "PASS"
+        ? "proof_pass"
+        : payload.verdict === "BLOCKED"
+          ? "proof_blocked"
+          : "proof_insufficient";
+      renderPropertyAreaRangeFlow();
+    } catch (_) {
+      if (isActivePropertyAreaRangePreview(slug, requestId)) {
+        propertyAreaRangePreviewView.phase = "proof_unavailable";
         renderPropertyAreaRangeFlow();
       }
     }
@@ -4031,6 +4283,15 @@
   if (propertyAreaRangeApplyButton) {
     propertyAreaRangeApplyButton.addEventListener("click", applyPropertyAreaRange);
   }
+  if (propertyAreaRangeRestoreConfirmation) {
+    propertyAreaRangeRestoreConfirmation.addEventListener("change", updatePropertyAreaRangeRestoreConfirmation);
+  }
+  if (propertyAreaRangeRestoreButton) {
+    propertyAreaRangeRestoreButton.addEventListener("click", restorePropertyAreaRange);
+  }
+  if (propertyAreaRangeProofButton) {
+    propertyAreaRangeProofButton.addEventListener("click", readPropertyAreaRangeProof);
+  }
 
   refreshStateButton.addEventListener("click", async () => {
     const slug = String(generateProjectSlug.value || "").trim();
@@ -4271,9 +4532,15 @@
       preview: previewPropertyAreaRange,
       prepareRecovery: preparePropertyAreaRangeRecovery,
       apply: applyPropertyAreaRange,
+      restore: restorePropertyAreaRange,
+      readProof: readPropertyAreaRangeProof,
       setApplyConfirmed: (value) => {
         if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = value === true;
         updatePropertyAreaRangeApplyConfirmation();
+      },
+      setRestoreConfirmed: (value) => {
+        if (propertyAreaRangeRestoreConfirmation) propertyAreaRangeRestoreConfirmation.checked = value === true;
+        updatePropertyAreaRangeRestoreConfirmation();
       },
       resetForProject: resetPropertyAreaRangePreviewView,
       render: renderPropertyAreaRangePreview,

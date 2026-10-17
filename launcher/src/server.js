@@ -54,7 +54,8 @@ const {
 const {
   findSuccessfulControlledGenerateByPlanId,
   findSuccessfulOperationByMetadata,
-  readOperationById
+  readOperationById,
+  listOperations
 } = require("./project-operation-store");
 const {
   normalizePlanId
@@ -111,6 +112,11 @@ const {
   RESTORE_HANDLE: PROPERTY_AREA_RANGE_RESTORE_HANDLE,
   restorePropertyAreaRange
 } = require("./property-area-range-restore");
+const {
+  PROOF_GATE_SCHEMA,
+  PROOF_GATE_VERSION,
+  evaluateProofGate
+} = require("./proof-gate");
 
 const UI_DIR = path.join(__dirname, "ui");
 const BASE_SECURITY_HEADERS = Object.freeze({
@@ -375,6 +381,10 @@ function renderHomePage(config) {
     "          <button type=\"button\" class=\"button secondary\" id=\"property-area-range-recovery-button\" hidden>Prepare verified Recovery Point</button>",
     "          <label id=\"property-area-range-apply-confirmation-wrap\" hidden><input type=\"checkbox\" id=\"property-area-range-apply-confirmation\"> I confirm Apply for this prepared Preview and verified Recovery Point.</label>",
     "          <button type=\"button\" class=\"button\" id=\"property-area-range-apply-button\" hidden disabled>Apply Property area range</button>",
+    "          <a class=\"button button-secondary\" id=\"property-area-range-open-site\" href=\"#\" target=\"_blank\" rel=\"noreferrer\" hidden>Open Site</a>",
+    "          <label id=\"property-area-range-restore-confirmation-wrap\" hidden><input type=\"checkbox\" id=\"property-area-range-restore-confirmation\"> I confirm Restore for this applied Property area range.</label>",
+    "          <button type=\"button\" class=\"button secondary\" id=\"property-area-range-restore-button\" hidden disabled>Restore Property area baseline</button>",
+    "          <button type=\"button\" class=\"button secondary\" id=\"property-area-range-proof-button\" hidden>Read Property area Proof Gate</button>",
     "          <div id=\"property-area-range-preview-result\" class=\"result-box\" hidden></div>",
     "        </section>",
     "        <div id=\"state-rollback-result\" class=\"result-box\" hidden></div>",
@@ -680,6 +690,72 @@ function buildPropertyAreaRangeApplyResponse(result) {
     status: result.status,
     mutation_performed: result.mutation_performed,
     lineage: { plan_id: result.plan_id, snapshot_id: result.snapshot_id, apply_operation_id: result.operation_id }
+  };
+}
+
+const PROPERTY_AREA_RANGE_PROOF_CLAIMS = Object.freeze([
+  "transaction_lineage",
+  "authoritative_outcomes",
+  "business_submissions",
+  "verification_chain",
+  "restored_baseline"
+]);
+const PROPERTY_AREA_RANGE_PROOF_LIMITS = Object.freeze([
+  "literal_signed_health_call_cardinality_unproven_without_transport_log"
+]);
+
+function hasExactKeys(value, keys) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === keys.slice().sort().join(",");
+}
+
+function buildPropertyAreaRangeRestoreResponse(result) {
+  const restored = result && result.status === "restored";
+  const replay = result && result.status === "already_restored";
+  if ((!restored && !replay) || typeof result.mutation_performed !== "boolean" || result.mutation_performed !== restored) {
+    throw createStructuredError("Property Area Range Restore did not produce an authoritative outcome.", "property_area_range_restore_response_invalid", 500);
+  }
+  return { ok: true, status: result.status, mutation_performed: result.mutation_performed };
+}
+
+function resolvePropertyAreaRangeProofRestoreOperation(projectsRoot, slug) {
+  const candidates = listOperations({ projectsRoot, slug }).filter((operation) => {
+    return operation.operation_type === "property_area_range_restore"
+      && operation.status === "succeeded"
+      && operation.stage === "completed"
+      && isOperationId(operation.operation_id);
+  });
+  if (candidates.length !== 1) {
+    throw createStructuredError("Property Area Range Proof requires one completed guarded Restore.", "property_area_range_proof_restore_unavailable", 409);
+  }
+  return candidates[0].operation_id;
+}
+
+function buildPropertyAreaRangeProofResponse(result, expected) {
+  const verdict = result && result.verdict;
+  const claims = result && result.claims;
+  const transaction = result && result.transaction;
+  const evidenceLimits = result && result.evidence_limits;
+  const evidenceGaps = result && result.evidence_gaps;
+  const validClaim = (claim) => hasExactKeys(claim, ["gaps", "status"])
+    && ["PASS", "NOT_PROVEN"].includes(claim.status) && Array.isArray(claim.gaps)
+    && claim.gaps.every((gap) => typeof gap === "string");
+  if (!result || result.schema !== PROOF_GATE_SCHEMA || result.version !== PROOF_GATE_VERSION
+    || !["PASS", "BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(verdict)
+    || !hasExactKeys(transaction, ["project_slug", "restore_operation_id"])
+    || transaction.project_slug !== expected.slug || transaction.restore_operation_id !== expected.restoreOperationId
+    || !hasExactKeys(claims, PROPERTY_AREA_RANGE_PROOF_CLAIMS)
+    || !PROPERTY_AREA_RANGE_PROOF_CLAIMS.every((claim) => validClaim(claims[claim]))
+    || !Array.isArray(evidenceGaps) || !evidenceGaps.every((gap) => typeof gap === "string")
+    || !Array.isArray(evidenceLimits) || evidenceLimits.some((limit) => !PROPERTY_AREA_RANGE_PROOF_LIMITS.includes(limit))
+    || (verdict === "PASS" && (evidenceGaps.length !== 0 || !PROPERTY_AREA_RANGE_PROOF_CLAIMS.every((claim) => claims[claim].status === "PASS")))) {
+    throw createStructuredError("Property Area Range Proof could not be presented safely.", "property_area_range_proof_response_invalid", 500);
+  }
+  return {
+    ok: true,
+    verdict,
+    claims: Object.fromEntries(PROPERTY_AREA_RANGE_PROOF_CLAIMS.map((claim) => [claim, claims[claim].status])),
+    evidence_limits: evidenceLimits.slice()
   };
 }
 
@@ -2206,7 +2282,25 @@ function createLauncherServer(options) {
           const confirmation = validatePropertyAreaRangeRestorePayload(payload);
           const restoreService = options.propertyAreaRangeRestoreService || restorePropertyAreaRange;
           const result = await restoreService({ projectsRoot, slug, confirmation, idempotencyKey: getRequestIdempotencyKey(request) });
-          sendJson(response, 200, { ok: true, status: result.status, mutation_performed: result.mutation_performed === true });
+          sendJson(response, 200, buildPropertyAreaRangeRestoreResponse(result));
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendPropertyAreaRangeError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/property-area-range\/proof$/.test(requestUrl.pathname)) {
+        try {
+          if ([...requestUrl.searchParams.keys()].length !== 0) {
+            throw createStructuredError("Property Area Range Proof does not accept browser-supplied lineage.", "property_area_range_proof_request_rejected", 400);
+          }
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const restoreOperationId = resolvePropertyAreaRangeProofRestoreOperation(projectsRoot, slug);
+          const proofService = options.propertyAreaRangeProofService || evaluateProofGate;
+          const result = await proofService({ projectsRoot, slug, restoreOperationId });
+          sendJson(response, 200, buildPropertyAreaRangeProofResponse(result, { slug, restoreOperationId }));
         } catch (error) {
           if (error && error.securityBoundary === true) throw error;
           sendPropertyAreaRangeError(response, error);
