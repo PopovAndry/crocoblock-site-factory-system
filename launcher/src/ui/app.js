@@ -38,6 +38,8 @@
   const statePlanResult = document.getElementById("state-plan-result");
   const viewingDatePreviewButton = document.getElementById("viewing-date-preview-button");
   const viewingDatePreviewResult = document.getElementById("viewing-date-preview-result");
+  const propertyAreaRangePreviewButton = document.getElementById("property-area-range-preview-button");
+  const propertyAreaRangePreviewResult = document.getElementById("property-area-range-preview-result");
   const stateRollbackResult = document.getElementById("state-rollback-result");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
   const totalTokens = document.getElementById("launcher-total-tokens");
@@ -391,6 +393,7 @@
     error: null
   };
   let viewingDatePreviewView = { slug: "", requestId: 0, planId: "" };
+  let propertyAreaRangePreviewView = { slug: "", requestId: 0 };
 
   function isActiveViewingDatePreview(slug, requestId) {
     return String(generateProjectSlug.value || "").trim() === String(slug || "")
@@ -482,6 +485,86 @@
       viewingDatePreviewResult.textContent = payload.status === "already_applied" ? "Preferred date is already applied." : "Preferred date was applied. Review the updated form before using it.";
     } catch (caught) {
       if (isActiveViewingDatePreview(slug, requestId)) viewingDatePreviewResult.textContent = "Preferred date Apply cannot proceed safely.";
+    }
+  }
+
+  function isActivePropertyAreaRangePreview(slug, requestId) {
+    return String(generateProjectSlug.value || "").trim() === String(slug || "")
+      && propertyAreaRangePreviewView.slug === String(slug || "")
+      && propertyAreaRangePreviewView.requestId === requestId;
+  }
+
+  function isPropertyAreaRangePreviewSummary(summary) {
+    const change = summary && summary.change;
+    const observed = summary && summary.observed;
+    return Boolean(
+      summary && typeof summary === "object" && !Array.isArray(summary)
+      && Object.keys(summary).sort().join(",") === "boundary,change,observed,preservation,schema_version"
+      && summary.schema_version === 1
+      && change && typeof change === "object" && !Array.isArray(change)
+      && Object.keys(change).sort().join(",") === "archive,behavior,title,unit"
+      && change.title === "Add an optional Property area range"
+      && change.archive === "/properties/"
+      && change.unit === "sq m"
+      && change.behavior === "Inclusive minimum and maximum bounds."
+      && observed && typeof observed === "object" && !Array.isArray(observed)
+      && Object.keys(observed).join(",") === "published_property_count"
+      && Number.isSafeInteger(observed.published_property_count) && observed.published_property_count >= 0
+      && Array.isArray(summary.preservation) && summary.preservation.length === 2
+      && summary.preservation[0] === "Property data is not changed."
+      && summary.preservation[1] === "Existing archive filters, sorting, pagination, cards, count, and default results stay unchanged until a later transaction."
+      && summary.boundary === "This Preview has not applied the change and does not verify Recovery, Restore, or Proof Gate."
+    );
+  }
+
+  function renderPropertyAreaRangePreview(payload) {
+    const summary = payload && payload.summary;
+    if (!propertyAreaRangePreviewResult) return false;
+    if (!payload || payload.status !== "prepared_for_recovery" || !isPropertyAreaRangePreviewSummary(summary)) {
+      propertyAreaRangePreviewResult.hidden = false;
+      propertyAreaRangePreviewResult.className = "result-box result-box-error";
+      propertyAreaRangePreviewResult.textContent = "Property Area Range Preview could not be presented safely.";
+      return false;
+    }
+    propertyAreaRangePreviewResult.hidden = false;
+    propertyAreaRangePreviewResult.className = "result-box result-box-success";
+    propertyAreaRangePreviewResult.innerHTML = [
+      "<strong>Property area range Preview is ready.</strong>",
+      "<p><span>Change:</span> " + escapeHtml(summary.change.title) + " on " + escapeHtml(summary.change.archive) + " in " + escapeHtml(summary.change.unit) + ". " + escapeHtml(summary.change.behavior) + "</p>",
+      "<p><span>Observed:</span> " + escapeHtml(String(summary.observed.published_property_count)) + " published Properties were checked.</p>",
+      "<p><span>Preserved:</span> " + escapeHtml(summary.preservation[0]) + " " + escapeHtml(summary.preservation[1]) + "</p>",
+      "<p>" + escapeHtml(summary.boundary) + "</p>"
+    ].join("");
+    return true;
+  }
+
+  function showPropertyAreaRangePreviewFailure() {
+    if (!propertyAreaRangePreviewResult) return;
+    propertyAreaRangePreviewResult.hidden = false;
+    propertyAreaRangePreviewResult.className = "result-box result-box-error";
+    propertyAreaRangePreviewResult.textContent = "Property Area Range Preview cannot be prepared safely.";
+  }
+
+  async function previewPropertyAreaRange() {
+    const slug = String(generateProjectSlug.value || "").trim();
+    const requestId = propertyAreaRangePreviewView.requestId + 1;
+    propertyAreaRangePreviewView = { slug, requestId };
+    if (!slug || !propertyAreaRangePreviewButton) return;
+    propertyAreaRangePreviewButton.disabled = true;
+    propertyAreaRangePreviewResult.hidden = false;
+    propertyAreaRangePreviewResult.className = "result-box";
+    propertyAreaRangePreviewResult.textContent = "Preparing Property area range Preview...";
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/property-area-range/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(slug, requestId)) return;
+      if (!response.ok || !renderPropertyAreaRangePreview(payload)) {
+        showPropertyAreaRangePreviewFailure();
+      }
+    } catch (_) {
+      if (isActivePropertyAreaRangePreview(slug, requestId)) showPropertyAreaRangePreviewFailure();
+    } finally {
+      if (isActivePropertyAreaRangePreview(slug, requestId)) propertyAreaRangePreviewButton.disabled = false;
     }
   }
 
@@ -3468,9 +3551,14 @@
     const recoveryRequestId = resetRecoveryStatusView(generateProjectSlug.value);
     const stateRequestId = resetStateChangeView(generateProjectSlug.value);
     viewingDatePreviewView = { slug: String(generateProjectSlug.value || "").trim(), requestId: viewingDatePreviewView.requestId + 1, planId: "" };
+    propertyAreaRangePreviewView = { slug: String(generateProjectSlug.value || "").trim(), requestId: propertyAreaRangePreviewView.requestId + 1 };
     if (viewingDatePreviewResult) {
       viewingDatePreviewResult.hidden = true;
       viewingDatePreviewResult.textContent = "";
+    }
+    if (propertyAreaRangePreviewResult) {
+      propertyAreaRangePreviewResult.hidden = true;
+      propertyAreaRangePreviewResult.textContent = "";
     }
     Promise.all([
       loadSetupStatus(generateProjectSlug.value, { requestId: setupRequestId }),
@@ -3682,6 +3770,9 @@
 
   if (viewingDatePreviewButton) {
     viewingDatePreviewButton.addEventListener("click", previewViewingDate);
+  }
+  if (propertyAreaRangePreviewButton) {
+    propertyAreaRangePreviewButton.addEventListener("click", previewPropertyAreaRange);
   }
 
   refreshStateButton.addEventListener("click", async () => {
@@ -3918,6 +4009,12 @@
     window.FactoryLauncherTestHooks.viewingDatePreview = {
       render: renderViewingDatePreview,
       getHtml: () => viewingDatePreviewResult.innerHTML
+    };
+    window.FactoryLauncherTestHooks.propertyAreaRangePreview = {
+      preview: previewPropertyAreaRange,
+      render: renderPropertyAreaRangePreview,
+      getHtml: () => propertyAreaRangePreviewResult.innerHTML,
+      getText: () => propertyAreaRangePreviewResult.textContent
     };
     window.FactoryLauncherTestHooks.recoveryStatus = {
       buildRecoveryStatusCardHtml,

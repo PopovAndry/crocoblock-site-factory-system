@@ -100,6 +100,7 @@ const {
 } = require("./viewing-date-restore");
 const {
   createPropertyAreaRangePreview,
+  assertBrowserSummary: assertPropertyAreaRangeBrowserSummary,
   hasPersistedPropertyAreaRangePlan,
   preparePropertyAreaRangeRecovery
 } = require("./property-area-range-preview");
@@ -366,6 +367,12 @@ function renderHomePage(config) {
     "          <p>Preview the protected preparation for one optional date field.</p>",
     "          <button type=\"button\" class=\"button secondary\" id=\"viewing-date-preview-button\">Preview Preferred date</button>",
     "          <div id=\"viewing-date-preview-result\" class=\"result-box\" hidden></div>",
+    "        </section>",
+    "        <section class=\"compact-form\" aria-labelledby=\"property-area-range-preview-title\">",
+    "          <h3 id=\"property-area-range-preview-title\">Property catalog: Area range</h3>",
+    "          <p>Review the protected preparation for an optional Property area filter.</p>",
+    "          <button type=\"button\" class=\"button secondary\" id=\"property-area-range-preview-button\">Preview Property area range</button>",
+    "          <div id=\"property-area-range-preview-result\" class=\"result-box\" hidden></div>",
     "        </section>",
     "        <div id=\"state-rollback-result\" class=\"result-box\" hidden></div>",
     "            <div id=\"site-status\" class=\"project-list\"></div>",
@@ -636,6 +643,19 @@ function sendPropertyAreaRangeError(response, error) {
     ? "Property Area Range is temporarily unavailable."
     : "Property Area Range cannot proceed safely.";
   sendJson(response, statusCode, { ok: false, status: "blocked", error: message, message });
+}
+
+function buildPropertyAreaRangePreviewResponse(result) {
+  if (!result || result.status !== "prepared_for_recovery" || !isPropertyAreaRangePlanId(result.plan_id)) {
+    throw createStructuredError("Property Area Range Preview could not be presented safely.", "property_area_range_preview_response_invalid", 500);
+  }
+  let summary;
+  try {
+    summary = assertPropertyAreaRangeBrowserSummary(result.browser_summary);
+  } catch (_) {
+    throw createStructuredError("Property Area Range Preview could not be presented safely.", "property_area_range_preview_response_invalid", 500);
+  }
+  return { ok: true, status: result.status, plan_id: result.plan_id, summary };
 }
 
 function buildRecoveryPointCreateResponse(operationResult) {
@@ -2113,7 +2133,7 @@ function createLauncherServer(options) {
           validatePropertyAreaRangePreviewPayload(payload);
           const previewService = options.propertyAreaRangePreviewService || createPropertyAreaRangePreview;
           const result = await previewService({ projectsRoot, slug });
-          sendJson(response, 200, { ok: true, status: result.status, plan_id: result.plan_id });
+          sendJson(response, 200, buildPropertyAreaRangePreviewResponse(result));
         } catch (error) {
           if (error && error.securityBoundary === true) throw error;
           sendPropertyAreaRangeError(response, error);

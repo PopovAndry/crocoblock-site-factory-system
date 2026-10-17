@@ -6,7 +6,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 const os = require("node:os");
-const { directoryIdentity, nativeScript } = require("../src/property-area-range-preview");
+const { directoryIdentity, nativeScript, browserSummary, assertBrowserSummary } = require("../src/property-area-range-preview");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const adapterPath = path.join(repoRoot, "wordpress-plugin", "includes", "adapters", "render-adapter.php");
@@ -75,6 +75,23 @@ test("Property Area range stays dormant until the exact transaction-bound option
     reset_url: "https://example.test/properties/?purpose=Sale&factory_sort=price_desc&factory_per_page=12",
     one_sided_compare: ">="
   });
+});
+
+test("Property Area Range Preview derives a closed browser summary from the server-owned prepared plan", () => {
+  const summary = browserSummary({ baseline: { property_count: 30 } });
+  assert.deepEqual(assertBrowserSummary(summary), summary);
+  assert.equal(summary.observed.published_property_count, 30);
+  assert.match(summary.change.title, /optional Property area range/);
+  assert.match(summary.preservation.join(" "), /sorting, pagination, cards, count/);
+  assert.match(summary.boundary, /has not applied the change/);
+
+  for (const malformed of [
+    Object.assign({}, summary, { observed: { published_property_count: -1 } }),
+    Object.assign({}, summary, { preservation: summary.preservation.slice(0, 1) }),
+    Object.assign({}, summary, { plan_id: "caller-supplied" })
+  ]) {
+    assert.throws(() => assertBrowserSummary(malformed), { code: "property_area_range_preview_summary_invalid" });
+  }
 });
 
 test("Property Area range renders only through the existing Factory archive and never adds a JetSmartFilters path", () => {

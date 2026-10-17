@@ -14,6 +14,21 @@ const PLAN_ID = "property-area-range-plan-11111111-1111-4111-8111-111111111111";
 const OTHER_PLAN_ID = "property-area-range-plan-22222222-2222-4222-8222-222222222222";
 const SNAPSHOT_ID = "snapshot-2026-10-08t12-00-00-000z-abcdef123456";
 const APPLY_ID = "op-2026-10-08T12-00-00-000Z-aabbcc";
+const PREVIEW_SUMMARY = Object.freeze({
+  schema_version: 1,
+  change: Object.freeze({
+    title: "Add an optional Property area range",
+    archive: "/properties/",
+    unit: "sq m",
+    behavior: "Inclusive minimum and maximum bounds."
+  }),
+  observed: Object.freeze({ published_property_count: 30 }),
+  preservation: Object.freeze([
+    "Property data is not changed.",
+    "Existing archive filters, sorting, pagination, cards, count, and default results stay unchanged until a later transaction."
+  ]),
+  boundary: "This Preview has not applied the change and does not verify Recovery, Restore, or Proof Gate."
+});
 let port = 35100;
 
 function serviceError(code, statusCode) {
@@ -23,7 +38,11 @@ function serviceError(code, statusCode) {
   return error;
 }
 
-async function withServer(callback) {
+function previewResult() {
+  return { status: "prepared_for_recovery", plan_id: PLAN_ID, browser_summary: JSON.parse(JSON.stringify(PREVIEW_SUMMARY)) };
+}
+
+async function withServer(callback, overrides) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-property-area-range-route-"));
   createProjectScaffold({ name: "Area Route", slug: "area-route", port: port += 1, projectsRoot });
   createProjectScaffold({ name: "Other Area Route", slug: "other-area-route", port: port += 1, projectsRoot });
@@ -31,7 +50,10 @@ async function withServer(callback) {
   const restoreBoundary = { invoked: 0, confirmationAccepted: 0, sideEffects: 0 };
   const server = createLauncherServer({
     host: "127.0.0.1", port: port += 1, projectsRoot, skipRestoreReconciliation: true,
-    propertyAreaRangePreviewService: async (input) => { calls.push(["preview", input]); return { status: "prepared_for_recovery", plan_id: PLAN_ID }; },
+    propertyAreaRangePreviewService: async (input) => {
+      calls.push(["preview", input]);
+      return overrides && overrides.previewResult ? overrides.previewResult(input) : previewResult();
+    },
     propertyAreaRangeRecoveryService: async (input) => {
       calls.push(["recovery", input]);
       if (input.planId !== PLAN_ID || input.slug !== "area-route") throw serviceError("property_area_range_plan_missing", 409);
@@ -78,7 +100,8 @@ function endpoint(slug, name) { return "/api/projects/" + slug + "/property-area
 test("Property Area Range routes accept only the exact server-owned lineage", async () => {
   await withServer(async (baseUrl, calls, _projectsRoot, restoreBoundary) => {
     const preview = await request(baseUrl, endpoint("area-route", "preview"), {});
-    assert.deepEqual(preview.body, { ok: true, status: "prepared_for_recovery", plan_id: PLAN_ID });
+    assert.deepEqual(preview.body, { ok: true, status: "prepared_for_recovery", plan_id: PLAN_ID, summary: PREVIEW_SUMMARY });
+    assert.doesNotMatch(JSON.stringify(preview.body.summary), /plan_id|project_id|operation_id|snapshot|sha256|path|sql/i);
 
     const recovery = await request(baseUrl, endpoint("area-route", "recovery-point"), { plan_id: PLAN_ID, confirm_prepare_recovery_point: true });
     assert.deepEqual(recovery.body, { ok: true, status: "prepared", snapshot_id: SNAPSHOT_ID });
@@ -98,6 +121,27 @@ test("Property Area Range routes accept only the exact server-owned lineage", as
     assert.deepEqual(calls[3][1].confirmation, { plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID, apply_operation_id: APPLY_ID });
     assert.deepEqual(restoreBoundary, { invoked: 1, confirmationAccepted: 1, sideEffects: 1 });
   });
+});
+
+test("Property Area Range Preview route fails closed for malformed, stale, and failed presentation results", async () => {
+  const cases = [
+    ["malformed", () => ({ status: "prepared_for_recovery", plan_id: PLAN_ID, browser_summary: { schema_version: 1 } }), 500],
+    ["stale", () => { throw serviceError("property_area_range_baseline_drift", 409); }, 409],
+    ["failed", () => { throw new Error("unexpected preview failure"); }, 500]
+  ];
+  for (const [_name, previewResultOverride, expectedStatus] of cases) {
+    await withServer(async (baseUrl, calls) => {
+      const result = await request(baseUrl, endpoint("area-route", "preview"), {});
+      assert.equal(result.response.status, expectedStatus);
+      assert.deepEqual(result.body, {
+        ok: false,
+        status: "blocked",
+        error: expectedStatus >= 500 ? "Property Area Range is temporarily unavailable." : "Property Area Range cannot proceed safely.",
+        message: expectedStatus >= 500 ? "Property Area Range is temporarily unavailable." : "Property Area Range cannot proceed safely."
+      });
+      assert.equal(calls.length, 1);
+    }, { previewResult: previewResultOverride });
+  }
 });
 
 test("Property Area Range routes reject injected profile, schema, option, evidence, and project authority before dispatch", async () => {

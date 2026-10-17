@@ -30,6 +30,7 @@ const PLAN_SCHEMA = "csf_property_area_range_preview";
 const RECOVERY_SCHEMA = "csf_property_area_range_recovery_result";
 const RECOVERY_VERSION = 3;
 const DECIMAL_GRAMMAR = /^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$/;
+const BROWSER_SUMMARY_SCHEMA_VERSION = 1;
 
 function fail(code, message, statusCode) {
   const error = new Error(message || "Property Area Range cannot proceed safely.");
@@ -254,6 +255,57 @@ function assertPlan(plan, projectState, planId) {
   return plan;
 }
 
+function browserSummary(plan) {
+  const propertyCount = plan && plan.baseline && plan.baseline.property_count;
+  if (!Number.isSafeInteger(propertyCount) || propertyCount < 0) {
+    throw fail("property_area_range_preview_summary_invalid", "Property Area Range Preview could not be presented safely.");
+  }
+  return {
+    schema_version: BROWSER_SUMMARY_SCHEMA_VERSION,
+    change: {
+      title: "Add an optional Property area range",
+      archive: "/properties/",
+      unit: "sq m",
+      behavior: "Inclusive minimum and maximum bounds."
+    },
+    observed: {
+      published_property_count: propertyCount
+    },
+    preservation: [
+      "Property data is not changed.",
+      "Existing archive filters, sorting, pagination, cards, count, and default results stay unchanged until a later transaction."
+    ],
+    boundary: "This Preview has not applied the change and does not verify Recovery, Restore, or Proof Gate."
+  };
+}
+
+function assertBrowserSummary(summary) {
+  const change = summary && summary.change;
+  const observed = summary && summary.observed;
+  if (!exactKeys(summary, ["boundary", "change", "observed", "preservation", "schema_version"])
+    || summary.schema_version !== BROWSER_SUMMARY_SCHEMA_VERSION
+    || !exactKeys(change, ["archive", "behavior", "title", "unit"])
+    || change.title !== "Add an optional Property area range"
+    || change.archive !== "/properties/"
+    || change.unit !== "sq m"
+    || change.behavior !== "Inclusive minimum and maximum bounds."
+    || !exactKeys(observed, ["published_property_count"])
+    || !Number.isSafeInteger(observed.published_property_count) || observed.published_property_count < 0
+    || !Array.isArray(summary.preservation) || summary.preservation.length !== 2
+    || summary.preservation[0] !== "Property data is not changed."
+    || summary.preservation[1] !== "Existing archive filters, sorting, pagination, cards, count, and default results stay unchanged until a later transaction."
+    || summary.boundary !== "This Preview has not applied the change and does not verify Recovery, Restore, or Proof Gate.") {
+    throw fail("property_area_range_preview_summary_invalid", "Property Area Range Preview could not be presented safely.");
+  }
+  return {
+    schema_version: summary.schema_version,
+    change: Object.assign({}, change),
+    observed: Object.assign({}, observed),
+    preservation: summary.preservation.slice(),
+    boundary: summary.boundary
+  };
+}
+
 function assertCurrentContract(plan) {
   const current = exactAreaContractIdentity();
   if (!plan || !plan.baseline || plan.baseline.contract_sha256 !== current) {
@@ -334,8 +386,9 @@ async function createPropertyAreaRangePreview(options) {
     proposed_delta: { add_option: { key: OPTION_NAME, schema_version: 1, state: "enabled" } },
     expected: { activation_option: OPTION_NAME, option_absent_before_apply: true }, created_at: new Date().toISOString()
   };
+  const summary = browserSummary(plan);
   atomicJson(planPath(projectState, planId), plan);
-  return { ok: true, plan_id: planId, status: "prepared_for_recovery" };
+  return { ok: true, plan_id: planId, status: "prepared_for_recovery", browser_summary: summary };
 }
 
 async function preparePropertyAreaRangeRecovery(options) {
@@ -368,4 +421,4 @@ async function preparePropertyAreaRangeRecovery(options) {
   }
 }
 
-module.exports = { PROFILE, PROFILE_ID, PROFILE_VERSION, PLAN_ROOT, OPTION_NAME, DECIMAL_GRAMMAR, directoryIdentity, exactAreaContractIdentity, assertCurrentContract, nativeScript, observeAreaRuntime, writeAreaActivation, normalizePropertyAreas, exactActivation, assertObservation, assertPlan, readPlan, hasPersistedPropertyAreaRangePlan, matchingPreparedRecovery, createPropertyAreaRangePreview, preparePropertyAreaRangeRecovery, assertPropertyAreaRangeCoverageReadiness, planPath, recoveryPath };
+module.exports = { PROFILE, PROFILE_ID, PROFILE_VERSION, PLAN_ROOT, OPTION_NAME, DECIMAL_GRAMMAR, directoryIdentity, exactAreaContractIdentity, assertCurrentContract, nativeScript, observeAreaRuntime, writeAreaActivation, normalizePropertyAreas, exactActivation, assertObservation, assertPlan, browserSummary, assertBrowserSummary, readPlan, hasPersistedPropertyAreaRangePlan, matchingPreparedRecovery, createPropertyAreaRangePreview, preparePropertyAreaRangeRecovery, assertPropertyAreaRangeCoverageReadiness, planPath, recoveryPath };
