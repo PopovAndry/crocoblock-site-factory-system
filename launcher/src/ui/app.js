@@ -39,6 +39,10 @@
   const viewingDatePreviewButton = document.getElementById("viewing-date-preview-button");
   const viewingDatePreviewResult = document.getElementById("viewing-date-preview-result");
   const propertyAreaRangePreviewButton = document.getElementById("property-area-range-preview-button");
+  const propertyAreaRangeRecoveryButton = document.getElementById("property-area-range-recovery-button");
+  const propertyAreaRangeApplyConfirmation = document.getElementById("property-area-range-apply-confirmation");
+  const propertyAreaRangeApplyConfirmationWrap = document.getElementById("property-area-range-apply-confirmation-wrap");
+  const propertyAreaRangeApplyButton = document.getElementById("property-area-range-apply-button");
   const propertyAreaRangePreviewResult = document.getElementById("property-area-range-preview-result");
   const stateRollbackResult = document.getElementById("state-rollback-result");
   const milestoneGenerate = document.getElementById("launcher-milestone-generate");
@@ -393,7 +397,17 @@
     error: null
   };
   let viewingDatePreviewView = { slug: "", requestId: 0, planId: "" };
-  let propertyAreaRangePreviewView = { slug: "", requestId: 0 };
+  let propertyAreaRangePreviewView = {
+    slug: "",
+    requestId: 0,
+    planId: "",
+    snapshotId: "",
+    summary: null,
+    phase: "idle",
+    progress: "",
+    observedOperationStatus: ""
+  };
+  let propertyAreaRangeApplyProgressTimer = null;
 
   function isActiveViewingDatePreview(slug, requestId) {
     return String(generateProjectSlug.value || "").trim() === String(slug || "")
@@ -494,6 +508,18 @@
       && propertyAreaRangePreviewView.requestId === requestId;
   }
 
+  function isPropertyAreaRangePlanId(value) {
+    return typeof value === "string" && /^property-area-range-plan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  }
+
+  function isPropertyAreaRangeSnapshotId(value) {
+    return typeof value === "string" && /^snapshot-[a-z0-9-]+$/.test(value);
+  }
+
+  function isPropertyAreaRangeOperationId(value) {
+    return typeof value === "string" && /^op-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{6}$/.test(value);
+  }
+
   function isPropertyAreaRangePreviewSummary(summary) {
     const change = summary && summary.change;
     const observed = summary && summary.observed;
@@ -517,15 +543,43 @@
     );
   }
 
-  function renderPropertyAreaRangePreview(payload) {
-    const summary = payload && payload.summary;
-    if (!propertyAreaRangePreviewResult) return false;
-    if (!payload || payload.status !== "prepared_for_recovery" || !isPropertyAreaRangePreviewSummary(summary)) {
-      propertyAreaRangePreviewResult.hidden = false;
-      propertyAreaRangePreviewResult.className = "result-box result-box-error";
-      propertyAreaRangePreviewResult.textContent = "Property Area Range Preview could not be presented safely.";
-      return false;
+  function propertyAreaRangeStatusText() {
+    switch (propertyAreaRangePreviewView.phase) {
+      case "preview_ready": return "Preview is ready. Prepare a verified Recovery Point before Apply.";
+      case "recovery_preparing": return "Preparing a verified V3 Recovery Point for this Preview...";
+      case "recovery_prepared": return "A verified V3 Recovery Point is prepared for this Preview. Confirm before Apply.";
+      case "applying": return propertyAreaRangePreviewView.progress
+        ? "Observed Apply progress: " + propertyAreaRangePreviewView.progress + "."
+        : "Waiting for a server-owned Apply operation update...";
+      case "apply_interrupted": return propertyAreaRangePreviewView.observedOperationStatus
+        ? "The Apply response was interrupted. Observed persisted Apply status: " + propertyAreaRangePreviewView.observedOperationStatus + ". No further Apply request will be sent."
+        : "The Apply response was interrupted. The authoritative operation status is unknown; no further Apply request will be sent.";
+      case "applied": return propertyAreaRangePreviewView.applyStatus === "already_applied"
+        ? "Observed Apply status: Already applied."
+        : "Observed Apply status: Applied.";
+      default: return "";
     }
+  }
+
+  function updatePropertyAreaRangeActions() {
+    const previewAvailable = propertyAreaRangePreviewView.phase === "idle";
+    const recoveryReady = propertyAreaRangePreviewView.phase === "preview_ready";
+    const applyReady = propertyAreaRangePreviewView.phase === "recovery_prepared";
+    if (propertyAreaRangePreviewButton) propertyAreaRangePreviewButton.disabled = !previewAvailable;
+    if (propertyAreaRangeRecoveryButton) {
+      propertyAreaRangeRecoveryButton.hidden = !recoveryReady;
+      propertyAreaRangeRecoveryButton.disabled = !recoveryReady;
+    }
+    if (propertyAreaRangeApplyConfirmationWrap) propertyAreaRangeApplyConfirmationWrap.hidden = !applyReady;
+    if (propertyAreaRangeApplyButton) {
+      propertyAreaRangeApplyButton.hidden = !applyReady;
+      propertyAreaRangeApplyButton.disabled = !applyReady || !propertyAreaRangeApplyConfirmation || propertyAreaRangeApplyConfirmation.checked !== true;
+    }
+  }
+
+  function renderPropertyAreaRangeFlow() {
+    const summary = propertyAreaRangePreviewView.summary;
+    if (!propertyAreaRangePreviewResult || !isPropertyAreaRangePreviewSummary(summary)) return false;
     propertyAreaRangePreviewResult.hidden = false;
     propertyAreaRangePreviewResult.className = "result-box result-box-success";
     propertyAreaRangePreviewResult.innerHTML = [
@@ -533,23 +587,152 @@
       "<p><span>Change:</span> " + escapeHtml(summary.change.title) + " on " + escapeHtml(summary.change.archive) + " in " + escapeHtml(summary.change.unit) + ". " + escapeHtml(summary.change.behavior) + "</p>",
       "<p><span>Observed:</span> " + escapeHtml(String(summary.observed.published_property_count)) + " published Properties were checked.</p>",
       "<p><span>Preserved:</span> " + escapeHtml(summary.preservation[0]) + " " + escapeHtml(summary.preservation[1]) + "</p>",
-      "<p>" + escapeHtml(summary.boundary) + "</p>"
+      "<p>" + escapeHtml(summary.boundary) + "</p>",
+      "<p><span>Current status:</span> " + escapeHtml(propertyAreaRangeStatusText()) + "</p>"
     ].join("");
+    updatePropertyAreaRangeActions();
     return true;
   }
 
-  function showPropertyAreaRangePreviewFailure() {
+  function showPropertyAreaRangeFailure(message) {
+    stopPropertyAreaRangeApplyProgress();
+    propertyAreaRangePreviewView.phase = "failed";
+    if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = false;
+    updatePropertyAreaRangeActions();
     if (!propertyAreaRangePreviewResult) return;
     propertyAreaRangePreviewResult.hidden = false;
     propertyAreaRangePreviewResult.className = "result-box result-box-error";
-    propertyAreaRangePreviewResult.textContent = "Property Area Range Preview cannot be prepared safely.";
+    propertyAreaRangePreviewResult.textContent = message;
+  }
+
+  function resetPropertyAreaRangePreviewView(slug) {
+    stopPropertyAreaRangeApplyProgress();
+    propertyAreaRangePreviewView = {
+      slug: String(slug || "").trim(),
+      requestId: propertyAreaRangePreviewView.requestId + 1,
+      planId: "",
+      snapshotId: "",
+      summary: null,
+      phase: "idle",
+      progress: "",
+      observedOperationStatus: ""
+    };
+    if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = false;
+    updatePropertyAreaRangeActions();
+    if (propertyAreaRangePreviewResult) {
+      propertyAreaRangePreviewResult.hidden = true;
+      propertyAreaRangePreviewResult.textContent = "";
+    }
+  }
+
+  function isPropertyAreaRangeRecoveryResponse(payload) {
+    return Boolean(
+      payload && typeof payload === "object" && !Array.isArray(payload)
+      && Object.keys(payload).sort().join(",") === "ok,snapshot_id,status"
+      && payload.ok === true && payload.status === "prepared" && isPropertyAreaRangeSnapshotId(payload.snapshot_id)
+    );
+  }
+
+  function isPropertyAreaRangeApplyResponse(payload) {
+    const lineage = payload && payload.lineage;
+    return Boolean(
+      payload && typeof payload === "object" && !Array.isArray(payload)
+      && Object.keys(payload).sort().join(",") === "lineage,mutation_performed,ok,status"
+      && payload.ok === true && ["applied", "already_applied"].includes(payload.status)
+      && typeof payload.mutation_performed === "boolean"
+      && payload.mutation_performed === (payload.status === "applied")
+      && lineage && typeof lineage === "object" && !Array.isArray(lineage)
+      && Object.keys(lineage).sort().join(",") === "apply_operation_id,plan_id,snapshot_id"
+      && lineage.plan_id === propertyAreaRangePreviewView.planId
+      && lineage.snapshot_id === propertyAreaRangePreviewView.snapshotId
+      && isPropertyAreaRangeOperationId(lineage.apply_operation_id)
+    );
+  }
+
+  function matchingPropertyAreaRangeApplyOperation(payload, slug, planId, snapshotId) {
+    const project = payload && payload.project;
+    const operations = payload && payload.operations;
+    if (!payload || payload.ok !== true || !project || project.slug !== slug || !Array.isArray(operations)) return null;
+    const matches = operations.filter((operation) => {
+      const metadata = operation && operation.metadata;
+      return operation && operation.project_slug === slug && operation.operation_type === "property_area_range_apply"
+        && metadata && metadata.plan_id === planId && metadata.recovery_snapshot_id === snapshotId
+        && ["requested", "running", "succeeded", "failed", "interrupted"].includes(operation.status);
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function propertyAreaRangeProgressStage(operation) {
+    const stage = operation && operation.stage;
+    const labels = {
+      preparing: "Preparing",
+      executing: "Executing",
+      validating: "Validating",
+      applying: "Applying",
+      verifying: "Verifying"
+    };
+    return labels[stage] || "";
+  }
+
+  function stopPropertyAreaRangeApplyProgress() {
+    if (propertyAreaRangeApplyProgressTimer) {
+      clearInterval(propertyAreaRangeApplyProgressTimer);
+      propertyAreaRangeApplyProgressTimer = null;
+    }
+  }
+
+  async function refreshPropertyAreaRangeApplyProgress(slug, requestId, planId, snapshotId) {
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(slug) + "/operations?limit=20", { cache: "no-store" });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(slug, requestId) || !["applying", "apply_interrupted"].includes(propertyAreaRangePreviewView.phase) || !response.ok) return;
+      const operation = matchingPropertyAreaRangeApplyOperation(payload, slug, planId, snapshotId);
+      if (!operation) return;
+      if (["requested", "running"].includes(operation.status)) {
+        const stage = propertyAreaRangeProgressStage(operation);
+        if (stage) {
+          propertyAreaRangePreviewView.progress = stage;
+          renderPropertyAreaRangeFlow();
+        }
+        return;
+      }
+      if (propertyAreaRangePreviewView.phase === "apply_interrupted") {
+        propertyAreaRangePreviewView.observedOperationStatus = operation.status;
+        renderPropertyAreaRangeFlow();
+        stopPropertyAreaRangeApplyProgress();
+      }
+    } catch (_) {
+      // A read-only progress observation never changes the Apply outcome.
+    }
+  }
+
+  function startPropertyAreaRangeApplyProgress(slug, requestId, planId, snapshotId) {
+    stopPropertyAreaRangeApplyProgress();
+    const refresh = () => refreshPropertyAreaRangeApplyProgress(slug, requestId, planId, snapshotId);
+    refresh();
+    propertyAreaRangeApplyProgressTimer = setInterval(refresh, 1000);
+  }
+
+  function renderPropertyAreaRangePreview(payload) {
+    const summary = payload && payload.summary;
+    if (!payload || payload.ok !== true || payload.status !== "prepared_for_recovery" || !isPropertyAreaRangePlanId(payload.plan_id) || !isPropertyAreaRangePreviewSummary(summary)) {
+      return false;
+    }
+    propertyAreaRangePreviewView.planId = payload.plan_id;
+    propertyAreaRangePreviewView.snapshotId = "";
+    propertyAreaRangePreviewView.summary = summary;
+    propertyAreaRangePreviewView.phase = "preview_ready";
+    return renderPropertyAreaRangeFlow();
   }
 
   async function previewPropertyAreaRange() {
     const slug = String(generateProjectSlug.value || "").trim();
     const requestId = propertyAreaRangePreviewView.requestId + 1;
-    propertyAreaRangePreviewView = { slug, requestId };
+    stopPropertyAreaRangeApplyProgress();
+    propertyAreaRangePreviewView = { slug, requestId, planId: "", snapshotId: "", summary: null, phase: "previewing", progress: "", observedOperationStatus: "" };
     if (!slug || !propertyAreaRangePreviewButton) return;
+    if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = false;
+    updatePropertyAreaRangeActions();
     propertyAreaRangePreviewButton.disabled = true;
     propertyAreaRangePreviewResult.hidden = false;
     propertyAreaRangePreviewResult.className = "result-box";
@@ -559,12 +742,81 @@
       const payload = await response.json();
       if (!isActivePropertyAreaRangePreview(slug, requestId)) return;
       if (!response.ok || !renderPropertyAreaRangePreview(payload)) {
-        showPropertyAreaRangePreviewFailure();
+        showPropertyAreaRangeFailure("Property Area Range Preview cannot be prepared safely.");
       }
     } catch (_) {
-      if (isActivePropertyAreaRangePreview(slug, requestId)) showPropertyAreaRangePreviewFailure();
+      if (isActivePropertyAreaRangePreview(slug, requestId)) showPropertyAreaRangeFailure("Property Area Range Preview cannot be prepared safely.");
     } finally {
-      if (isActivePropertyAreaRangePreview(slug, requestId)) propertyAreaRangePreviewButton.disabled = false;
+      if (isActivePropertyAreaRangePreview(slug, requestId)) updatePropertyAreaRangeActions();
+    }
+  }
+
+  async function preparePropertyAreaRangeRecovery() {
+    const slug = propertyAreaRangePreviewView.slug;
+    const requestId = propertyAreaRangePreviewView.requestId;
+    const planId = propertyAreaRangePreviewView.planId;
+    if (!isActivePropertyAreaRangePreview(slug, requestId) || propertyAreaRangePreviewView.phase !== "preview_ready" || !isPropertyAreaRangePlanId(planId)) return;
+    propertyAreaRangePreviewView.phase = "recovery_preparing";
+    renderPropertyAreaRangeFlow();
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/property-area-range/recovery-point", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan_id: planId, confirm_prepare_recovery_point: true })
+      });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(slug, requestId)) return;
+      if (!response.ok || !isPropertyAreaRangeRecoveryResponse(payload)) {
+        showPropertyAreaRangeFailure("Verified Recovery preparation did not complete. Apply remains unavailable.");
+        return;
+      }
+      propertyAreaRangePreviewView.snapshotId = payload.snapshot_id;
+      propertyAreaRangePreviewView.phase = "recovery_prepared";
+      renderPropertyAreaRangeFlow();
+    } catch (_) {
+      if (isActivePropertyAreaRangePreview(slug, requestId)) showPropertyAreaRangeFailure("Verified Recovery preparation did not complete. Apply remains unavailable.");
+    }
+  }
+
+  function updatePropertyAreaRangeApplyConfirmation() {
+    updatePropertyAreaRangeActions();
+  }
+
+  async function applyPropertyAreaRange() {
+    const slug = propertyAreaRangePreviewView.slug;
+    const requestId = propertyAreaRangePreviewView.requestId;
+    const planId = propertyAreaRangePreviewView.planId;
+    if (!isActivePropertyAreaRangePreview(slug, requestId) || propertyAreaRangePreviewView.phase !== "recovery_prepared" || !isPropertyAreaRangePlanId(planId)
+      || !isPropertyAreaRangeSnapshotId(propertyAreaRangePreviewView.snapshotId) || !propertyAreaRangeApplyConfirmation || propertyAreaRangeApplyConfirmation.checked !== true) return;
+    propertyAreaRangePreviewView.phase = "applying";
+    propertyAreaRangePreviewView.progress = "";
+    propertyAreaRangePreviewView.observedOperationStatus = "";
+    renderPropertyAreaRangeFlow();
+    startPropertyAreaRangeApplyProgress(slug, requestId, planId, propertyAreaRangePreviewView.snapshotId);
+    try {
+      const response = await launcherMutationFetch("/api/projects/" + encodeURIComponent(slug) + "/property-area-range/apply", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": createRequestIdempotencyKey("property-area-range-apply")
+        },
+        body: JSON.stringify({ plan_id: planId, confirm_apply: true })
+      });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(slug, requestId)) return;
+      if (!response.ok || !isPropertyAreaRangeApplyResponse(payload)) {
+        showPropertyAreaRangeFailure("Apply did not complete. This UI will not send another Apply request.");
+        return;
+      }
+      stopPropertyAreaRangeApplyProgress();
+      propertyAreaRangePreviewView.applyStatus = payload.status;
+      propertyAreaRangePreviewView.phase = "applied";
+      renderPropertyAreaRangeFlow();
+    } catch (_) {
+      if (isActivePropertyAreaRangePreview(slug, requestId)) {
+        propertyAreaRangePreviewView.phase = "apply_interrupted";
+        renderPropertyAreaRangeFlow();
+      }
     }
   }
 
@@ -3551,14 +3803,10 @@
     const recoveryRequestId = resetRecoveryStatusView(generateProjectSlug.value);
     const stateRequestId = resetStateChangeView(generateProjectSlug.value);
     viewingDatePreviewView = { slug: String(generateProjectSlug.value || "").trim(), requestId: viewingDatePreviewView.requestId + 1, planId: "" };
-    propertyAreaRangePreviewView = { slug: String(generateProjectSlug.value || "").trim(), requestId: propertyAreaRangePreviewView.requestId + 1 };
+    resetPropertyAreaRangePreviewView(generateProjectSlug.value);
     if (viewingDatePreviewResult) {
       viewingDatePreviewResult.hidden = true;
       viewingDatePreviewResult.textContent = "";
-    }
-    if (propertyAreaRangePreviewResult) {
-      propertyAreaRangePreviewResult.hidden = true;
-      propertyAreaRangePreviewResult.textContent = "";
     }
     Promise.all([
       loadSetupStatus(generateProjectSlug.value, { requestId: setupRequestId }),
@@ -3773,6 +4021,15 @@
   }
   if (propertyAreaRangePreviewButton) {
     propertyAreaRangePreviewButton.addEventListener("click", previewPropertyAreaRange);
+  }
+  if (propertyAreaRangeRecoveryButton) {
+    propertyAreaRangeRecoveryButton.addEventListener("click", preparePropertyAreaRangeRecovery);
+  }
+  if (propertyAreaRangeApplyConfirmation) {
+    propertyAreaRangeApplyConfirmation.addEventListener("change", updatePropertyAreaRangeApplyConfirmation);
+  }
+  if (propertyAreaRangeApplyButton) {
+    propertyAreaRangeApplyButton.addEventListener("click", applyPropertyAreaRange);
   }
 
   refreshStateButton.addEventListener("click", async () => {
@@ -4012,9 +4269,21 @@
     };
     window.FactoryLauncherTestHooks.propertyAreaRangePreview = {
       preview: previewPropertyAreaRange,
+      prepareRecovery: preparePropertyAreaRangeRecovery,
+      apply: applyPropertyAreaRange,
+      setApplyConfirmed: (value) => {
+        if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = value === true;
+        updatePropertyAreaRangeApplyConfirmation();
+      },
+      resetForProject: resetPropertyAreaRangePreviewView,
       render: renderPropertyAreaRangePreview,
       getHtml: () => propertyAreaRangePreviewResult.innerHTML,
-      getText: () => propertyAreaRangePreviewResult.textContent
+      getText: () => propertyAreaRangePreviewResult.textContent,
+      getState: () => ({
+        slug: propertyAreaRangePreviewView.slug,
+        phase: propertyAreaRangePreviewView.phase,
+        hasPreparedRecovery: Boolean(propertyAreaRangePreviewView.snapshotId)
+      })
     };
     window.FactoryLauncherTestHooks.recoveryStatus = {
       buildRecoveryStatusCardHtml,

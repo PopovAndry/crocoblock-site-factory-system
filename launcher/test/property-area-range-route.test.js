@@ -57,11 +57,13 @@ async function withServer(callback, overrides) {
     propertyAreaRangeRecoveryService: async (input) => {
       calls.push(["recovery", input]);
       if (input.planId !== PLAN_ID || input.slug !== "area-route") throw serviceError("property_area_range_plan_missing", 409);
+      if (overrides && overrides.recoveryResult) return overrides.recoveryResult(input);
       return { status: "prepared", snapshot_id: SNAPSHOT_ID };
     },
     propertyAreaRangeApplyService: async (input) => {
       calls.push(["apply", input]);
       if (input.planId !== PLAN_ID) throw serviceError("property_area_range_apply_recovery_stale", 409);
+      if (overrides && overrides.applyResult) return overrides.applyResult(input);
       if (input.idempotencyKey === "in-progress") throw serviceError("project_operation_in_progress", 409);
       if (input.idempotencyKey === "different-key") throw serviceError("idempotency_key_conflict", 409);
       if (input.idempotencyKey === "failed-terminal") throw serviceError("property_area_range_apply_prior_attempt_terminal", 409);
@@ -141,6 +143,48 @@ test("Property Area Range Preview route fails closed for malformed, stale, and f
       });
       assert.equal(calls.length, 1);
     }, { previewResult: previewResultOverride });
+  }
+});
+
+test("Property Area Range Recovery route fails closed before it can present an unverified recovery", async () => {
+  const cases = [
+    () => ({ status: "prepared", snapshot_id: "not-a-snapshot" }),
+    () => ({ status: "captured", snapshot_id: SNAPSHOT_ID }),
+    () => ({ status: "prepared" })
+  ];
+  for (const recoveryResult of cases) {
+    await withServer(async (baseUrl, calls) => {
+      const result = await request(baseUrl, endpoint("area-route", "recovery-point"), { plan_id: PLAN_ID, confirm_prepare_recovery_point: true });
+      assert.equal(result.response.status, 500);
+      assert.deepEqual(result.body, {
+        ok: false,
+        status: "blocked",
+        error: "Property Area Range is temporarily unavailable.",
+        message: "Property Area Range is temporarily unavailable."
+      });
+      assert.deepEqual(calls.map(([name]) => name), ["recovery"]);
+    }, { recoveryResult });
+  }
+});
+
+test("Property Area Range Apply route fails closed for non-authoritative observed status", async () => {
+  const cases = [
+    () => ({ status: "applied", mutation_performed: false, plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID, operation_id: APPLY_ID }),
+    () => ({ status: "already_applied", mutation_performed: true, plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID, operation_id: APPLY_ID }),
+    () => ({ status: "interrupted", mutation_performed: false, plan_id: PLAN_ID, snapshot_id: SNAPSHOT_ID, operation_id: APPLY_ID })
+  ];
+  for (const applyResult of cases) {
+    await withServer(async (baseUrl, calls) => {
+      const result = await request(baseUrl, endpoint("area-route", "apply"), { plan_id: PLAN_ID, confirm_apply: true }, "response-invalid");
+      assert.equal(result.response.status, 500);
+      assert.deepEqual(result.body, {
+        ok: false,
+        status: "blocked",
+        error: "Property Area Range is temporarily unavailable.",
+        message: "Property Area Range is temporarily unavailable."
+      });
+      assert.deepEqual(calls.map(([name]) => name), ["apply"]);
+    }, { applyResult });
   }
 });
 

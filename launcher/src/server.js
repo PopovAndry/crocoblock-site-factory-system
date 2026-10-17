@@ -372,6 +372,9 @@ function renderHomePage(config) {
     "          <h3 id=\"property-area-range-preview-title\">Property catalog: Area range</h3>",
     "          <p>Review the protected preparation for an optional Property area filter.</p>",
     "          <button type=\"button\" class=\"button secondary\" id=\"property-area-range-preview-button\">Preview Property area range</button>",
+    "          <button type=\"button\" class=\"button secondary\" id=\"property-area-range-recovery-button\" hidden>Prepare verified Recovery Point</button>",
+    "          <label id=\"property-area-range-apply-confirmation-wrap\" hidden><input type=\"checkbox\" id=\"property-area-range-apply-confirmation\"> I confirm Apply for this prepared Preview and verified Recovery Point.</label>",
+    "          <button type=\"button\" class=\"button\" id=\"property-area-range-apply-button\" hidden disabled>Apply Property area range</button>",
     "          <div id=\"property-area-range-preview-result\" class=\"result-box\" hidden></div>",
     "        </section>",
     "        <div id=\"state-rollback-result\" class=\"result-box\" hidden></div>",
@@ -656,6 +659,28 @@ function buildPropertyAreaRangePreviewResponse(result) {
     throw createStructuredError("Property Area Range Preview could not be presented safely.", "property_area_range_preview_response_invalid", 500);
   }
   return { ok: true, status: result.status, plan_id: result.plan_id, summary };
+}
+
+function buildPropertyAreaRangeRecoveryResponse(result) {
+  if (!result || result.status !== "prepared" || !isSnapshotId(result.snapshot_id)) {
+    throw createStructuredError("Property Area Range Recovery could not be presented safely.", "property_area_range_recovery_response_invalid", 500);
+  }
+  return { ok: true, status: "prepared", snapshot_id: result.snapshot_id };
+}
+
+function buildPropertyAreaRangeApplyResponse(result) {
+  const applied = result && result.status === "applied";
+  const replay = result && result.status === "already_applied";
+  if ((!applied && !replay) || typeof result.mutation_performed !== "boolean" || result.mutation_performed !== applied
+    || !isPropertyAreaRangePlanId(result.plan_id) || !isSnapshotId(result.snapshot_id) || !isOperationId(result.operation_id)) {
+    throw createStructuredError("Property Area Range Apply did not produce authoritative lineage.", "property_area_range_apply_response_invalid", 500);
+  }
+  return {
+    ok: true,
+    status: result.status,
+    mutation_performed: result.mutation_performed,
+    lineage: { plan_id: result.plan_id, snapshot_id: result.snapshot_id, apply_operation_id: result.operation_id }
+  };
 }
 
 function buildRecoveryPointCreateResponse(operationResult) {
@@ -2149,7 +2174,7 @@ function createLauncherServer(options) {
           const planId = validatePropertyAreaRangeRecoveryPayload(payload);
           const recoveryService = options.propertyAreaRangeRecoveryService || preparePropertyAreaRangeRecovery;
           const result = await recoveryService({ projectsRoot, slug, planId });
-          sendJson(response, 200, { ok: true, status: result.status, snapshot_id: result.snapshot_id });
+          sendJson(response, 200, buildPropertyAreaRangeRecoveryResponse(result));
         } catch (error) {
           if (error && error.securityBoundary === true) throw error;
           sendPropertyAreaRangeError(response, error);
@@ -2165,10 +2190,7 @@ function createLauncherServer(options) {
           const planId = validatePropertyAreaRangeApplyPayload(payload);
           const applyService = options.propertyAreaRangeApplyService || applyPropertyAreaRange;
           const result = await applyService({ projectsRoot, slug, planId, idempotencyKey: getRequestIdempotencyKey(request) });
-          if (!result || !["applied", "already_applied"].includes(result.status) || !isPropertyAreaRangePlanId(result.plan_id) || !isSnapshotId(result.snapshot_id) || !isOperationId(result.operation_id)) {
-            throw createStructuredError("Property Area Range Apply did not produce authoritative lineage.", "property_area_range_apply_response_invalid", 500);
-          }
-          sendJson(response, 200, { ok: true, status: result.status, mutation_performed: result.mutation_performed === true, lineage: { plan_id: result.plan_id, snapshot_id: result.snapshot_id, apply_operation_id: result.operation_id } });
+          sendJson(response, 200, buildPropertyAreaRangeApplyResponse(result));
         } catch (error) {
           if (error && error.securityBoundary === true) throw error;
           sendPropertyAreaRangeError(response, error);
