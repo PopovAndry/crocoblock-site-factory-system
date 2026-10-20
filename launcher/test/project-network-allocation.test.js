@@ -59,7 +59,7 @@ function runScaffoldProcess(projectsRoot, slug, port) {
   });
 }
 
-test("project store atomically assigns every server-owned /24 allocation under concurrent scaffolds", async (t) => {
+test("project store atomically assigns concurrent and appended server-owned /24 allocations", async (t) => {
   const projectsRoot = temporaryProjectsRoot();
   t.after(() => fs.rmSync(projectsRoot, { recursive: true, force: true }));
 
@@ -74,7 +74,9 @@ test("project store atomically assigns every server-owned /24 allocation under c
     "10.250.255.0/24",
     "10.250.253.0/24",
     "10.250.252.0/24",
-    "10.250.251.0/24"
+    "10.250.251.0/24",
+    "10.250.250.0/24",
+    "10.250.249.0/24"
   ]);
   const results = await Promise.all([
     runScaffoldProcess(projectsRoot, "concurrent-network-a", 49201),
@@ -90,6 +92,9 @@ test("project store atomically assigns every server-owned /24 allocation under c
     runScaffoldProcess(projectsRoot, "concurrent-network-k", 49220)
   ]);
   assert.equal(results.every((result) => result.ok), true);
+
+  create(projectsRoot, "appended-network-l", 49221);
+  create(projectsRoot, "appended-network-m", 49222);
 
   const inventory = readStrictProjectInventory(projectsRoot);
   assert.equal(inventory.length, PROJECT_NETWORK_POOL.length);
@@ -123,10 +128,14 @@ test("allocation rejects caller injection, fails closed on exhaustion, and is im
   create(projectsRoot, "network-ninth", 49217);
   create(projectsRoot, "network-tenth", 49218);
   create(projectsRoot, "network-eleventh", 49219);
+  create(projectsRoot, "network-twelfth", 49220);
+  create(projectsRoot, "network-thirteenth", 49221);
   assert.equal(readProjectBySlug("network-ninth", projectsRoot).project.network_allocation.subnet, "10.250.253.0/24");
   assert.equal(readProjectBySlug("network-tenth", projectsRoot).project.network_allocation.subnet, "10.250.252.0/24");
   assert.equal(readProjectBySlug("network-eleventh", projectsRoot).project.network_allocation.subnet, "10.250.251.0/24");
-  assert.throws(() => create(projectsRoot, "network-twelfth", 49220), (error) => error.code === "project_network_allocation_exhausted");
+  assert.equal(readProjectBySlug("network-twelfth", projectsRoot).project.network_allocation.subnet, "10.250.250.0/24");
+  assert.equal(readProjectBySlug("network-thirteenth", projectsRoot).project.network_allocation.subnet, "10.250.249.0/24");
+  assert.throws(() => create(projectsRoot, "network-fourteenth", 49222), (error) => error.code === "project_network_allocation_exhausted");
 
   const state = readProjectBySlug("network-first", projectsRoot);
   state.project.network_allocation = {
