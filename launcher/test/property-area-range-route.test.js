@@ -6,10 +6,11 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { createLauncherServer } = require("../src/server");
-const { createProjectScaffold } = require("../src/project-store");
+const { createProjectScaffold, readProjectBySlug } = require("../src/project-store");
 const { classifyLauncherRoute } = require("../src/http-security");
 const { runProjectOperation } = require("../src/project-operation-coordinator");
 const { RESTORE_HANDLE, assertConfirmation } = require("../src/property-area-range-restore");
+const { createPropertyAreaRangePreview } = require("../src/property-area-range-preview");
 
 const PLAN_ID = "property-area-range-plan-11111111-1111-4111-8111-111111111111";
 const OTHER_PLAN_ID = "property-area-range-plan-22222222-2222-4222-8222-222222222222";
@@ -81,6 +82,34 @@ async function createCompletedRestoreOperation(projectsRoot, slug) {
   return outcome.operation.operation_id;
 }
 
+async function createHydrationHistory(projectsRoot, slug) {
+  const state = readProjectBySlug(slug, projectsRoot);
+  const preview = await createPropertyAreaRangePreview({
+    projectsRoot,
+    slug,
+    expectedPluginIdentity: "a".repeat(64),
+    verifyRuntimeBinding: () => ({ ok: true }),
+    observe: async () => ({
+      runtime_binding: { ok: true, binding: { schema_version: 1, binding_kind: "server_owned_runtime_binding", project_id: state.project.project_id, project_slug: slug } },
+      plugin_identity_sha256: "a".repeat(64),
+      property_areas: [{ post_id: 3, values: ["42"] }],
+      option_present: false,
+      option_value: null
+    })
+  });
+  const outcome = await runProjectOperation({
+    projectsRoot,
+    slug,
+    operationType: "property_area_range_restore",
+    idempotencyKey: "property-area-range-history-" + slug,
+    fingerprintInput: { plan_id: preview.plan_id },
+    metadata: { property_area_range_plan_id: preview.plan_id },
+    safety: { apply_used: true },
+    execute: async () => ({ result: { status: "restored", mutation_performed: true }, resultSummary: {} })
+  });
+  return { planId: preview.plan_id, operationId: outcome.operation.operation_id, state };
+}
+
 async function withServer(callback, overrides) {
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "factory-property-area-range-route-"));
   createProjectScaffold({ name: "Area Route", slug: "area-route", port: port += 1, projectsRoot });
@@ -126,7 +155,13 @@ async function withServer(callback, overrides) {
     propertyAreaRangeProofService: async (input) => {
       calls.push(["proof", input]);
       return overrides && overrides.proofResult ? overrides.proofResult(input) : proofResult(input.slug, input.restoreOperationId);
-    }
+    },
+    propertyAreaRangeHistoryService: overrides && overrides.historyResult
+      ? async (input) => {
+        calls.push(["history", input]);
+        return overrides.historyResult(input);
+      }
+      : undefined
   });
   const info = await server.listen();
   try { await callback("http://127.0.0.1:" + info.port, calls, projectsRoot, restoreBoundary); } finally { await server.close(); }
@@ -307,6 +342,93 @@ test("Property Area Range Proof stays read-only and fail-closed for missing, cro
     const blocked = await read(baseUrl, endpoint("area-route", "proof"));
     assert.equal(blocked.response.status, 200);
     assert.equal(blocked.body.verdict, "BLOCKED");
+  }, {
+    proofResult: (input) => proofResult(input.slug, input.restoreOperationId, "BLOCKED")
+  });
+});
+
+test("Property Area Range history cold-load projection requires one exact restored transaction", async () => {
+  await withServer(async (baseUrl, calls, projectsRoot) => {
+    const absent = await read(baseUrl, endpoint("area-route", "history"));
+    assert.deepEqual(absent.body, { ok: true, state: "idle" });
+
+    const history = await createHydrationHistory(projectsRoot, "area-route");
+    const restored = await read(baseUrl, endpoint("area-route", "history"));
+    assert.equal(restored.response.status, 200);
+    assert.deepEqual(restored.body, {
+      ok: true,
+      state: "restored",
+      summary: Object.assign({}, PREVIEW_SUMMARY, { observed: { published_property_count: 1 } })
+    });
+    assert.doesNotMatch(JSON.stringify(restored.body), /plan_id|snapshot_id|operation_id|project_id|sha256|path|sql/i);
+    assert.deepEqual(calls.map(([name]) => name), ["proof"]);
+    assert.equal(calls[0][1].restoreOperationId, history.operationId);
+
+    const injected = await read(baseUrl, endpoint("area-route", "history") + "?plan_id=" + history.planId);
+    assert.equal(injected.response.status, 400);
+    assert.deepEqual(injected.body, {
+      ok: false,
+      status: "blocked",
+      error: "Property Area Range cannot proceed safely.",
+      message: "Property Area Range cannot proceed safely."
+    });
+  });
+});
+
+test("Property Area Range history fails closed for failed, malformed, stale, cross-project, and ambiguous history", async (t) => {
+  const cases = [
+    ["failed", async (history) => {
+      const filePath = path.join(history.state.runtimePath, "runs", "operations", history.operationId + ".json");
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      raw.status = "failed";
+      raw.stage = "failed";
+      fs.writeFileSync(filePath, JSON.stringify(raw) + "\n", "utf8");
+    }],
+    ["interrupted", async (history) => {
+      const filePath = path.join(history.state.runtimePath, "runs", "operations", history.operationId + ".json");
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      raw.status = "interrupted";
+      raw.stage = "interrupted";
+      fs.writeFileSync(filePath, JSON.stringify(raw) + "\n", "utf8");
+    }],
+    ["malformed", async (history) => {
+      const filePath = path.join(history.state.runtimePath, "proofs", "property-area-range-preview-v1", "plans", history.planId + ".json");
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      delete raw.baseline;
+      fs.writeFileSync(filePath, JSON.stringify(raw) + "\n", "utf8");
+    }],
+    ["malformed-operation", async (history) => {
+      fs.writeFileSync(path.join(history.state.runtimePath, "runs", "operations", "op-2026-10-18T12-00-00-000Z-abcabc.json"), "{", "utf8");
+    }],
+    ["cross-project", async (history) => {
+      const filePath = path.join(history.state.runtimePath, "runs", "operations", history.operationId + ".json");
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      raw.project_slug = "other-area-route";
+      fs.writeFileSync(filePath, JSON.stringify(raw) + "\n", "utf8");
+    }],
+    ["ambiguous", async (history) => {
+      const operations = path.join(history.state.runtimePath, "runs", "operations");
+      const original = JSON.parse(fs.readFileSync(path.join(operations, history.operationId + ".json"), "utf8"));
+      const duplicateId = "op-2026-10-18T12-00-00-000Z-bbccdd";
+      original.operation_id = duplicateId;
+      fs.writeFileSync(path.join(operations, duplicateId + ".json"), JSON.stringify(original) + "\n", "utf8");
+    }]
+  ];
+  for (const [_label, mutate] of cases) {
+    await withServer(async (baseUrl, calls, projectsRoot) => {
+      const history = await createHydrationHistory(projectsRoot, "area-route");
+      await mutate(history);
+      const response = await read(baseUrl, endpoint("area-route", "history"));
+      assert.deepEqual(response.body, { ok: true, state: "unavailable" });
+      assert.deepEqual(calls, []);
+    });
+  }
+
+  await withServer(async (baseUrl, calls, projectsRoot) => {
+    await createHydrationHistory(projectsRoot, "area-route");
+    const response = await read(baseUrl, endpoint("area-route", "history"));
+    assert.deepEqual(response.body, { ok: true, state: "unavailable" });
+    assert.deepEqual(calls.map(([name]) => name), ["proof"]);
   }, {
     proofResult: (input) => proofResult(input.slug, input.restoreOperationId, "BLOCKED")
   });

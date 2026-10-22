@@ -581,6 +581,7 @@
       case "proof_blocked": return "Proof Gate is BLOCKED. It did not verify the complete restored transaction.";
       case "proof_insufficient": return "Proof Gate has insufficient evidence. It did not verify the complete restored transaction.";
       case "proof_unavailable": return "Baseline restored. The read-only Proof Gate result is unavailable.";
+      case "history_unavailable": return "Persisted Property area history cannot be projected safely. Preview, Apply, and Restore remain unavailable.";
       default: return "";
     }
   }
@@ -655,6 +656,9 @@
       "<p><span>Preserved:</span> " + escapeHtml(summary.preservation[0]) + " " + escapeHtml(summary.preservation[1]) + "</p>",
       "<p>" + escapeHtml(summary.boundary) + "</p>",
       "<p><span>Current status:</span> " + escapeHtml(propertyAreaRangeStatusText()) + "</p>",
+      propertyAreaRangePreviewView.phase === "restored" || propertyAreaRangePreviewView.phase.startsWith("proof_")
+        ? "<p><span>Separate capability:</span> Generic Restore Website controls are separate from this completed Property area range transaction.</p>"
+        : "",
       propertyAreaRangeProofClaimsText() ? "<p><span>Proof checks:</span> " + escapeHtml(propertyAreaRangeProofClaimsText()) + "</p>" : ""
     ].join("");
     updatePropertyAreaRangeActions();
@@ -700,6 +704,7 @@
       propertyAreaRangePreviewResult.hidden = true;
       propertyAreaRangePreviewResult.textContent = "";
     }
+    return propertyAreaRangePreviewView.requestId;
   }
 
   function isPropertyAreaRangeRecoveryResponse(payload) {
@@ -750,6 +755,57 @@
       && Array.isArray(limits) && limits.every((limit) => limit === "literal_signed_health_call_cardinality_unproven_without_transport_log")
       && (payload.verdict !== "PASS" || expectedClaims.every((claim) => claims[claim] === "PASS"))
     );
+  }
+
+  function isPropertyAreaRangeHistoryResponse(payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || payload.ok !== true) return false;
+    if (payload.state === "idle" || payload.state === "unavailable") {
+      return Object.keys(payload).sort().join(",") === "ok,state";
+    }
+    return payload.state === "restored"
+      && Object.keys(payload).sort().join(",") === "ok,state,summary"
+      && isPropertyAreaRangePreviewSummary(payload.summary);
+  }
+
+  async function hydratePropertyAreaRangeHistory(slug, requestId) {
+    const selectedSlug = String(slug || "").trim();
+    if (!selectedSlug || !isActivePropertyAreaRangePreview(selectedSlug, requestId)) return;
+    try {
+      const response = await fetch("/api/projects/" + encodeURIComponent(selectedSlug) + "/property-area-range/history", { cache: "no-store" });
+      const payload = await response.json();
+      if (!isActivePropertyAreaRangePreview(selectedSlug, requestId)) return;
+      if (!response.ok || !isPropertyAreaRangeHistoryResponse(payload)) {
+        showPropertyAreaRangeHistoryUnavailable();
+        return;
+      }
+      if (payload.state === "idle") return;
+      if (payload.state !== "restored") {
+        showPropertyAreaRangeHistoryUnavailable();
+        return;
+      }
+      propertyAreaRangePreviewView.summary = payload.summary;
+      propertyAreaRangePreviewView.phase = "restored";
+      if (!renderPropertyAreaRangeFlow()) {
+        showPropertyAreaRangeHistoryUnavailable();
+        return;
+      }
+      await readPropertyAreaRangeProof();
+    } catch (_) {
+      if (isActivePropertyAreaRangePreview(selectedSlug, requestId)) showPropertyAreaRangeHistoryUnavailable();
+    }
+  }
+
+  function showPropertyAreaRangeHistoryUnavailable() {
+    stopPropertyAreaRangeApplyProgress();
+    stopPropertyAreaRangeRestoreProgress();
+    propertyAreaRangePreviewView.phase = "history_unavailable";
+    if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = false;
+    if (propertyAreaRangeRestoreConfirmation) propertyAreaRangeRestoreConfirmation.checked = false;
+    updatePropertyAreaRangeActions();
+    if (!propertyAreaRangePreviewResult) return;
+    propertyAreaRangePreviewResult.hidden = false;
+    propertyAreaRangePreviewResult.className = "result-box result-box-error";
+    propertyAreaRangePreviewResult.textContent = "Stored Property area history cannot be safely projected. Preview, Apply, and Restore remain unavailable.";
   }
 
   function matchingPropertyAreaRangeApplyOperation(payload, slug, planId, snapshotId) {
@@ -3964,6 +4020,9 @@
     const generateSlugSnapshot = String(generateProjectSlug.value || "").trim();
     const setupRequestId = resetSetupView(setupSlugSnapshot);
     const recoveryRequestId = resetRecoveryStatusView(generateSlugSnapshot);
+    const propertyAreaRangeRequestId = preserveGeneratePreview
+      ? propertyAreaRangePreviewView.requestId
+      : resetPropertyAreaRangePreviewView(generateSlugSnapshot);
     await loadSetupStatus(setupSlugSnapshot, { requestId: setupRequestId });
     if (requestId !== loadProjectsRequestId || String(generateProjectSlug.value || "").trim() !== generateSlugSnapshot) {
       return;
@@ -4007,6 +4066,9 @@
       return;
     }
     await loadProofPack(generateSlugSnapshot);
+    if (!preserveGeneratePreview) {
+      await hydratePropertyAreaRangeHistory(generateSlugSnapshot, propertyAreaRangeRequestId);
+    }
   }
 
   setupProjectSlug.addEventListener("change", () => {
@@ -4017,12 +4079,14 @@
     const setupRequestId = resetSetupView(setupProjectSlug.value);
     const recoveryRequestId = resetRecoveryStatusView(setupProjectSlug.value);
     const stateRequestId = resetStateChangeView(setupProjectSlug.value);
+    const propertyAreaRangeRequestId = resetPropertyAreaRangePreviewView(setupProjectSlug.value);
     Promise.all([
       loadSetupStatus(setupProjectSlug.value, { requestId: setupRequestId }),
       loadRecoveryStatus(setupProjectSlug.value, { requestId: recoveryRequestId }),
       loadGenerationViewForSelection(setupProjectSlug.value),
       loadManagedState(setupProjectSlug.value, { requestId: stateRequestId }),
-      loadProofPack(setupProjectSlug.value)
+      loadProofPack(setupProjectSlug.value),
+      hydratePropertyAreaRangeHistory(setupProjectSlug.value, propertyAreaRangeRequestId)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
@@ -4036,12 +4100,14 @@
     const setupRequestId = resetSetupView(planProjectSlug.value);
     const recoveryRequestId = resetRecoveryStatusView(planProjectSlug.value);
     const stateRequestId = resetStateChangeView(planProjectSlug.value);
+    const propertyAreaRangeRequestId = resetPropertyAreaRangePreviewView(planProjectSlug.value);
     Promise.all([
       loadSetupStatus(planProjectSlug.value, { requestId: setupRequestId }),
       loadRecoveryStatus(planProjectSlug.value, { requestId: recoveryRequestId }),
       loadGenerationViewForSelection(planProjectSlug.value),
       loadManagedState(planProjectSlug.value, { requestId: stateRequestId }),
-      loadProofPack(planProjectSlug.value)
+      loadProofPack(planProjectSlug.value),
+      hydratePropertyAreaRangeHistory(planProjectSlug.value, propertyAreaRangeRequestId)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
@@ -4055,7 +4121,7 @@
     const recoveryRequestId = resetRecoveryStatusView(generateProjectSlug.value);
     const stateRequestId = resetStateChangeView(generateProjectSlug.value);
     viewingDatePreviewView = { slug: String(generateProjectSlug.value || "").trim(), requestId: viewingDatePreviewView.requestId + 1, planId: "" };
-    resetPropertyAreaRangePreviewView(generateProjectSlug.value);
+    const propertyAreaRangeRequestId = resetPropertyAreaRangePreviewView(generateProjectSlug.value);
     if (viewingDatePreviewResult) {
       viewingDatePreviewResult.hidden = true;
       viewingDatePreviewResult.textContent = "";
@@ -4065,7 +4131,8 @@
       loadRecoveryStatus(generateProjectSlug.value, { requestId: recoveryRequestId }),
       loadGenerationViewForSelection(generateProjectSlug.value),
       loadManagedState(generateProjectSlug.value, { requestId: stateRequestId }),
-      loadProofPack(generateProjectSlug.value)
+      loadProofPack(generateProjectSlug.value),
+      hydratePropertyAreaRangeHistory(generateProjectSlug.value, propertyAreaRangeRequestId)
     ]).catch((error) => {
       showResult(createResult, { error: error.message }, true);
     });
@@ -4534,6 +4601,7 @@
       apply: applyPropertyAreaRange,
       restore: restorePropertyAreaRange,
       readProof: readPropertyAreaRangeProof,
+      hydrate: () => hydratePropertyAreaRangeHistory(propertyAreaRangePreviewView.slug, propertyAreaRangePreviewView.requestId),
       setApplyConfirmed: (value) => {
         if (propertyAreaRangeApplyConfirmation) propertyAreaRangeApplyConfirmation.checked = value === true;
         updatePropertyAreaRangeApplyConfirmation();

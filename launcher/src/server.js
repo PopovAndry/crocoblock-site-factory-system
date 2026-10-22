@@ -101,8 +101,11 @@ const {
 } = require("./viewing-date-restore");
 const {
   createPropertyAreaRangePreview,
+  assertPlan: assertPropertyAreaRangePlan,
   assertBrowserSummary: assertPropertyAreaRangeBrowserSummary,
+  browserSummary: propertyAreaRangeBrowserSummary,
   hasPersistedPropertyAreaRangePlan,
+  readPlan: readPropertyAreaRangePlan,
   preparePropertyAreaRangeRecovery
 } = require("./property-area-range-preview");
 const {
@@ -729,6 +732,126 @@ function resolvePropertyAreaRangeProofRestoreOperation(projectsRoot, slug) {
     throw createStructuredError("Property Area Range Proof requires one completed guarded Restore.", "property_area_range_proof_restore_unavailable", 409);
   }
   return candidates[0].operation_id;
+}
+
+function propertyAreaRangeHistoryUnavailable() {
+  return { state: "unavailable" };
+}
+
+function hasMalformedOperationRecord(projectState) {
+  const operationsPath = path.join(projectState.runtimePath, "runs", "operations");
+  try {
+    if (!fs.existsSync(operationsPath)) return false;
+    const directory = fs.lstatSync(operationsPath);
+    if (!directory.isDirectory() || directory.isSymbolicLink()) return true;
+    for (const entry of fs.readdirSync(operationsPath, { withFileTypes: true })) {
+      if (!entry.name.endsWith(".json")) continue;
+      const filePath = path.join(operationsPath, entry.name);
+      const stat = fs.lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) return true;
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return true;
+    }
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
+function isPropertyAreaRangeTerminalProof(result) {
+  const requiredClaims = [
+    "transaction_lineage",
+    "authoritative_outcomes",
+    "verification_chain",
+    "restored_baseline"
+  ];
+  return requiredClaims.every((claim) => result.claims[claim] === "PASS");
+}
+
+async function readPropertyAreaRangeHistory(options) {
+  const projectsRoot = options.projectsRoot;
+  const slug = options.slug;
+  let projectState;
+  let operations;
+  let hasPersistedPlan;
+  try {
+    projectState = readProjectBySlug(slug, projectsRoot);
+    if (hasMalformedOperationRecord(projectState)) return propertyAreaRangeHistoryUnavailable();
+    operations = listOperations({ projectsRoot, slug, includeRaw: true });
+    hasPersistedPlan = hasPersistedPropertyAreaRangePlan({ projectsRoot, slug });
+  } catch (_) {
+    return propertyAreaRangeHistoryUnavailable();
+  }
+
+  const profileOperations = operations.filter((operation) => {
+    return typeof operation.operation_type === "string" && operation.operation_type.startsWith("property_area_range_");
+  });
+  if (profileOperations.length === 0 && !hasPersistedPlan) {
+    return { state: "idle" };
+  }
+  if (profileOperations.some((operation) => !["property_area_range_apply", "property_area_range_restore"].includes(operation.operation_type))) {
+    return propertyAreaRangeHistoryUnavailable();
+  }
+
+  const restores = profileOperations.filter((operation) => operation.operation_type === "property_area_range_restore");
+  if (restores.length !== 1) {
+    return propertyAreaRangeHistoryUnavailable();
+  }
+  const restore = restores[0];
+  if (restore.status !== "succeeded" || restore.stage !== "completed" || !isOperationId(restore.operation_id)
+    || restore.project_slug !== slug || !restore.raw || restore.raw.project_slug !== slug
+    || !restore.raw.metadata || typeof restore.raw.metadata !== "object" || Array.isArray(restore.raw.metadata)
+    || !isPropertyAreaRangePlanId(restore.raw.metadata.property_area_range_plan_id)) {
+    return propertyAreaRangeHistoryUnavailable();
+  }
+
+  let proof;
+  let plan;
+  try {
+    const planId = restore.raw.metadata.property_area_range_plan_id;
+    plan = assertPropertyAreaRangePlan(readPropertyAreaRangePlan(projectState, planId), projectState, planId);
+    const proofService = options.proofService || evaluateProofGate;
+    proof = buildPropertyAreaRangeProofResponse(
+      await proofService({ projectsRoot, slug, restoreOperationId: restore.operation_id }),
+      { slug, restoreOperationId: restore.operation_id }
+    );
+    if (!isPropertyAreaRangeTerminalProof(proof)) {
+      return propertyAreaRangeHistoryUnavailable();
+    }
+  } catch (_) {
+    return propertyAreaRangeHistoryUnavailable();
+  }
+
+  try {
+    return {
+      state: "restored",
+      summary: assertPropertyAreaRangeBrowserSummary(propertyAreaRangeBrowserSummary(plan))
+    };
+  } catch (_) {
+    return propertyAreaRangeHistoryUnavailable();
+  }
+}
+
+function buildPropertyAreaRangeHistoryResponse(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw createStructuredError("Property Area Range history could not be presented safely.", "property_area_range_history_response_invalid", 500);
+  }
+  if (result.state === "idle" && hasExactKeys(result, ["state"])) {
+    return { ok: true, state: "idle" };
+  }
+  if (result.state === "unavailable" && hasExactKeys(result, ["state"])) {
+    return { ok: true, state: "unavailable" };
+  }
+  if (result.state === "restored" && hasExactKeys(result, ["state", "summary"])) {
+    let summary;
+    try {
+      summary = assertPropertyAreaRangeBrowserSummary(result.summary);
+    } catch (_) {
+      throw createStructuredError("Property Area Range history could not be presented safely.", "property_area_range_history_response_invalid", 500);
+    }
+    return { ok: true, state: "restored", summary };
+  }
+  throw createStructuredError("Property Area Range history could not be presented safely.", "property_area_range_history_response_invalid", 500);
 }
 
 function buildPropertyAreaRangeProofResponse(result, expected) {
@@ -2283,6 +2406,27 @@ function createLauncherServer(options) {
           const restoreService = options.propertyAreaRangeRestoreService || restorePropertyAreaRange;
           const result = await restoreService({ projectsRoot, slug, confirmation, idempotencyKey: getRequestIdempotencyKey(request) });
           sendJson(response, 200, buildPropertyAreaRangeRestoreResponse(result));
+        } catch (error) {
+          if (error && error.securityBoundary === true) throw error;
+          sendPropertyAreaRangeError(response, error);
+        }
+        return;
+      }
+
+      if (request.method === "GET" && /^\/api\/projects\/[^/]+\/property-area-range\/history$/.test(requestUrl.pathname)) {
+        try {
+          if ([...requestUrl.searchParams.keys()].length !== 0) {
+            throw createStructuredError("Property Area Range history does not accept browser-supplied lineage.", "property_area_range_history_request_rejected", 400);
+          }
+          const slug = normalizeProjectSlugForRoute(decodeURIComponent(requestUrl.pathname.split("/")[3] || ""));
+          assertProjectExistsForRoute(slug, projectsRoot);
+          const historyService = options.propertyAreaRangeHistoryService || readPropertyAreaRangeHistory;
+          const result = await historyService({
+            projectsRoot,
+            slug,
+            proofService: options.propertyAreaRangeProofService || evaluateProofGate
+          });
+          sendJson(response, 200, buildPropertyAreaRangeHistoryResponse(result));
         } catch (error) {
           if (error && error.securityBoundary === true) throw error;
           sendPropertyAreaRangeError(response, error);

@@ -98,6 +98,7 @@ function createUiHarness(baseUrl, options) {
   return {
     hooks: window.FactoryLauncherTestHooks.propertyAreaRangePreview,
     result: getElementById("property-area-range-preview-result"),
+    previewButton: getElementById("property-area-range-preview-button"),
     recoveryButton: getElementById("property-area-range-recovery-button"),
     applyConfirmation: getElementById("property-area-range-apply-confirmation"),
     applyButton: getElementById("property-area-range-apply-button"),
@@ -207,7 +208,13 @@ async function withServer(services, callback) {
     propertyAreaRangeProofService: async (input) => {
       calls.push(["proof", input]);
       return services && services.proof ? services.proof(input) : proofResult(input.slug, input.restoreOperationId);
-    }
+    },
+    propertyAreaRangeHistoryService: services && services.history
+      ? async (input) => {
+        calls.push(["history", input]);
+        return services.history(input);
+      }
+      : undefined
   });
   const info = await server.listen();
   try {
@@ -510,6 +517,102 @@ test("Property Area Range UI distinguishes insufficient Proof evidence from a bl
     assert.match(result.innerHTML, /Proof Gate has insufficient evidence/);
     assert.doesNotMatch(result.innerHTML, /Proof Gate is BLOCKED|Proof Gate PASS/);
     assert.deepEqual(calls.map(([name]) => name), ["preview", "recovery", "apply", "restore", "proof"]);
+  });
+});
+
+test("Property Area Range cold-load hydrates one restored transaction and reads only the existing Gate", async () => {
+  await withServer({
+    history: async () => ({ state: "restored", summary: browserSummary({ baseline: { property_count: 30 } }) })
+  }, async (baseUrl, calls, projectsRoot) => {
+    await runProjectOperation({
+      projectsRoot,
+      slug: "area-route",
+      operationType: "property_area_range_restore",
+      idempotencyKey: "property-area-range-history-pass",
+      fingerprintInput: { history: true },
+      metadata: {},
+      safety: { apply_used: true },
+      execute: async () => ({ result: { status: "restored", mutation_performed: true }, resultSummary: {} })
+    });
+    const { hooks, result, previewButton, recoveryButton, applyButton, restoreButton, proofButton } = createUiHarness(baseUrl);
+    hooks.resetForProject("area-route");
+    await hooks.hydrate();
+    assert.equal(hooks.getState().phase, "proof_pass");
+    assert.equal(previewButton.disabled, true);
+    assert.equal(recoveryButton.hidden, true);
+    assert.equal(applyButton.hidden, true);
+    assert.equal(restoreButton.hidden, true);
+    assert.equal(proofButton.hidden, true);
+    assert.match(result.innerHTML, /Property area range baseline is restored/);
+    assert.match(result.innerHTML, /Proof Gate PASS/);
+    assert.match(result.innerHTML, /Generic Restore Website controls are separate/);
+    assert.doesNotMatch(result.innerHTML, /property-area-range-plan|snapshot-|op-\d{4}|project_id/i);
+    assert.deepEqual(calls.map(([name]) => name), ["history", "proof"]);
+  });
+});
+
+test("Property Area Range cold-load preserves restored status when the existing Gate is BLOCKED", async () => {
+  await withServer({
+    history: async () => ({ state: "restored", summary: browserSummary({ baseline: { property_count: 30 } }) }),
+    proof: async (input) => proofResult(input.slug, input.restoreOperationId, "BLOCKED")
+  }, async (baseUrl, calls, projectsRoot) => {
+    await runProjectOperation({
+      projectsRoot,
+      slug: "area-route",
+      operationType: "property_area_range_restore",
+      idempotencyKey: "property-area-range-history-blocked",
+      fingerprintInput: { history: true },
+      metadata: {},
+      safety: { apply_used: true },
+      execute: async () => ({ result: { status: "restored", mutation_performed: true }, resultSummary: {} })
+    });
+    const { hooks, result, previewButton, restoreButton } = createUiHarness(baseUrl);
+    hooks.resetForProject("area-route");
+    await hooks.hydrate();
+    assert.equal(hooks.getState().phase, "proof_blocked");
+    assert.equal(previewButton.disabled, true);
+    assert.equal(restoreButton.hidden, true);
+    assert.match(result.innerHTML, /Property area range baseline is restored/);
+    assert.match(result.innerHTML, /Proof Gate is BLOCKED/);
+    assert.doesNotMatch(result.innerHTML, /Proof Gate PASS/);
+    assert.deepEqual(calls.map(([name]) => name), ["history", "proof"]);
+  });
+});
+
+test("Property Area Range cold-load fails closed for incomplete, absent, malformed, stale, cross-project, and ambiguous history", async () => {
+  const unavailableCases = ["failed", "interrupted", "stale", "cross-project", "ambiguous"];
+  for (const _label of unavailableCases) {
+    await withServer({ history: async () => ({ state: "unavailable" }) }, async (baseUrl, calls) => {
+      const { hooks, result, previewButton, applyButton, restoreButton } = createUiHarness(baseUrl);
+      hooks.resetForProject("area-route");
+      await hooks.hydrate();
+      assert.equal(hooks.getState().phase, "history_unavailable");
+      assert.equal(previewButton.disabled, true);
+      assert.equal(applyButton.hidden, true);
+      assert.equal(restoreButton.hidden, true);
+      assert.equal(result.textContent, "Stored Property area history cannot be safely projected. Preview, Apply, and Restore remain unavailable.");
+      assert.deepEqual(calls.map(([name]) => name), ["history"]);
+    });
+  }
+
+  await withServer({ history: async () => ({ state: "idle" }) }, async (baseUrl, calls) => {
+    const { hooks, result, previewButton } = createUiHarness(baseUrl);
+    hooks.resetForProject("area-route");
+    await hooks.hydrate();
+    assert.equal(hooks.getState().phase, "idle");
+    assert.equal(previewButton.disabled, false);
+    assert.equal(result.hidden, true);
+    assert.deepEqual(calls.map(([name]) => name), ["history"]);
+  });
+
+  await withServer({ history: async () => ({ state: "restored", summary: { schema_version: 1 } }) }, async (baseUrl, calls) => {
+    const { hooks, result, previewButton } = createUiHarness(baseUrl);
+    hooks.resetForProject("area-route");
+    await hooks.hydrate();
+    assert.equal(hooks.getState().phase, "history_unavailable");
+    assert.equal(previewButton.disabled, true);
+    assert.equal(result.className, "result-box result-box-error");
+    assert.deepEqual(calls.map(([name]) => name), ["history"]);
   });
 });
 
