@@ -15,7 +15,8 @@ const PROJECT_NETWORK_POOL = Object.freeze([
   "10.250.252.0/24",
   "10.250.251.0/24",
   "10.250.250.0/24",
-  "10.250.249.0/24"
+  "10.250.249.0/24",
+  "10.250.248.0/24"
 ]);
 
 function normalizeProjectNetworkAllocation(value) {
